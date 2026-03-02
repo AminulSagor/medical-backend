@@ -1,0 +1,1300 @@
+{
+  "info": {
+    "_postman_id": "medical-backend-api-collection",
+    "name": "Medical Backend API",
+    "description": "Complete API collection for Medical Backend with all endpoints, DTOs, and response examples",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullLegalName\": \"Dr. John Smith\",\n  \"medicalEmail\": \"john.smith@hospital.com\",\n  \"professionalRole\": \"Surgeon\",\n  \"password\": \"SecurePass123\",\n  \"forgetPassword\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Register a new admin user\n\nRequest Body:\n- fullLegalName: string (max 200 chars) - REQUIRED\n- medicalEmail: string (valid email, max 320 chars) - REQUIRED\n- professionalRole: string (max 150 chars) - REQUIRED\n- password: string (6-72 chars) - REQUIRED\n- forgetPassword: boolean - REQUIRED (must be false)\n\nResponse: { id, fullLegalName, medicalEmail, professionalRole, role, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"fullLegalName\": \"Dr. John Smith\",\n  \"medicalEmail\": \"john.smith@hospital.com\",\n  \"professionalRole\": \"Surgeon\",\n  \"password\": \"SecurePass123\",\n  \"forgetPassword\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/auth/register",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "register"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"User registration successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"fullLegalName\": \"Dr. John Smith\",\n    \"medicalEmail\": \"john.smith@hospital.com\",\n    \"professionalRole\": \"Surgeon\",\n    \"role\": \"admin\",\n    \"createdAt\": \"2026-03-01T10:00:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"password\": \"SecurePass123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Authenticate and get JWT token\n\nRequest Body:\n- email: string (valid email) - REQUIRED\n- password: string (minimum 6 chars) - REQUIRED\n\nResponse: { access_token, user }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"password\": \"SecurePass123\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Login successful\",\n  \"statusCode\": 200,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n    \"user\": {\n      \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"fullLegalName\": \"Dr. John Smith\",\n      \"medicalEmail\": \"john.smith@hospital.com\",\n      \"professionalRole\": \"Surgeon\",\n      \"role\": \"admin\"\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.smith@hospital.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/send-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "send-otp"
+              ]
+            },
+            "description": "Send OTP to email for password reset\n\nRequest Body:\n- email: string (valid email) - REQUIRED\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"john.smith@hospital.com\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/auth/send-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "send-otp"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"OTP sent successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"otp\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "description": "Verify OTP for password reset\n\nRequest Body:\n- email: string (valid email) - REQUIRED\n- otp: string (exactly 6 chars) - REQUIRED\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"otp\": \"123456\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/auth/verify-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "verify-otp"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"OTP verified successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"password\": \"NewSecurePass456\",\n  \"forgetPassword\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Reset password after OTP verification\n\nRequest Body:\n- email: string (valid email) - REQUIRED\n- password: string (minimum 6 chars) - REQUIRED\n- forgetPassword: boolean - REQUIRED (must be true)\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"john.smith@hospital.com\",\n  \"password\": \"NewSecurePass456\",\n  \"forgetPassword\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/auth/reset-password",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "reset-password"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Password reset successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Users",
+      "item": [
+        {
+          "name": "List All Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users"
+              ]
+            },
+            "description": "Get list of all users (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\nQuery Params: None\n\nResponse: { users array with id, fullLegalName, medicalEmail, professionalRole, role, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/users",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "users"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Users retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": [\n    {\n      \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"fullLegalName\": \"Dr. John Smith\",\n      \"medicalEmail\": \"john.smith@hospital.com\",\n      \"professionalRole\": \"Surgeon\",\n      \"role\": \"admin\",\n      \"createdAt\": \"2026-03-01T10:00:00Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Admin Email",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newEmail\": \"john.newemail@hospital.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/adminProfile/settings/email",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "adminProfile",
+                "settings",
+                "email"
+              ]
+            },
+            "description": "Update admin email (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- newEmail: string (valid email) - REQUIRED\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"newEmail\": \"john.newemail@hospital.com\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/users/adminProfile/settings/email",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "users",
+                    "adminProfile",
+                    "settings",
+                    "email"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Email updated successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        },
+        {
+          "name": "Change Admin Password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"SecurePass123\",\n  \"newPassword\": \"NewSecurePass789\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/adminProfile/settings/password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "adminProfile",
+                "settings",
+                "password"
+              ]
+            },
+            "description": "Change admin password (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- currentPassword: string - REQUIRED\n- newPassword: string (minimum 8 chars) - REQUIRED\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currentPassword\": \"SecurePass123\",\n  \"newPassword\": \"NewSecurePass789\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/users/adminProfile/settings/password",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "users",
+                    "adminProfile",
+                    "settings",
+                    "password"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Password changed successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Categories",
+      "item": [
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Surgical Instruments\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "categories"
+              ]
+            },
+            "description": "Create a new product category (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- name: string (max 120 chars) - REQUIRED\n\nResponse: { id, name, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Surgical Instruments\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/categories",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "categories"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"Category created successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"650e8400-e29b-41d4-a716-446655440001\",\n    \"name\": \"Surgical Instruments\",\n    \"createdAt\": \"2026-03-01T10:30:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Categories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "categories"
+              ]
+            },
+            "description": "Get all product categories (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\n\nResponse: { categories array with id, name, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/categories",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "categories"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Categories retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": [\n    {\n      \"id\": \"650e8400-e29b-41d4-a716-446655440001\",\n      \"name\": \"Surgical Instruments\",\n      \"createdAt\": \"2026-03-01T10:30:00Z\"\n    },\n    {\n      \"id\": \"650e8400-e29b-41d4-a716-446655440002\",\n      \"name\": \"Diagnostic Equipment\",\n      \"createdAt\": \"2026-03-01T10:31:00Z\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Products",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Surgical Scalpel Set\",\n  \"clinicalDescription\": \"Professional stainless steel surgical scalpel set for general surgery\",\n  \"clinicalBenefits\": [\n    {\n      \"icon\": \"https://icon.com/precision.png\",\n      \"title\": \"Precision Cuts\",\n      \"description\": \"Ultra-sharp blade for precise surgical incisions\"\n    },\n    {\n      \"icon\": \"https://icon.com/durability.png\",\n      \"title\": \"Durability\",\n      \"description\": \"Stainless steel construction for long-lasting use\"\n    }\n  ],\n  \"technicalSpecifications\": [\n    {\n      \"name\": \"Material\",\n      \"value\": \"Stainless Steel\"\n    },\n    {\n      \"name\": \"Blade Length\",\n      \"value\": \"15mm\"\n    }\n  ],\n  \"categoryId\": \"650e8400-e29b-41d4-a716-446655440001\",\n  \"actualPrice\": \"150.00\",\n  \"offerPrice\": \"120.00\",\n  \"sku\": \"SS-SCALPEL-SET-001\",\n  \"stockQuantity\": 100,\n  \"lowStockAlert\": 10,\n  \"isActive\": true,\n  \"tags\": [\"surgery\", \"precision\", \"stainless-steel\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "products"
+              ]
+            },
+            "description": "Create a new product (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- name: string (max 200 chars) - REQUIRED\n- clinicalDescription: string - REQUIRED\n- clinicalBenefits: array of objects (min 1) - REQUIRED\n  - icon: string\n  - title: string\n  - description: string\n- technicalSpecifications: array of objects (min 1) - REQUIRED\n  - name: string\n  - value: string\n- categoryId: UUID - REQUIRED\n- actualPrice: string (numeric) - OPTIONAL\n- offerPrice: string (numeric) - OPTIONAL\n- sku: string (max 80) - OPTIONAL\n- stockQuantity: integer - OPTIONAL\n- lowStockAlert: integer - OPTIONAL\n- isActive: boolean - OPTIONAL\n- tags: string array - OPTIONAL\n- images: string array - OPTIONAL\n- frequentlyBoughtTogether: UUID array - OPTIONAL\n- bundleUpsells: UUID array - OPTIONAL\n- frontendBadges: enum array - OPTIONAL\n- bulkPriceTiers: array of objects - OPTIONAL\n  - minQty: integer (min 1)\n  - price: string (numeric)\n\nResponse: { id, name, categoryId, clinicalDescription, sku, stockQuantity, isActive, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Surgical Scalpel Set\",\n  \"clinicalDescription\": \"Professional stainless steel surgical scalpel set for general surgery\",\n  \"clinicalBenefits\": [\n    {\n      \"icon\": \"https://icon.com/precision.png\",\n      \"title\": \"Precision Cuts\",\n      \"description\": \"Ultra-sharp blade for precise surgical incisions\"\n    }\n  ],\n  \"technicalSpecifications\": [\n    {\n      \"name\": \"Material\",\n      \"value\": \"Stainless Steel\"\n    }\n  ],\n  \"categoryId\": \"650e8400-e29b-41d4-a716-446655440001\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/products",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "products"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"Product created successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"750e8400-e29b-41d4-a716-446655440005\",\n    \"name\": \"Surgical Scalpel Set\",\n    \"categoryId\": \"650e8400-e29b-41d4-a716-446655440001\",\n    \"clinicalDescription\": \"Professional stainless steel surgical scalpel set for general surgery\",\n    \"sku\": \"SS-SCALPEL-SET-001\",\n    \"stockQuantity\": 100,\n    \"isActive\": true,\n    \"createdAt\": \"2026-03-01T11:00:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/products?page=1&limit=10&search=&category=All&tab=all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "category",
+                  "value": "All"
+                },
+                {
+                  "key": "tab",
+                  "value": "all"
+                }
+              ]
+            },
+            "description": "List all products with pagination and filtering (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\n\nQuery Parameters:\n- page: integer (min 1) - OPTIONAL (default: 1)\n- limit: integer (min 1, max 100) - OPTIONAL (default: 10)\n- search: string - OPTIONAL (search by product name)\n- category: string - OPTIONAL (filter by category name or \"All\")\n- tab: enum (all, active, out_of_stock, low_stock) - OPTIONAL (default: all)\n\nResponse: { products array, total, page, limit }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/products?page=1&limit=10",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "products"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "10"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Products retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": {\n    \"products\": [\n      {\n        \"id\": \"750e8400-e29b-41d4-a716-446655440005\",\n        \"name\": \"Surgical Scalpel Set\",\n        \"categoryId\": \"650e8400-e29b-41d4-a716-446655440001\",\n        \"sku\": \"SS-SCALPEL-SET-001\",\n        \"stockQuantity\": 100,\n        \"isActive\": true,\n        \"actualPrice\": \"150.00\",\n        \"offerPrice\": \"120.00\",\n        \"createdAt\": \"2026-03-01T11:00:00Z\"\n      }\n    ],\n    \"total\": 1,\n    \"page\": 1,\n    \"limit\": 10\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Surgical Scalpel Set\",\n  \"offerPrice\": \"110.00\",\n  \"stockQuantity\": 95,\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/products/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "products",
+                ":id"
+              ]
+            },
+            "description": "Update product details (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nPath Parameters:\n- id: UUID - REQUIRED\n\nRequest Body (all fields optional):\n- name: string (max 200 chars)\n- clinicalDescription: string\n- categoryId: UUID\n- tags: string array\n- actualPrice: string (numeric)\n- offerPrice: string (numeric)\n- bulkPriceTiers: array of objects\n  - minQty: integer (min 1)\n  - price: string (numeric)\n- sku: string (max 80)\n- stockQuantity: integer (min 0)\n- lowStockAlert: integer (min 0)\n- isActive: boolean\n- clinicalBenefits: array of objects\n- technicalSpecifications: array of objects\n\nResponse: { message, statusCode }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"offerPrice\": \"110.00\",\n  \"stockQuantity\": 95\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/products/750e8400-e29b-41d4-a716-446655440005",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "products",
+                    "750e8400-e29b-41d4-a716-446655440005"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Product updated successfully\",\n  \"statusCode\": 200\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Faculty",
+      "item": [
+        {
+          "name": "Create Faculty",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Dr. Sarah\",\n  \"lastName\": \"Johnson\",\n  \"phoneNumber\": \"+1-555-0123\",\n  \"email\": \"sarah.johnson@hospital.com\",\n  \"imageUrl\": \"https://example.com/sarah.jpg\",\n  \"primaryClinicalRole\": \"Cardiologist\",\n  \"medicalDesignation\": \"MD, Cardiology\",\n  \"institutionOrHospital\": \"City Medical Hospital\",\n  \"npiNumber\": \"1234567890\",\n  \"assignedRole\": \"faculty\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/faculty",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "faculty"
+              ]
+            },
+            "description": "Create a new faculty member (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- firstName: string - REQUIRED\n- lastName: string - REQUIRED\n- phoneNumber: string - REQUIRED\n- email: string (valid email) - REQUIRED\n- npiNumber: string (exactly 10 chars) - REQUIRED\n- assignedRole: string - REQUIRED\n- imageUrl: string - OPTIONAL\n- primaryClinicalRole: string - OPTIONAL\n- medicalDesignation: string - OPTIONAL\n- institutionOrHospital: string - OPTIONAL\n\nResponse: { id, firstName, lastName, email, npiNumber, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"firstName\": \"Dr. Sarah\",\n  \"lastName\": \"Johnson\",\n  \"phoneNumber\": \"+1-555-0123\",\n  \"email\": \"sarah.johnson@hospital.com\",\n  \"npiNumber\": \"1234567890\",\n  \"assignedRole\": \"faculty\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/faculty",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "faculty"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"Faculty created successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"850e8400-e29b-41d4-a716-446655440010\",\n    \"firstName\": \"Dr. Sarah\",\n    \"lastName\": \"Johnson\",\n    \"email\": \"sarah.johnson@hospital.com\",\n    \"phoneNumber\": \"+1-555-0123\",\n    \"npiNumber\": \"1234567890\",\n    \"createdAt\": \"2026-03-01T12:00:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Faculty",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/faculty?q=&page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "faculty"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "List all faculty members with pagination and search (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\n\nQuery Parameters:\n- q: string - OPTIONAL (search by name or email)\n- page: integer - OPTIONAL (default: 1)\n- limit: integer - OPTIONAL (default: 10)\n\nResponse: { faculty array, total, page, limit }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/faculty?page=1&limit=10",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "faculty"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "10"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Faculty retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": {\n    \"faculty\": [\n      {\n        \"id\": \"850e8400-e29b-41d4-a716-446655440010\",\n        \"firstName\": \"Dr. Sarah\",\n        \"lastName\": \"Johnson\",\n        \"email\": \"sarah.johnson@hospital.com\",\n        \"npiNumber\": \"1234567890\",\n        \"primaryClinicalRole\": \"Cardiologist\",\n        \"createdAt\": \"2026-03-01T12:00:00Z\"\n      }\n    ],\n    \"total\": 1,\n    \"page\": 1,\n    \"limit\": 10\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Facilities",
+      "item": [
+        {
+          "name": "Create Facility",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"City Medical Hospital\",\n  \"address\": \"123 Main St, Medical City, MC 12345\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/facilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "facilities"
+              ]
+            },
+            "description": "Create a new facility/location (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- name: string (max 200 chars) - REQUIRED\n- address: string (max 400 chars) - REQUIRED\n\nResponse: { id, name, address, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"City Medical Hospital\",\n  \"address\": \"123 Main St, Medical City, MC 12345\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/facilities",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "facilities"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"Facility created successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"950e8400-e29b-41d4-a716-446655440020\",\n    \"name\": \"City Medical Hospital\",\n    \"address\": \"123 Main St, Medical City, MC 12345\",\n    \"isActive\": true,\n    \"createdAt\": \"2026-03-01T12:30:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Facilities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/facilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "facilities"
+              ]
+            },
+            "description": "List all active facilities (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\n\nResponse: { facilities array with id, name, address, isActive, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/facilities",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "facilities"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Facilities retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": [\n    {\n      \"id\": \"950e8400-e29b-41d4-a716-446655440020\",\n      \"name\": \"City Medical Hospital\",\n      \"address\": \"123 Main St, Medical City, MC 12345\",\n      \"isActive\": true,\n      \"createdAt\": \"2026-03-01T12:30:00Z\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin - Workshops",
+      "item": [
+        {
+          "name": "Create Workshop",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deliveryMode\": \"in_person\",\n  \"title\": \"Advanced Cardiac Surgery Techniques\",\n  \"shortBlurb\": \"Learn latest cardiac surgery methods\",\n  \"coverImageUrl\": \"https://example.com/workshop.jpg\",\n  \"learningObjectives\": \"Master new surgical techniques and best practices\",\n  \"offersCmeCredits\": true,\n  \"cmeCreditsInfo\": \"8 CME Credits\",\n  \"facilityId\": \"950e8400-e29b-41d4-a716-446655440020\",\n  \"capacity\": 50,\n  \"alertAt\": 10,\n  \"registrationDeadline\": \"2026-03-15\",\n  \"days\": [\n    {\n      \"date\": \"2026-03-20\",\n      \"dayNumber\": 1,\n      \"segments\": [\n        {\n          \"segmentNumber\": 1,\n          \"courseTopic\": \"Introduction to New Techniques\",\n          \"topicDetails\": \"Overview of latest surgical techniques\",\n          \"startTime\": \"09:00 AM\",\n          \"endTime\": \"11:00 AM\"\n        }\n      ]\n    }\n  ],\n  \"groupDiscounts\": [\n    {\n      \"minimumAttendees\": 5,\n      \"groupRatePerPerson\": \"450.00\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/workshops",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "workshops"
+              ]
+            },
+            "description": "Create a new workshop (Admin only)\n\nHeaders:\n- Authorization: Bearer {{accessToken}} - REQUIRED\n- Content-Type: application/json\n\nRequest Body:\n- deliveryMode: enum (in_person, online) - REQUIRED\n- title: string (max 220 chars) - REQUIRED\n- facilityId: UUID - REQUIRED\n- capacity: integer (min 1) - REQUIRED\n- alertAt: integer (min 0) - REQUIRED\n- registrationDeadline: string (date YYYY-MM-DD) - REQUIRED\n- shortBlurb: string - OPTIONAL\n- coverImageUrl: string - OPTIONAL\n- learningObjectives: string - OPTIONAL\n- offersCmeCredits: boolean - REQUIRED\n- cmeCreditsInfo: string - OPTIONAL\n- days: array of objects - OPTIONAL\n  - date: string (YYYY-MM-DD)\n  - dayNumber: integer (min 1)\n  - segments: array of objects\n    - segmentNumber: integer (min 1)\n    - courseTopic: string (max 220 chars)\n    - topicDetails: string\n    - startTime: string (HH:MM AM/PM)\n    - endTime: string (HH:MM AM/PM)\n- groupDiscounts: array of objects - OPTIONAL\n  - minimumAttendees: integer (min 1)\n  - groupRatePerPerson: string (numeric)\n\nResponse: { id, title, deliveryMode, capacity, facilityId, createdAt }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"deliveryMode\": \"in_person\",\n  \"title\": \"Advanced Cardiac Surgery Techniques\",\n  \"offersCmeCredits\": true,\n  \"facilityId\": \"950e8400-e29b-41d4-a716-446655440020\",\n  \"capacity\": 50,\n  \"alertAt\": 10,\n  \"registrationDeadline\": \"2026-03-15\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/workshops",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "workshops"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [],
+              "body": "{\n  \"message\": \"Workshop created successfully\",\n  \"statusCode\": 201,\n  \"data\": {\n    \"id\": \"a50e8400-e29b-41d4-a716-446655440030\",\n    \"title\": \"Advanced Cardiac Surgery Techniques\",\n    \"deliveryMode\": \"in_person\",\n    \"capacity\": 50,\n    \"facilityId\": \"950e8400-e29b-41d4-a716-446655440020\",\n    \"offersCmeCredits\": true,\n    \"createdAt\": \"2026-03-01T13:00:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Workshops",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/workshops?q=&facilityId=&facultyId=&deliveryMode=&offersCmeCredits=&groupDiscountEnabled=&page=1&limit=10&sortBy=createdAt&sortOrder=desc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "workshops"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "facilityId",
+                  "value": ""
+                },
+                {
+                  "key": "facultyId",
+                  "value": ""
+                },
+                {
+                  "key": "deliveryMode",
+                  "value": ""
+                },
+                {
+                  "key": "offersCmeCredits",
+                  "value": ""
+                },
+                {
+                  "key": "groupDiscountEnabled",
+                  "value": ""
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            },
+            "description": "List workshops with advanced filtering (Admin only)\n\nHeaders: Authorization: Bearer {{accessToken}} - REQUIRED\n\nQuery Parameters (all optional):\n- q: string (search by title)\n- facilityId: UUID\n- facultyId: UUID (filter by faculty member)\n- deliveryMode: enum (in_person, online)\n- offersCmeCredits: string (true, false)\n- groupDiscountEnabled: string (true, false)\n- page: integer (default: 1)\n- limit: integer (max 50, default: 10)\n- sortBy: enum (createdAt, title) (default: createdAt)\n- sortOrder: enum (asc, desc) (default: desc)\n\nResponse: { workshops array, total, page, limit }"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/workshops?page=1&limit=10",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "admin",
+                    "workshops"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "10"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [],
+              "body": "{\n  \"message\": \"Workshops retrieved successfully\",\n  \"statusCode\": 200,\n  \"data\": {\n    \"workshops\": [\n      {\n        \"id\": \"a50e8400-e29b-41d4-a716-446655440030\",\n        \"title\": \"Advanced Cardiac Surgery Techniques\",\n        \"deliveryMode\": \"in_person\",\n        \"capacity\": 50,\n        \"facilityId\": \"950e8400-e29b-41d4-a716-446655440020\",\n        \"offersCmeCredits\": true,\n        \"registrationDeadline\": \"2026-03-15\",\n        \"createdAt\": \"2026-03-01T13:00:00Z\"\n      }\n    ],\n    \"total\": 1,\n    \"page\": 1,\n    \"limit\": 10\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

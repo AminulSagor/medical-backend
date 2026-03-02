@@ -10,6 +10,7 @@ import { CategoriesModule } from "./categories/categories.module";
 import { FacultyModule } from "./faculty/faculty.module";
 import { FacilitiesModule } from "./facilities/facilities.module";
 import { WorkshopsModule } from "./workshops/workshops.module";
+import { UploadS3Module } from "./upload-s3/upload-s3.module";
 
 
 @Module({
@@ -40,6 +41,7 @@ import { WorkshopsModule } from "./workshops/workshops.module";
     FacultyModule,
     FacilitiesModule,
     WorkshopsModule,
+    UploadS3Module,
   ],
 })
 export class AppModule { }

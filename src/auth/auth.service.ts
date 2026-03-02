@@ -132,7 +132,7 @@ export class AuthService {
 
 
 
-    async sendOtp(dto: SendOtpDto): Promise<{ message: string; expiresInSeconds: number }> {
+    async sendOtp(dto: SendOtpDto): Promise<{ message: string; expiresInSeconds: number; debugOtp?: string }> {
         const email = normalizeEmail(dto.email);
 
         // ✅ optional: ensure user exists before sending OTP
@@ -149,19 +149,32 @@ export class AuthService {
             throw new BadRequestException("Please wait before requesting another OTP");
         }
 
-        const otp = generateOtp6();
+        const bypassEnabled = process.env.BYPASS_EMAIL_OTP === "true";
+        const otp = bypassEnabled ? (process.env.DEFAULT_OTP_CODE || "123456") : generateOtp6();
         const expiresInSeconds = Number(process.env.OTP_EXPIRE_SEC || 300); // default 5 min
         const expiresAt = now + expiresInSeconds * 1000;
 
         AuthService.otpStore.set(email, { otp, expiresAt, lastSentAt: now });
 
-        // ✅ send email (safe fallback: if smtp not configured, log otp)
-        await this.sendOtpEmail(email, otp);
+        // ✅ send email only if bypass is disabled (production flow)
+        if (!bypassEnabled) {
+            await this.sendOtpEmail(email, otp);
+        } else {
+            // ✅ bypass mode: log the OTP for development
+            console.log(`[BYPASS MODE] OTP for ${email}: ${otp}`);
+        }
 
-        return {
-            message: "OTP sent successfully",
+        const response: any = {
+            message: bypassEnabled ? "OTP bypassed - check console logs or use DEFAULT_OTP_CODE" : "OTP sent successfully",
             expiresInSeconds,
         };
+
+        // ✅ include OTP in response for development/testing when bypass is enabled
+        if (bypassEnabled && process.env.NODE_ENV !== "production") {
+            response.debugOtp = otp;
+        }
+
+        return response;
     }
 
 
@@ -178,7 +191,38 @@ export class AuthService {
         email: string;
     }> {
         const email = normalizeEmail(dto.email);
+        const bypassEnabled = process.env.BYPASS_EMAIL_OTP === "true";
+        const defaultOtpCode = process.env.DEFAULT_OTP_CODE || "123456";
 
+        // ✅ IF BYPASS MODE: Skip store validation, just verify against default code
+        if (bypassEnabled) {
+            if (dto.otp !== defaultOtpCode) {
+                throw new BadRequestException("Invalid OTP");
+            }
+
+            // ✅ Mark user as verified and create session
+            const user = await this.userRepo.findOne({ where: { medicalEmail: email } });
+            if (!user) {
+                throw new BadRequestException("Account not found for this email");
+            }
+
+            if (!user.isVerified) {
+                user.isVerified = true;
+                await this.userRepo.save(user);
+            }
+
+            const sessionSec = Number(process.env.OTP_VERIFY_SESSION_SEC || 300);
+            AuthService.otpVerifySessionStore.set(email, {
+                expiresAt: Date.now() + sessionSec * 1000,
+            });
+
+            return {
+                message: "OTP verified successfully",
+                email: user.medicalEmail,
+            };
+        }
+
+        // ✅ PRODUCTION MODE: Validate against stored OTP
         const record = AuthService.otpStore.get(email);
         if (!record) {
             throw new BadRequestException("OTP not found or expired");
@@ -190,13 +234,8 @@ export class AuthService {
             throw new BadRequestException("OTP expired");
         }
 
-        const isProd = process.env.NODE_ENV === "production";
-        const bypassEnabled = !isProd && process.env.OTP_BYPASS === "true";
-        const bypassCode = process.env.OTP_BYPASS_CODE;
-
-        // ✅ OTP validation (bypass only allowed in non-prod)
-        const isBypassOk = bypassEnabled && bypassCode && dto.otp === bypassCode;
-        if (!isBypassOk && record.otp !== dto.otp) {
+        // ✅ OTP validation
+        if (record.otp !== dto.otp) {
             throw new BadRequestException("Invalid OTP");
         }
 
