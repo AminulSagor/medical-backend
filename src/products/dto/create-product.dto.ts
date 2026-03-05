@@ -69,8 +69,14 @@ export class CreateProductDto {
     @IsString({ each: true })
     images?: string[];
 
-    @IsUUID()
-    categoryId: string;
+    @IsArray()
+    @ArrayMinSize(1)
+    @IsUUID('all', { each: true })
+    categoryId: string[];
+
+    @IsOptional()
+    @IsBoolean()
+    backorder?: boolean;
 
     @IsOptional()
     @IsArray()

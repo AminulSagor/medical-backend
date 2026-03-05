@@ -25,8 +25,8 @@ import { StringValue } from "ms";
                 secret: config.get<string>("JWT_SECRET", "CHANGE_ME"),
                 signOptions: {
                     expiresIn: config.get<StringValue>(
-                        "JWT_ACCESS_TOKEN_EXPIRES_IN",
-                        "60m" as StringValue
+                        "JWT_EXPIRES_IN",
+                        "7d" as StringValue
                     ),
                 },
             }),

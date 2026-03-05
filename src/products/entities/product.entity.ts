@@ -45,8 +45,8 @@ export class Product {
     clinicalDescription?: string;
 
     @Index()
-    @Column({ type: "uuid" })
-    categoryId: string;
+    @Column({ type: "uuid", array: true, default: () => "ARRAY[]::uuid[]" })
+    categoryId: string[];
 
     @Column({ type: "text", array: true, default: () => "ARRAY[]::text[]" })
     tags: string[];
@@ -74,6 +74,9 @@ export class Product {
     // Status
     @Column({ type: "boolean", default: true })
     isActive: boolean;
+
+    @Column({ type: "boolean", default: false })
+    backorder: boolean;
 
     // ✅ second table relation (eager = returned in response automatically)
     @OneToOne(() => ProductDetails, (d) => d.product, {

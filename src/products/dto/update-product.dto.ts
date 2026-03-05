@@ -55,8 +55,14 @@ export class UpdateProductDto {
     clinicalDescription?: string;
 
     @IsOptional()
-    @IsUUID()
-    categoryId?: string;
+    @IsArray()
+    @ArrayMinSize(1)
+    @IsUUID('all', { each: true })
+    categoryId?: string[];
+
+    @IsOptional()
+    @IsBoolean()
+    backorder?: boolean;
 
     @IsOptional()
     @IsArray()
