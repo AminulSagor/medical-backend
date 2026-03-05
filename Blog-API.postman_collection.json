@@ -1,0 +1,1420 @@
+{
+  "info": {
+    "_postman_id": "blog-api-collection-v1",
+    "name": "Blog API",
+    "description": "Complete API collection for the Blog module (posts + tags + blog categories).\n\nAll endpoints require JWT auth — pass the token in the `Authorization: Bearer {{accessToken}}` header.\n\nVariables:\n- `baseUrl`        — e.g. http://localhost:3000\n- `accessToken`   — JWT from /auth/login\n- `blogPostId`    — UUID of a blog post, auto-set after Create Post\n- `tagId`          — UUID of a tag, auto-set after Create Tag\n- `blogCategoryId` — UUID of a blog category, auto-set after Create Blog Category",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Tags",
+      "item": [
+        {
+          "name": "Create Tag",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var res = pm.response.json();",
+                  "if (res && res.id) {",
+                  "    pm.collectionVariables.set('tagId', res.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pediatric Airway\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/tags",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "tags"]
+            },
+            "description": "Create a new tag. The slug is auto-generated from the name (lowercase, hyphenated).\n\n**DTO — CreateTagDto**\n| Field | Type   | Required | Constraints          |\n|-------|--------|----------|----------------------|\n| name  | string | YES      | maxLength: 100       |\n\n**Validation errors (400)**\n- `name` missing → `name must be a string`\n- `name` exceeds 100 chars → `name must be shorter than or equal to 100 characters`\n- Duplicate name → `Tag already exists`\n\n**Saves to**: `tags` table\n**Auto-sets**: `tagId` collection variable"
+          },
+          "response": [
+            {
+              "name": "201 – Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatric Airway\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000001\",\n  \"name\": \"Pediatric Airway\",\n  \"slug\": \"pediatric-airway\",\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Duplicate Tag",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatric Airway\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Tag already exists\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – Validation Error (missing name)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"name must be shorter than or equal to 100 characters\",\n    \"name must be a string\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatric Airway\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Tags",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/tags",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "tags"]
+            },
+            "description": "Returns all tags ordered alphabetically by name.\n\n**No query parameters.**\n\n**Response**: Array of tag objects ordered by name ASC."
+          },
+          "response": [
+            {
+              "name": "200 – OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000001\",\n    \"name\": \"Airway Management\",\n    \"slug\": \"airway-management\",\n    \"createdAt\": \"2026-03-01T08:00:00.000Z\"\n  },\n  {\n    \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000002\",\n    \"name\": \"Pediatric Airway\",\n    \"slug\": \"pediatric-airway\",\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\"\n  }\n]"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/tags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "tags"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Blog Categories",
+      "item": [
+        {
+          "name": "Create Blog Category",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var res = pm.response.json();",
+                  "if (res && res.id) {",
+                  "    pm.collectionVariables.set('blogCategoryId', res.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pediatrics\",\n  \"description\": \"Articles and research related to pediatric medicine.\",\n  \"isActive\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog-categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog-categories"]
+            },
+            "description": "Create a new blog category. Slug is auto-generated from `name`.\n\n**DTO — CreateBlogCategoryDto**\n| Field       | Type    | Required | Constraints      |\n|-------------|---------|----------|------------------|\n| name        | string  | YES      | maxLength: 120   |\n| description | string  | no       | —                |\n| isActive    | boolean | no       | default: true    |\n\n**Validation errors (400)**\n- `name` missing → `name must be a string`\n- `name` exceeds 120 chars → `name must be shorter than or equal to 120 characters`\n- Duplicate name → `Blog category already exists`\n\n**Auto-sets**: `blogCategoryId` collection variable\n\n**Saves to**: `blog_categories` table (separate from `categories` product table)"
+          },
+          "response": [
+            {
+              "name": "201 – Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatrics\",\n  \"description\": \"Articles and research related to pediatric medicine.\",\n  \"isActive\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"bc000001-0000-4000-a000-000000000001\",\n  \"name\": \"Pediatrics\",\n  \"slug\": \"pediatrics\",\n  \"description\": \"Articles and research related to pediatric medicine.\",\n  \"isActive\": true,\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Duplicate name",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatrics\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Blog category already exists\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – Validation Error (missing name)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"name must be shorter than or equal to 120 characters\",\n    \"name must be a string\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Pediatrics\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Blog Categories",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog-categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog-categories"]
+            },
+            "description": "Returns all blog categories ordered alphabetically by name.\n\n**No query parameters.**\n\n**Note**: These are blog-specific categories — completely separate from the product `categories` table."
+          },
+          "response": [
+            {
+              "name": "200 – OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"id\": \"bc000001-0000-4000-a000-000000000001\",\n    \"name\": \"Airway Management\",\n    \"slug\": \"airway-management\",\n    \"description\": \"In-depth articles about airway management techniques.\",\n    \"isActive\": true,\n    \"createdAt\": \"2026-03-01T08:00:00.000Z\",\n    \"updatedAt\": \"2026-03-01T08:00:00.000Z\"\n  },\n  {\n    \"id\": \"bc000002-0000-4000-a000-000000000002\",\n    \"name\": \"Pediatrics\",\n    \"slug\": \"pediatrics\",\n    \"description\": \"Articles and research related to pediatric medicine.\",\n    \"isActive\": true,\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n    \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n  }\n]"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Blog Category by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+            },
+            "description": "Fetch a single blog category by UUID.\n\n**Path param**: `id` — UUID v4 (enforced by `ParseUUIDPipe`)"
+          },
+          "response": [
+            {
+              "name": "200 – OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"bc000001-0000-4000-a000-000000000001\",\n  \"name\": \"Pediatrics\",\n  \"slug\": \"pediatrics\",\n  \"description\": \"Articles and research related to pediatric medicine.\",\n  \"isActive\": true,\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Invalid UUID",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/not-a-uuid",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "not-a-uuid"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Validation failed (uuid is expected)\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "404 – Not Found",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog category not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Blog Category",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated: Comprehensive articles on pediatric health and airway management.\",\n  \"isActive\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+            },
+            "description": "PATCH update — only supplied fields are changed. Updating `name` also regenerates the `slug`.\n\n**DTO — UpdateBlogCategoryDto (all optional)**\n| Field       | Type    | Constraints    |\n|-------------|---------|----------------|\n| name        | string  | maxLength: 120 |\n| description | string  | —              |\n| isActive    | boolean | —              |"
+          },
+          "response": [
+            {
+              "name": "200 – OK (updated)",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"description\": \"Updated description.\",\n  \"isActive\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"bc000001-0000-4000-a000-000000000001\",\n  \"name\": \"Pediatrics\",\n  \"slug\": \"pediatrics\",\n  \"description\": \"Updated description.\",\n  \"isActive\": false,\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T11:00:00.000Z\"\n}"
+            },
+            {
+              "name": "404 – Not Found",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"isActive\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog category not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Blog Category",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+            },
+            "description": "Permanently delete a blog category.\n\n**Note**: Existing posts referencing this category will have their `blog_post_categories` junction rows removed via `ON DELETE CASCADE`.\n\n**Path param**: `id` — UUID v4"
+          },
+          "response": [
+            {
+              "name": "200 – OK (deleted)",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/{{blogCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "{{blogCategoryId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"deleted\": true\n}"
+            },
+            {
+              "name": "404 – Not Found",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog category not found\",\n  \"error\": \"Not Found\"\n}"
+            },
+            {
+              "name": "400 – Invalid UUID",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog-categories/not-a-uuid",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog-categories", "not-a-uuid"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Validation failed (uuid is expected)\",\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Blog Posts",
+      "item": [
+        {
+          "name": "Create Post – Draft (minimal)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var res = pm.response.json();",
+                  "if (res && res.id) {",
+                  "    pm.collectionVariables.set('blogPostId', res.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Introduction to Pediatric Airway\",\n  \"content\": \"<h1>Introduction</h1><p>This post covers the basics of pediatric airway management.</p>\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"]
+            },
+            "description": "Create a post with only the required fields. Status defaults to `draft`.\n\n**DTO — CreateBlogPostDto (required fields only)**\n| Field   | Type   | Required | Constraints     |\n|---------|--------|----------|-----------------|\n| title   | string | YES      | maxLength: 300  |\n| content | string | YES      | —               |\n\n**Auto-sets**: `blogPostId` collection variable"
+          },
+          "response": [
+            {
+              "name": "201 – Created (Draft)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Introduction to Pediatric Airway\",\n  \"content\": \"<h1>Introduction</h1><p>This post covers the basics of pediatric airway management.</p>\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-1111-4e5f-b678-000000000001\",\n  \"title\": \"Introduction to Pediatric Airway\",\n  \"content\": \"<h1>Introduction</h1><p>This post covers the basics of pediatric airway management.</p>\",\n  \"coverImageUrl\": null,\n  \"publishingStatus\": \"draft\",\n  \"scheduledPublishDate\": null,\n  \"isFeatured\": false,\n  \"excerpt\": null,\n  \"publishedAt\": null,\n  \"authors\": [],\n  \"categories\": [],\n  \"tags\": [],\n  \"seo\": {\n    \"id\": \"s1b2c3d4-1111-4e5f-b678-000000000001\",\n    \"postId\": \"a1b2c3d4-1111-4e5f-b678-000000000001\",\n    \"metaTitle\": null,\n    \"metaDescription\": null,\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n    \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n  },\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Post – Scheduled (full payload)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var res = pm.response.json();",
+                  "if (res && res.id) {",
+                  "    pm.collectionVariables.set('blogPostId', res.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"New Approaches in Pediatric\",\n  \"content\": \"<h1>New Approaches in Pediatric</h1><p>Effective airway management...</p>\",\n  \"coverImageUrl\": \"https://storage.example.com/images/cover-pediatric-airway.jpg\",\n  \"publishingStatus\": \"scheduled\",\n  \"scheduledPublishDate\": \"2026-10-24T10:00:00Z\",\n  \"isFeatured\": false,\n  \"excerpt\": \"An overview of the latest anatomical considerations.\",\n  \"authorIds\": [\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ],\n  \"categoryIds\": [\n    \"{{blogCategoryId}}\"\n  ],\n  \"tagIds\": [\n    \"{{tagId}}\"\n  ],\n  \"seoMetaTitle\": \"New Approaches in Pediatric Airway Management\",\n  \"seoMetaDescription\": \"An overview of the latest anatomical considerations and guidelines for pediatric airway management.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"]
+            },
+            "description": "Create a fully-populated scheduled post matching the original payload spec.\n\n**DTO — CreateBlogPostDto (all fields)**\n| Field                | Type       | Required | Constraints                             |\n|----------------------|------------|----------|-----------------------------------------|\n| title                | string     | YES      | maxLength: 300                          |\n| content              | string     | YES      | HTML string                             |\n| coverImageUrl        | string     | no       | URL string                              |\n| publishingStatus     | enum       | no       | `draft` \\| `scheduled` \\| `published`   |\n| scheduledPublishDate | ISO string | no       | **Required when status = `scheduled`**  |\n| isFeatured           | boolean    | no       | default: false                          |\n| excerpt              | string     | no       | —                                       |\n| authorIds            | UUID[]     | no       | each must be valid UUID v4              |\n| categoryIds          | UUID[]     | no       | each must be valid UUID v4              |\n| tagIds               | UUID[]     | no       | each must be valid UUID v4              |\n| seoMetaTitle         | string     | no       | maxLength: 160                          |\n| seoMetaDescription   | string     | no       | maxLength: 320                          |\n\n**Business rules**\n- `publishingStatus = scheduled` without `scheduledPublishDate` → 400\n- Invalid UUID in `authorIds` / `categoryIds` / `tagIds` → 400\n- Non-existent IDs → 400\n\n**Auto-sets**: `blogPostId` collection variable"
+          },
+          "response": [
+            {
+              "name": "201 – Created (Scheduled, full payload)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"New Approaches in Pediatric\",\n  \"content\": \"<h1>New Approaches in Pediatric</h1><p>Effective airway management...</p>\",\n  \"coverImageUrl\": \"https://storage.example.com/images/cover-pediatric-airway.jpg\",\n  \"publishingStatus\": \"scheduled\",\n  \"scheduledPublishDate\": \"2026-10-24T10:00:00Z\",\n  \"isFeatured\": false,\n  \"excerpt\": \"An overview of the latest anatomical considerations.\",\n  \"authorIds\": [\"550e8400-e29b-41d4-a716-446655440000\"],\n  \"categoryIds\": [\"{{blogCategoryId}}\"],\n  \"tagIds\": [\"d1f2a3b4-0000-4c5d-a678-000000000001\"],\n  \"seoMetaTitle\": \"New Approaches in Pediatric Airway Management\",\n  \"seoMetaDescription\": \"An overview of the latest anatomical considerations and guidelines for pediatric airway management.\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n  \"title\": \"New Approaches in Pediatric\",\n  \"content\": \"<h1>New Approaches in Pediatric</h1><p>Effective airway management...</p>\",\n  \"coverImageUrl\": \"https://storage.example.com/images/cover-pediatric-airway.jpg\",\n  \"publishingStatus\": \"scheduled\",\n  \"scheduledPublishDate\": \"2026-10-24T10:00:00.000Z\",\n  \"isFeatured\": false,\n  \"excerpt\": \"An overview of the latest anatomical considerations.\",\n  \"publishedAt\": null,\n  \"authors\": [\n    {\n      \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"fullLegalName\": \"Dr. John Smith\",\n      \"medicalEmail\": \"john.smith@hospital.com\",\n      \"professionalRole\": \"Surgeon\",\n      \"role\": \"admin\"\n    }\n  ],\n  \"categories\": [\n    {\n      \"id\": \"bc100000-e29b-41d4-a716-446655440001\",\n      \"name\": \"Pediatrics\",\n      \"slug\": \"pediatrics\",\n      \"description\": null,\n      \"isActive\": true\n    }\n  ],\n  \"tags\": [\n    {\n      \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000001\",\n      \"name\": \"Pediatric Airway\",\n      \"slug\": \"pediatric-airway\"\n    }\n  ],\n  \"seo\": {\n    \"id\": \"s1b2c3d4-2222-4e5f-b678-000000000002\",\n    \"postId\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n    \"metaTitle\": \"New Approaches in Pediatric Airway Management\",\n    \"metaDescription\": \"An overview of the latest anatomical considerations and guidelines for pediatric airway management.\",\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n    \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n  },\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Scheduled without date",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Test\",\n  \"content\": \"<p>Test</p>\",\n  \"publishingStatus\": \"scheduled\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"scheduledPublishDate is required when publishingStatus is 'scheduled'\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – Invalid authorId UUID",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Test\",\n  \"content\": \"<p>Test</p>\",\n  \"authorIds\": [\"auth_987654321\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"each value in authorIds must be a UUID\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – Unknown authorId (not in DB)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Test\",\n  \"content\": \"<p>Test</p>\",\n  \"authorIds\": [\"00000000-0000-0000-0000-000000000099\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"One or more authorIds are invalid\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – Missing required fields",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"title must be shorter than or equal to 300 characters\",\n    \"title must be a string\",\n    \"content must be a string\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "400 – seoMetaTitle exceeds 160 chars",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Test\",\n  \"content\": \"<p>Test</p>\",\n  \"seoMetaTitle\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"seoMetaTitle must be shorter than or equal to 160 characters\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Test\",\n  \"content\": \"<p>Test</p>\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Post – Published (immediate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Featured: Advanced Cardiology Update\",\n  \"content\": \"<h1>Advanced Cardiology Update</h1><p>The latest treatment guidelines...</p>\",\n  \"publishingStatus\": \"published\",\n  \"isFeatured\": true,\n  \"excerpt\": \"A summary of the latest cardiology treatment guidelines for 2026.\",\n  \"seoMetaTitle\": \"Advanced Cardiology Update 2026\",\n  \"seoMetaDescription\": \"Latest treatment guidelines and protocols in cardiology.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"]
+            },
+            "description": "Publish a post immediately. `publishedAt` is auto-set to the current timestamp. `scheduledPublishDate` is not required."
+          },
+          "response": [
+            {
+              "name": "201 – Created (Published)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Featured: Advanced Cardiology Update\",\n  \"content\": \"<h1>Advanced Cardiology Update</h1>\",\n  \"publishingStatus\": \"published\",\n  \"isFeatured\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-3333-4e5f-b678-000000000003\",\n  \"title\": \"Featured: Advanced Cardiology Update\",\n  \"content\": \"<h1>Advanced Cardiology Update</h1>\",\n  \"coverImageUrl\": null,\n  \"publishingStatus\": \"published\",\n  \"scheduledPublishDate\": null,\n  \"isFeatured\": true,\n  \"excerpt\": null,\n  \"publishedAt\": \"2026-03-03T10:00:00.000Z\",\n  \"authors\": [],\n  \"categories\": [],\n  \"tags\": [],\n  \"seo\": {\n    \"id\": \"s1b2c3d4-3333-4e5f-b678-000000000003\",\n    \"postId\": \"a1b2c3d4-3333-4e5f-b678-000000000003\",\n    \"metaTitle\": null,\n    \"metaDescription\": null,\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n    \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n  },\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Posts – All (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"],
+              "query": [
+                { "key": "page",  "value": "1",  "description": "Page number (min: 1, default: 1)" },
+                { "key": "limit", "value": "10", "description": "Items per page (min: 1, default: 10)" }
+              ]
+            },
+            "description": "List all blog posts with pagination.\n\n**Query Params — ListBlogPostsQueryDto**\n| Param      | Type   | Required | Description                                       |\n|------------|--------|----------|---------------------------------------------------|\n| page       | int    | no       | Page number, min 1, default 1                     |\n| limit      | int    | no       | Items per page, min 1, default 10                 |\n| status     | enum   | no       | `draft` \\| `scheduled` \\| `published`             |\n| search     | string | no       | Searches title and excerpt (case-insensitive)     |\n| categoryId | UUID   | no       | Filter posts assigned to a specific category      |\n| tagId      | UUID   | no       | Filter posts that have a specific tag             |\n\n**Response** includes a `statusCounts` summary for all four status tabs."
+          },
+          "response": [
+            {
+              "name": "200 – OK (paginated list)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog?page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "10" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n      \"title\": \"New Approaches in Pediatric\",\n      \"content\": \"<h1>New Approaches in Pediatric</h1><p>Effective airway management...</p>\",\n      \"coverImageUrl\": \"https://storage.example.com/images/cover-pediatric-airway.jpg\",\n      \"publishingStatus\": \"scheduled\",\n      \"scheduledPublishDate\": \"2026-10-24T10:00:00.000Z\",\n      \"isFeatured\": false,\n      \"excerpt\": \"An overview of the latest anatomical considerations.\",\n      \"publishedAt\": null,\n      \"authors\": [\n        { \"id\": \"550e8400-e29b-41d4-a716-446655440000\", \"fullLegalName\": \"Dr. John Smith\" }\n      ],\n      \"categories\": [\n        { \"id\": \"bc100000-e29b-41d4-a716-446655440001\", \"name\": \"Pediatrics\", \"slug\": \"pediatrics\", \"isActive\": true }\n      ],\n      \"tags\": [\n        { \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000001\", \"name\": \"Pediatric Airway\", \"slug\": \"pediatric-airway\" }\n      ],\n      \"seo\": {\n        \"metaTitle\": \"New Approaches in Pediatric Airway Management\",\n        \"metaDescription\": \"An overview of the latest anatomical considerations and guidelines.\"\n      },\n      \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n      \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n    }\n  ],\n  \"meta\": {\n    \"page\": 1,\n    \"limit\": 10,\n    \"total\": 1,\n    \"totalPages\": 1\n  },\n  \"statusCounts\": {\n    \"all\": 3,\n    \"draft\": 1,\n    \"scheduled\": 1,\n    \"published\": 1\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Posts – Filter by status=draft",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog?page=1&limit=10&status=draft",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"],
+              "query": [
+                { "key": "page",   "value": "1" },
+                { "key": "limit",  "value": "10" },
+                { "key": "status", "value": "draft", "description": "Allowed: draft | scheduled | published" }
+              ]
+            },
+            "description": "Filter posts by `publishingStatus = draft`."
+          },
+          "response": [
+            {
+              "name": "200 – OK (draft posts)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog?page=1&limit=10&status=draft",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "10" },
+                    { "key": "status", "value": "draft" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"a1b2c3d4-1111-4e5f-b678-000000000001\",\n      \"title\": \"Introduction to Pediatric Airway\",\n      \"publishingStatus\": \"draft\",\n      \"isFeatured\": false,\n      \"publishedAt\": null,\n      \"authors\": [],\n      \"categories\": [],\n      \"tags\": [],\n      \"seo\": { \"metaTitle\": null, \"metaDescription\": null },\n      \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n      \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n    }\n  ],\n  \"meta\": { \"page\": 1, \"limit\": 10, \"total\": 1, \"totalPages\": 1 },\n  \"statusCounts\": { \"all\": 3, \"draft\": 1, \"scheduled\": 1, \"published\": 1 }\n}"
+            },
+            {
+              "name": "400 – Invalid status value",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog?status=active",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"],
+                  "query": [{ "key": "status", "value": "active" }]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"status must be one of the following values: draft, scheduled, published\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Posts – Search",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog?search=pediatric&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"],
+              "query": [
+                { "key": "search", "value": "pediatric", "description": "Case-insensitive search on title and excerpt" },
+                { "key": "page",   "value": "1" },
+                { "key": "limit",  "value": "10" }
+              ]
+            },
+            "description": "Search posts by keyword. Matches against `title` and `excerpt` (ILIKE %keyword%)."
+          },
+          "response": [
+            {
+              "name": "200 – OK (search results)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog?search=pediatric&page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"],
+                  "query": [
+                    { "key": "search", "value": "pediatric" },
+                    { "key": "page",   "value": "1" },
+                    { "key": "limit",  "value": "10" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n      \"title\": \"New Approaches in Pediatric\",\n      \"publishingStatus\": \"scheduled\",\n      \"excerpt\": \"An overview of the latest anatomical considerations.\"\n    }\n  ],\n  \"meta\": { \"page\": 1, \"limit\": 10, \"total\": 1, \"totalPages\": 1 },\n  \"statusCounts\": { \"all\": 3, \"draft\": 1, \"scheduled\": 1, \"published\": 1 }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Posts – Filter by categoryId",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog?categoryId={{blogCategoryId}}&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog"],
+              "query": [
+                { "key": "categoryId", "value": "{{blogCategoryId}}", "description": "UUID of the blog category" },
+                { "key": "page",       "value": "1" },
+                { "key": "limit",      "value": "10" }
+              ]
+            },
+            "description": "Filter posts that belong to a specific category."
+          },
+          "response": [
+            {
+              "name": "200 – OK (filtered by category)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog?categoryId={{blogCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog"],
+                  "query": [{ "key": "categoryId", "value": "{{blogCategoryId}}" }]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"items\": [\n    { \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\", \"title\": \"New Approaches in Pediatric\", \"publishingStatus\": \"scheduled\" }\n  ],\n  \"meta\": { \"page\": 1, \"limit\": 10, \"total\": 1, \"totalPages\": 1 },\n  \"statusCounts\": { \"all\": 3, \"draft\": 1, \"scheduled\": 1, \"published\": 1 }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Post by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog", "{{blogPostId}}"]
+            },
+            "description": "Fetch a single blog post by its UUID. All relations (authors, categories, tags, seo) are eagerly loaded.\n\n**Path param**: `id` — UUID v4 (enforced by `ParseUUIDPipe`)"
+          },
+          "response": [
+            {
+              "name": "200 – OK (full post)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n  \"title\": \"New Approaches in Pediatric\",\n  \"content\": \"<h1>New Approaches in Pediatric</h1><p>Effective airway management...</p>\",\n  \"coverImageUrl\": \"https://storage.example.com/images/cover-pediatric-airway.jpg\",\n  \"publishingStatus\": \"scheduled\",\n  \"scheduledPublishDate\": \"2026-10-24T10:00:00.000Z\",\n  \"isFeatured\": false,\n  \"excerpt\": \"An overview of the latest anatomical considerations.\",\n  \"publishedAt\": null,\n  \"authors\": [\n    {\n      \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"fullLegalName\": \"Dr. John Smith\",\n      \"medicalEmail\": \"john.smith@hospital.com\",\n      \"professionalRole\": \"Surgeon\",\n      \"role\": \"admin\",\n      \"isVerified\": true,\n      \"createdAt\": \"2026-03-01T08:00:00.000Z\"\n    }\n  ],\n  \"categories\": [\n    { \"id\": \"bc100000-e29b-41d4-a716-446655440001\", \"name\": \"Pediatrics\", \"slug\": \"pediatrics\", \"description\": null, \"isActive\": true, \"createdAt\": \"2026-02-01T08:00:00.000Z\" }\n  ],\n  \"tags\": [\n    { \"id\": \"d1f2a3b4-0000-4c5d-a678-000000000001\", \"name\": \"Pediatric Airway\", \"slug\": \"pediatric-airway\", \"createdAt\": \"2026-03-03T10:00:00.000Z\" }\n  ],\n  \"seo\": {\n    \"id\": \"s1b2c3d4-2222-4e5f-b678-000000000002\",\n    \"postId\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n    \"metaTitle\": \"New Approaches in Pediatric Airway Management\",\n    \"metaDescription\": \"An overview of the latest anatomical considerations and guidelines for pediatric airway management.\",\n    \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n    \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n  },\n  \"createdAt\": \"2026-03-03T10:00:00.000Z\",\n  \"updatedAt\": \"2026-03-03T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Invalid UUID format",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/not-a-uuid",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "not-a-uuid"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Validation failed (uuid is expected)\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "404 – Post Not Found",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog post not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Post – Patch SEO and excerpt",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"excerpt\": \"An updated overview of pediatric airway anatomy.\",\n  \"seoMetaTitle\": \"Pediatric Airway Management – Updated Guide\",\n  \"seoMetaDescription\": \"Updated: An overview of the latest anatomical considerations and guidelines for pediatric airway management.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog", "{{blogPostId}}"]
+            },
+            "description": "PATCH update — only fields provided are changed. All fields in `UpdateBlogPostDto` are optional.\n\n**DTO — UpdateBlogPostDto (all optional)**\n| Field                | Type       | Constraints                             |\n|----------------------|------------|-----------------------------------------|\n| title                | string     | maxLength: 300                          |\n| content              | string     | —                                       |\n| coverImageUrl        | string     | —                                       |\n| publishingStatus     | enum       | `draft` \\| `scheduled` \\| `published`   |\n| scheduledPublishDate | ISO string | Required when status = `scheduled`      |\n| isFeatured           | boolean    | —                                       |\n| excerpt              | string     | —                                       |\n| authorIds            | UUID[]     | replaces entire author list             |\n| categoryIds          | UUID[]     | replaces entire category list           |\n| tagIds               | UUID[]     | replaces entire tag list                |\n| seoMetaTitle         | string     | maxLength: 160                          |\n| seoMetaDescription   | string     | maxLength: 320                          |"
+          },
+          "response": [
+            {
+              "name": "200 – OK (updated)",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"excerpt\": \"An updated overview of pediatric airway anatomy.\",\n  \"seoMetaTitle\": \"Pediatric Airway Management – Updated Guide\",\n  \"seoMetaDescription\": \"Updated: An overview of the latest anatomical considerations.\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n  \"title\": \"New Approaches in Pediatric\",\n  \"publishingStatus\": \"scheduled\",\n  \"excerpt\": \"An updated overview of pediatric airway anatomy.\",\n  \"seo\": {\n    \"metaTitle\": \"Pediatric Airway Management – Updated Guide\",\n    \"metaDescription\": \"Updated: An overview of the latest anatomical considerations.\",\n    \"updatedAt\": \"2026-03-03T11:00:00.000Z\"\n  },\n  \"updatedAt\": \"2026-03-03T11:00:00.000Z\"\n}"
+            },
+            {
+              "name": "404 – Post Not Found",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"excerpt\": \"Test\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog post not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Post – Transition to Published",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"publishingStatus\": \"published\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog", "{{blogPostId}}"]
+            },
+            "description": "Transition a draft or scheduled post to `published`. `publishedAt` is auto-stamped on first publish. Subsequent publishes preserve the original `publishedAt`."
+          },
+          "response": [
+            {
+              "name": "200 – OK (now published)",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"publishingStatus\": \"published\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n  \"title\": \"New Approaches in Pediatric\",\n  \"publishingStatus\": \"published\",\n  \"publishedAt\": \"2026-03-03T11:30:00.000Z\",\n  \"updatedAt\": \"2026-03-03T11:30:00.000Z\"\n}"
+            },
+            {
+              "name": "400 – Setting scheduled without date",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"publishingStatus\": \"scheduled\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"scheduledPublishDate is required when publishingStatus is 'scheduled'\",\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Post – Replace relations (authors/tags/categories)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"authorIds\": [\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ],\n  \"categoryIds\": [\n    \"{{blogCategoryId}}\"\n  ],\n  \"tagIds\": [\n    \"{{tagId}}\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog", "{{blogPostId}}"]
+            },
+            "description": "Replace / reassign all relations. Passing an empty array clears that relation. Passing `undefined` / omitting the field leaves it unchanged.\n\n**Note**: `authorIds`, `categoryIds`, and `tagIds` perform a full **replace**, not a merge."
+          },
+          "response": [
+            {
+              "name": "200 – OK (relations updated)",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"authorIds\": [\"550e8400-e29b-41d4-a716-446655440000\"],\n  \"tagIds\": []\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-2222-4e5f-b678-000000000002\",\n  \"title\": \"New Approaches in Pediatric\",\n  \"authors\": [\n    { \"id\": \"550e8400-e29b-41d4-a716-446655440000\", \"fullLegalName\": \"Dr. John Smith\" }\n  ],\n  \"categories\": [\n    { \"id\": \"bc100000-e29b-41d4-a716-446655440001\", \"name\": \"Pediatrics\", \"slug\": \"pediatrics\", \"isActive\": true }\n  ],\n  \"tags\": [],\n  \"updatedAt\": \"2026-03-03T12:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Post",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "blog", "{{blogPostId}}"]
+            },
+            "description": "Permanently delete a blog post. Cascades to `blog_post_seo`, `blog_post_authors`, `blog_post_categories`, and `blog_post_tags` via `ON DELETE CASCADE`.\n\n**Path param**: `id` — UUID v4"
+          },
+          "response": [
+            {
+              "name": "200 – OK (deleted)",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"deleted\": true\n}"
+            },
+            {
+              "name": "404 – Post Not Found",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/00000000-0000-0000-0000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "00000000-0000-0000-0000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Blog post not found\",\n  \"error\": \"Not Found\"\n}"
+            },
+            {
+              "name": "400 – Invalid UUID",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/not-a-uuid",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "not-a-uuid"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Validation failed (uuid is expected)\",\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "401 – Unauthorized",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/admin/blog/{{blogPostId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["admin", "blog", "{{blogPostId}}"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Base URL of the running NestJS server"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string",
+      "description": "JWT token from POST /auth/login"
+    },
+    {
+      "key": "blogPostId",
+      "value": "",
+      "type": "string",
+      "description": "UUID of a blog post — auto-set by Create Post requests"
+    },
+    {
+      "key": "tagId",
+      "value": "",
+      "type": "string",
+      "description": "UUID of a tag — auto-set by Create Tag request"
+    },
+    {
+      "key": "blogCategoryId",
+      "value": "",
+      "type": "string",
+      "description": "UUID of a blog category — auto-set by Create Blog Category request"
+    }
+  ]
+}

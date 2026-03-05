@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ConfigModule, ConfigService } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { ProductsModule } from "./products/products.module";
@@ -11,6 +12,9 @@ import { FacultyModule } from "./faculty/faculty.module";
 import { FacilitiesModule } from "./facilities/facilities.module";
 import { WorkshopsModule } from "./workshops/workshops.module";
 import { UploadS3Module } from "./upload-s3/upload-s3.module";
+import { BlogModule } from "./blog/blog.module";
+import { TagsModule } from "./tags/tags.module";
+import { BlogCategoriesModule } from "./blog-categories/blog-categories.module";
 
 
 @Module({
@@ -19,6 +23,7 @@ import { UploadS3Module } from "./upload-s3/upload-s3.module";
       isGlobal: true,
       envFilePath: ".env",
     }),
+    ScheduleModule.forRoot(),
 
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
@@ -42,6 +47,9 @@ import { UploadS3Module } from "./upload-s3/upload-s3.module";
     FacilitiesModule,
     WorkshopsModule,
     UploadS3Module,
+    BlogModule,
+    TagsModule,
+    BlogCategoriesModule,
   ],
 })
 export class AppModule { }

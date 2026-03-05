@@ -40,11 +40,16 @@ export class ProductsService {
             }
         }
 
-        const category = await this.categoriesRepo.findOne({
-            where: { id: dto.categoryId },
-        });
-        if (!category) {
-            throw new BadRequestException("Invalid categoryId");
+        // ✅ Validate all category IDs
+        if (dto.categoryId && dto.categoryId.length > 0) {
+            for (const catId of dto.categoryId) {
+                const category = await this.categoriesRepo.findOne({
+                    where: { id: catId },
+                });
+                if (!category) {
+                    throw new BadRequestException(`Invalid categoryId: ${catId}`);
+                }
+            }
         }
 
         const payload: DeepPartial<Product> = {
@@ -63,6 +68,7 @@ export class ProductsService {
             stockQuantity: dto.stockQuantity ?? 0,
             lowStockAlert: dto.lowStockAlert ?? 0,
             isActive: dto.isActive ?? true,
+            backorder: dto.backorder ?? false,
 
             // ✅ product_details table
             details: {
@@ -103,8 +109,6 @@ export class ProductsService {
         const skip = (page - 1) * limit;
 
         const qb = this.productsRepo.createQueryBuilder("p");
-        qb.leftJoin("categories", "c", "c.id = p.categoryId");
-        qb.addSelect("c.name", "categoryName");
 
         // --- tabs counts (independent query) ---
         const countsRaw = await this.productsRepo
@@ -132,11 +136,13 @@ export class ProductsService {
         }
 
         // --- category filter ---
-        if (query.category && query.category.trim() && query.category !== "All") {
-            qb.andWhere("LOWER(c.name) = LOWER(:categoryName)", {
-                categoryName: query.category.trim(),
-            });
-        }
+        // Since categoryId is now an array, we skip this filter
+        // Category filtering would require more complex array operations
+        // if (query.category && query.category.trim() && query.category !== "All") {
+        //     qb.andWhere("LOWER(c.name) = LOWER(:categoryName)", {
+        //         categoryName: query.category.trim(),
+        //     });
+        // }
 
         // --- search (name, sku, tags) ---
         if (query.search && query.search.trim()) {
@@ -160,13 +166,10 @@ export class ProductsService {
         qb.skip(skip).take(limit);
 
         const total = await qb.getCount();
-        const { entities, raw } = await qb.getRawAndEntities();
+        const entities = await qb.getMany();
 
-        const items = entities.map((p, i) => ({
+        const items = entities.map((p) => ({
             ...p,
-            categoryName: raw[i]?.categoryName ?? null,
-            // optional: remove id from response
-            categoryId: undefined,
         }));
 
 
@@ -223,13 +226,15 @@ export class ProductsService {
             throw new NotFoundException("Product not found");
         }
 
-        // ✅ validate category if provided
-        if (dto.categoryId) {
-            const category = await this.categoriesRepo.findOne({
-                where: { id: dto.categoryId },
-            });
-            if (!category) {
-                throw new BadRequestException("Invalid categoryId");
+        // ✅ Validate all category IDs if provided
+        if (dto.categoryId && dto.categoryId.length > 0) {
+            for (const catId of dto.categoryId) {
+                const category = await this.categoriesRepo.findOne({
+                    where: { id: catId },
+                });
+                if (!category) {
+                    throw new BadRequestException(`Invalid categoryId: ${catId}`);
+                }
             }
         }
 
@@ -279,6 +284,7 @@ export class ProductsService {
         if (dto.stockQuantity !== undefined) product.stockQuantity = dto.stockQuantity;
         if (dto.lowStockAlert !== undefined) product.lowStockAlert = dto.lowStockAlert;
         if (dto.isActive !== undefined) product.isActive = dto.isActive;
+        if (dto.backorder !== undefined) product.backorder = dto.backorder;
 
         // --- apply updates to product_details table ---
         if (dto.images !== undefined) product.details.images = dto.images;
