@@ -32,11 +32,32 @@ import { AudienceResolverService } from '../audience/audience-resolver.service';
 import { BroadcastPreviewService } from './broadcast-preview.service';
 import { NewsletterAuditService } from '../audit/newsletter-audit.service';
 import {
+  NewsletterArticleSourceType,
   NewsletterAudienceMode,
   NewsletterBroadcastStatus,
   NewsletterChannelType,
   NewsletterContentType,
+  NewsletterFrequencyType,
 } from 'src/common/enums/newsletter-constants.enum';
+import { GetWorkspaceMetricsQueryDto } from './dto/get-workspace-metrics-query.dto';
+import { ArticleSourceAdapterService } from './article-source-adapter.service';
+import { NewsletterBroadcastQueueOrder } from './entities/newsletter-broadcast-queue-order.entity';
+import { NewsletterDeliveryRecipient } from '../delivery/entities/newsletter-delivery-recipient.entity';
+import { NewsletterDeliveryJob } from '../delivery/entities/newsletter-delivery-job.entity';
+import { buildCadenceSlots } from 'src/common/utils/newsletter-cadence-slots.util';
+import { ListWorkspaceBroadcastsQueryDto } from './dto/list-workspace-broadcasts-query.dto';
+import { ReorderQueueBroadcastsDto } from './dto/reorder-queue-broadcasts.dto';
+import { GetCancelPreviewQueryDto } from './dto/get-cancel-preview-query.dto';
+import { GetScheduleSuccessQueryDto } from './dto/get-schedule-success-query.dto';
+import {
+  BlogArticleSourceService,
+  BlogPostSnapshot,
+} from './blog-article-source.service';
+import { DateTime } from 'luxon';
+import {
+  BroadcastActionsAllowed,
+  BroadcastDetail,
+} from 'src/common/types/broadcasts.types';
 
 @Injectable()
 export class BroadcastsService {
@@ -45,6 +66,8 @@ export class BroadcastsService {
     private readonly audienceResolverService: AudienceResolverService,
     private readonly previewService: BroadcastPreviewService,
     private readonly auditService: NewsletterAuditService,
+    private readonly articleSourceAdapter: ArticleSourceAdapterService,
+    private readonly blogArticleSourceService: BlogArticleSourceService,
 
     @InjectRepository(NewsletterBroadcast)
     private readonly broadcastRepo: Repository<NewsletterBroadcast>,
@@ -64,6 +87,12 @@ export class BroadcastsService {
     private readonly segmentRepo: Repository<NewsletterAudienceSegment>,
     @InjectRepository(NewsletterCadenceSetting)
     private readonly cadenceRepo: Repository<NewsletterCadenceSetting>,
+    @InjectRepository(NewsletterBroadcastQueueOrder)
+    private readonly queueOrderRepo: Repository<NewsletterBroadcastQueueOrder>,
+    @InjectRepository(NewsletterDeliveryRecipient)
+    private readonly deliveryRecipientRepo: Repository<NewsletterDeliveryRecipient>,
+    @InjectRepository(NewsletterDeliveryJob)
+    private readonly deliveryJobRepo: Repository<NewsletterDeliveryJob>,
   ) {}
 
   async createDraft(
@@ -145,6 +174,24 @@ export class BroadcastsService {
           }
         }
 
+        let blogSnapshot: BlogPostSnapshot | null = null;
+
+        if (
+          dto.contentType === NewsletterContentType.ARTICLE_LINK &&
+          dto.articleLink
+        ) {
+          if (
+            dto.articleLink.sourceType !== NewsletterArticleSourceType.BLOG_POST
+          ) {
+            throw new BadRequestException(
+              'Only BLOG_POST article sources are supported',
+            );
+          }
+          blogSnapshot =
+            await this.blogArticleSourceService.getPublishedSnapshotOrThrow(
+              dto.articleLink.sourceRefId,
+            );
+        }
         if (
           dto.contentType === NewsletterContentType.ARTICLE_LINK &&
           dto.articleLink
@@ -156,12 +203,18 @@ export class BroadcastsService {
               broadcastId: savedBroadcast.id,
               sourceType: dto.articleLink.sourceType,
               sourceRefId: dto.articleLink.sourceRefId,
-              sourceTitleSnapshot: 'TEMP ARTICLE TITLE SNAPSHOT',
-              sourceExcerptSnapshot: null,
-              sourceAuthorSnapshot: null,
-              sourceHeroImageUrlSnapshot: null,
-              sourcePublishedAtSnapshot: null,
+
+              sourceTitleSnapshot: blogSnapshot!.title,
+              sourceExcerptSnapshot: blogSnapshot!.excerpt,
+              sourceAuthorSnapshot: blogSnapshot!.authorName,
+              sourceHeroImageUrlSnapshot: blogSnapshot!.heroImageUrl,
+              sourcePublishedAtSnapshot: blogSnapshot!.publishedAt,
+
               ctaLabel: dto.articleLink.ctaLabel?.trim() || 'Read Full Article',
+
+              // OPTIONAL: add DB column if you want these as snapshots:
+              // sourceEstimatedReadMinutesSnapshot: blogSnapshot!.estimatedReadMinutes,
+              // sourceKindLabelSnapshot: blogSnapshot!.kindLabel,
             }),
           );
         }
@@ -313,14 +366,20 @@ export class BroadcastsService {
   async searchArticleSources(
     query: SearchArticleSourcesQueryDto,
   ): Promise<Record<string, unknown>> {
-    // TODO: integrate Blogs/Articles module query
-    return {
-      items: [],
-      meta: { page: query.page ?? 1, limit: query.limit ?? 10, total: 0 },
-    };
+    // Only BLOG_POST supported for now (matches NewsletterArticleSourceType.BLOG_POST)
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    const result = await this.blogArticleSourceService.searchPublished({
+      search: query.search,
+      page,
+      limit,
+    });
+
+    return result;
   }
 
-  async getDetail(id: string): Promise<Record<string, unknown>> {
+  async getDetail(id: string): Promise<BroadcastDetail> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id, channelType: NewsletterChannelType.GENERAL },
       relations: [
@@ -391,10 +450,10 @@ export class BroadcastsService {
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((a) => ({
           id: a.id,
-          fileName: a.fileName,
+          filename: a.fileName,
           mimeType: a.mimeType,
-          fileSizeBytes: Number(a.fileSizeBytes),
-          fileKey: a.fileKey,
+          sizeBytes: Number(a.fileSizeBytes),
+          storageKey: a.fileKey,
         })),
       actionsAllowed: this.getActionsAllowed(broadcast),
       createdAt: broadcast.createdAt,
@@ -441,33 +500,44 @@ export class BroadcastsService {
       relations: ['customContent', 'articleLink'],
     });
 
-    if (!broadcast)
+    if (!broadcast) {
       throw new NotFoundException('General newsletter broadcast not found');
+    }
 
     this.ensureEditable(broadcast);
 
+    // ---- basic fields ----
     if (dto.subjectLine !== undefined) {
       const subject = dto.subjectLine.trim();
       if (!subject)
         throw new BadRequestException('subjectLine cannot be empty');
       broadcast.subjectLine = subject;
     }
-    if (dto.preheaderText !== undefined)
+
+    if (dto.preheaderText !== undefined) {
       broadcast.preheaderText = dto.preheaderText?.trim() || null;
-    if (dto.internalName !== undefined)
+    }
+
+    if (dto.internalName !== undefined) {
       broadcast.internalName = dto.internalName?.trim() || null;
-    if (dto.audienceMode !== undefined)
+    }
+
+    if (dto.audienceMode !== undefined) {
       broadcast.audienceMode = dto.audienceMode;
+    }
 
     try {
       await this.dataSource.transaction(async (manager) => {
+        // ---- segments ----
         if (dto.segmentIds) {
           const segments = await this.loadAndValidateGeneralSegments(
             dto.segmentIds,
           );
+
           await manager.delete(NewsletterBroadcastSegment, {
             broadcastId: broadcast.id,
           });
+
           await manager.save(
             NewsletterBroadcastSegment,
             segments.map((s) =>
@@ -484,6 +554,7 @@ export class BroadcastsService {
             );
         }
 
+        // ---- content type specific ----
         if (broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE) {
           if (dto.articleLink) {
             throw new BadRequestException(
@@ -492,7 +563,8 @@ export class BroadcastsService {
           }
 
           if (dto.customContent) {
-            if (!dto.customContent.messageBodyHtml?.trim()) {
+            const html = dto.customContent.messageBodyHtml?.trim();
+            if (!html) {
               throw new BadRequestException(
                 'customContent.messageBodyHtml cannot be empty',
               );
@@ -508,14 +580,19 @@ export class BroadcastsService {
             if (!custom) {
               custom = manager.create(NewsletterBroadcastCustomContent, {
                 broadcastId: broadcast.id,
+                messageBodyHtml: html,
+                messageBodyText:
+                  dto.customContent.messageBodyText?.trim() || null,
               });
+            } else {
+              custom.messageBodyHtml = html;
+              custom.messageBodyText =
+                dto.customContent.messageBodyText?.trim() || null;
             }
 
-            custom.messageBodyHtml = dto.customContent.messageBodyHtml.trim();
-            custom.messageBodyText =
-              dto.customContent.messageBodyText?.trim() || null;
             await manager.save(NewsletterBroadcastCustomContent, custom);
 
+            // tokens: replace all
             await manager.delete(NewsletterBroadcastCustomContentToken, {
               broadcastId: broadcast.id,
             });
@@ -527,6 +604,7 @@ export class BroadcastsService {
                   .filter(Boolean),
               ),
             ];
+
             if (tokens.length) {
               await manager.save(
                 NewsletterBroadcastCustomContentToken,
@@ -539,35 +617,35 @@ export class BroadcastsService {
               );
             }
 
+            // editor snapshot: optional update
             if (dto.customContent.serializedEditorState !== undefined) {
               const snapshotText =
                 dto.customContent.serializedEditorState?.trim() || null;
-              let snap = await manager.findOne(
+
+              const existing = await manager.findOne(
                 NewsletterBroadcastCustomEditorSnapshot,
-                {
-                  where: { broadcastId: broadcast.id },
-                },
+                { where: { broadcastId: broadcast.id } },
               );
 
               if (snapshotText) {
-                if (!snap) {
-                  snap = manager.create(
+                if (!existing) {
+                  await manager.save(
                     NewsletterBroadcastCustomEditorSnapshot,
-                    {
+                    manager.create(NewsletterBroadcastCustomEditorSnapshot, {
                       broadcastId: broadcast.id,
+                      serializedState: snapshotText,
                       format: 'LEXICAL_JSON_STRING',
                       schemaVersion: 1,
-                      serializedState: snapshotText,
-                    },
+                    }),
                   );
                 } else {
-                  snap.serializedState = snapshotText;
+                  existing.serializedState = snapshotText;
+                  await manager.save(
+                    NewsletterBroadcastCustomEditorSnapshot,
+                    existing,
+                  );
                 }
-                await manager.save(
-                  NewsletterBroadcastCustomEditorSnapshot,
-                  snap,
-                );
-              } else if (snap) {
+              } else if (existing) {
                 await manager.delete(NewsletterBroadcastCustomEditorSnapshot, {
                   broadcastId: broadcast.id,
                 });
@@ -584,6 +662,20 @@ export class BroadcastsService {
           }
 
           if (dto.articleLink) {
+            if (
+              dto.articleLink.sourceType !==
+              NewsletterArticleSourceType.BLOG_POST
+            ) {
+              throw new BadRequestException(
+                'Only BLOG_POST article sources are supported',
+              );
+            }
+
+            const snap =
+              await this.blogArticleSourceService.getPublishedSnapshotOrThrow(
+                dto.articleLink.sourceRefId,
+              );
+
             let link = await manager.findOne(NewsletterBroadcastArticleLink, {
               where: { broadcastId: broadcast.id },
             });
@@ -596,12 +688,15 @@ export class BroadcastsService {
 
             link.sourceType = dto.articleLink.sourceType;
             link.sourceRefId = dto.articleLink.sourceRefId;
+
+            link.sourceTitleSnapshot = snap.title;
+            link.sourceExcerptSnapshot = snap.excerpt;
+            link.sourceAuthorSnapshot = snap.authorName;
+            link.sourceHeroImageUrlSnapshot = snap.heroImageUrl;
+            link.sourcePublishedAtSnapshot = snap.publishedAt;
+
             link.ctaLabel =
               dto.articleLink.ctaLabel?.trim() || 'Read Full Article';
-
-            // TODO: snapshot from article source adapter
-            link.sourceTitleSnapshot =
-              link.sourceTitleSnapshot || 'TEMP ARTICLE TITLE SNAPSHOT';
 
             await manager.save(NewsletterBroadcastArticleLink, link);
           }
@@ -768,10 +863,43 @@ export class BroadcastsService {
     const cadence = await this.cadenceRepo.findOne({
       where: { channelType: NewsletterChannelType.GENERAL },
     });
-    if (!cadence)
+    if (!cadence) {
       throw new NotFoundException(
         'General newsletter cadence settings not found',
       );
+    }
+
+    // strict slot validation against cadence windows
+    const validSlots = buildCadenceSlots({
+      timezone: dto.timezone.trim(),
+      frequencyType: dto.frequencyType,
+      fromDate:
+        DateTime.fromJSDate(scheduledAt).minus({ days: 2 }).toISODate() ??
+        undefined,
+      toDate:
+        DateTime.fromJSDate(scheduledAt).plus({ days: 2 }).toISODate() ??
+        undefined,
+      count: 20,
+      weekly: {
+        enabled: cadence.weeklyEnabled,
+        releaseDay: cadence.weeklyReleaseDay,
+        releaseTime: cadence.weeklyReleaseTime,
+      },
+      monthly: {
+        enabled: cadence.monthlyEnabled,
+        dayOfMonth: cadence.monthlyDayOfMonth,
+        releaseTime: cadence.monthlyReleaseTime,
+      },
+    });
+
+    const exactSlotMatch = validSlots.some(
+      (s) => s.scheduledAtUtc === scheduledAt.toISOString(),
+    );
+    if (!exactSlotMatch) {
+      throw new UnprocessableEntityException(
+        'scheduledAtUtc must match an available cadence slot for the selected frequency',
+      );
+    }
 
     const collision = await this.broadcastRepo.findOne({
       where: {
@@ -807,14 +935,20 @@ export class BroadcastsService {
 
     const saved = await this.broadcastRepo.save(broadcast);
 
+    await this.ensureQueueOrderExists(
+      adminUserId,
+      saved.id,
+      saved.frequencyType!,
+    );
+
     await this.auditService.log({
       entityType: 'BROADCAST',
       entityId: saved.id,
       action: 'SCHEDULE',
       performedByAdminId: adminUserId,
       meta: {
-        scheduledAtUtc: saved.scheduledAt?.toISOString(),
-        frequencyType: saved.frequencyType,
+        scheduledAtUtc: saved.scheduledAt?.toISOString() ?? null,
+        frequencyType: saved.frequencyType ?? null,
       },
     });
 
@@ -823,9 +957,73 @@ export class BroadcastsService {
       id: saved.id,
       subjectLine: saved.subjectLine,
       status: saved.status,
-      scheduledAtUtc: saved.scheduledAt?.toISOString(),
+      scheduledAtUtc: saved.scheduledAt!.toISOString(),
       estimatedRecipientsCount: saved.estimatedRecipientsCount,
+      successModal: {
+        title: 'Broadcast Scheduled Successfully',
+        summary: {
+          title: saved.subjectLine,
+          recipientsCount: saved.estimatedRecipientsCount,
+          scheduledAtUtc: saved.scheduledAt!.toISOString(),
+          scheduledAtDisplay: this.formatDateTimeLabel(
+            saved.scheduledAt,
+            saved.timezone,
+          ),
+          frequencyLabel: this.getFrequencyLabel(saved.frequencyType),
+        },
+        ctaLabel: 'Return to Dashboard',
+      },
     };
+  }
+
+  private async ensureQueueOrderExists(
+    adminUserId: string,
+    broadcastId: string,
+    frequencyType: string,
+  ): Promise<void> {
+    const existing = await this.queueOrderRepo.findOne({
+      where: { broadcastId },
+    });
+    if (existing) return;
+
+    const maxRow = await this.queueOrderRepo
+      .createQueryBuilder('q')
+      .select('MAX(q.sequenceIndex)', 'max')
+      .where('q.channelType = :channelType', {
+        channelType: NewsletterChannelType.GENERAL,
+      })
+      .andWhere('q.frequencyType = :frequencyType', { frequencyType })
+      .getRawOne<{ max: string | null }>();
+
+    const nextSeq = (maxRow?.max ? Number(maxRow.max) : 0) + 1;
+
+    await this.queueOrderRepo.save(
+      this.queueOrderRepo.create({
+        broadcastId,
+        channelType: NewsletterChannelType.GENERAL,
+        frequencyType,
+        sequenceIndex: nextSeq,
+        updatedByAdminId: adminUserId,
+      }),
+    );
+  }
+
+  private async compactQueueSequences(frequencyType: string): Promise<void> {
+    const rows = await this.queueOrderRepo.find({
+      where: {
+        channelType: NewsletterChannelType.GENERAL,
+        frequencyType,
+      },
+      order: { sequenceIndex: 'ASC', createdAt: 'ASC' },
+    });
+
+    let i = 1;
+    for (const row of rows) {
+      row.sequenceIndex = i++;
+    }
+    if (rows.length) {
+      await this.queueOrderRepo.save(rows);
+    }
   }
 
   async cancel(
@@ -860,6 +1058,11 @@ export class BroadcastsService {
 
     const saved = await this.broadcastRepo.save(broadcast);
 
+    if (saved.frequencyType) {
+      await this.queueOrderRepo.delete({ broadcastId: saved.id });
+      await this.compactQueueSequences(saved.frequencyType);
+    }
+
     await this.auditService.log({
       entityType: 'BROADCAST',
       entityId: saved.id,
@@ -873,6 +1076,828 @@ export class BroadcastsService {
       id: saved.id,
       subjectLine: saved.subjectLine,
       status: saved.status,
+      successModal: {
+        title: 'Broadcast Cancelled Successfully',
+        summary: {
+          recipientsCount: saved.estimatedRecipientsCount ?? 0,
+          scheduledAtUtc: saved.scheduledAt?.toISOString() ?? null,
+          scheduledAtDisplay: this.formatDateTimeLabel(
+            saved.scheduledAt,
+            saved.timezone,
+          ),
+          title: saved.subjectLine,
+        },
+        ctaLabel: 'Return to Queue',
+      },
+    };
+  }
+
+  async getWorkspaceMetrics(
+    query: GetWorkspaceMetricsQueryDto,
+  ): Promise<Record<string, unknown>> {
+    if (query.tab === 'queue') {
+      const whereBase: any = {
+        channelType: NewsletterChannelType.GENERAL,
+        status: In([
+          NewsletterBroadcastStatus.READY,
+          NewsletterBroadcastStatus.SCHEDULED,
+        ]),
+      };
+      if (query.frequencyType) whereBase.frequencyType = query.frequencyType;
+
+      const [queuedItems, queuedRows, sentRecent] = await Promise.all([
+        this.broadcastRepo.count({ where: whereBase }),
+        this.broadcastRepo.find({
+          where: whereBase,
+          select: ['scheduledAt', 'frequencyType'],
+          order: { scheduledAt: 'ASC' },
+          take: 100,
+        }),
+        this.broadcastRepo.find({
+          where: {
+            channelType: NewsletterChannelType.GENERAL,
+            status: NewsletterBroadcastStatus.SENT,
+          },
+          select: ['openRatePercent'],
+          order: { sentAt: 'DESC' },
+          take: 20,
+        }),
+      ]);
+
+      const avgOpen = sentRecent.length
+        ? Number(
+            (
+              sentRecent.reduce(
+                (sum, x) => sum + Number(x.openRatePercent || 0),
+                0,
+              ) / sentRecent.length
+            ).toFixed(1),
+          )
+        : 0;
+
+      let coverageDays = 0;
+      if (queuedRows.length >= 2) {
+        const first = queuedRows[0].scheduledAt;
+        const last = queuedRows[queuedRows.length - 1].scheduledAt;
+        if (first && last) {
+          coverageDays = Math.max(
+            0,
+            Math.ceil((last.getTime() - first.getTime()) / 86400000),
+          );
+        }
+      } else if (queuedRows.length === 1) {
+        coverageDays =
+          query.frequencyType === NewsletterFrequencyType.MONTHLY ? 30 : 7;
+      }
+
+      return {
+        tab: 'queue',
+        cards: {
+          queueEfficiency: {
+            queuedCount: queuedItems,
+            coverageDays,
+          },
+          totalSubscribers: {
+            // can also fetch from subscriber service/repo
+            label: 'General Subscribers',
+          },
+          engagementPulse: {
+            openRatePercent: avgOpen,
+          },
+          viewFlags: {
+            activeBroadcastingView: true,
+          },
+        },
+      };
+    }
+
+    if (query.tab === 'drafts') {
+      const [draftCount, byTypeRows] = await Promise.all([
+        this.broadcastRepo.count({
+          where: {
+            channelType: NewsletterChannelType.GENERAL,
+            status: In([
+              NewsletterBroadcastStatus.DRAFT,
+              NewsletterBroadcastStatus.REVIEW_PENDING,
+            ]),
+          },
+        }),
+        this.broadcastRepo
+          .createQueryBuilder('b')
+          .select('b.contentType', 'contentType')
+          .addSelect('COUNT(*)', 'count')
+          .where('b.channelType = :channelType', {
+            channelType: NewsletterChannelType.GENERAL,
+          })
+          .andWhere('b.status IN (:...statuses)', {
+            statuses: [
+              NewsletterBroadcastStatus.DRAFT,
+              NewsletterBroadcastStatus.REVIEW_PENDING,
+            ],
+          })
+          .groupBy('b.contentType')
+          .getRawMany<{ contentType: string; count: string }>(),
+      ]);
+
+      return {
+        tab: 'drafts',
+        cards: {
+          queueEfficiency: { queuedCount: draftCount },
+          breakdownByContentType: byTypeRows.map((r) => ({
+            contentType: r.contentType,
+            count: Number(r.count),
+          })),
+          viewFlags: { draftWorkspace: true },
+        },
+      };
+    }
+
+    const [historyCount, sentCount, bestOpenRow] = await Promise.all([
+      this.broadcastRepo.count({
+        where: {
+          channelType: NewsletterChannelType.GENERAL,
+          status: In([
+            NewsletterBroadcastStatus.SENT,
+            NewsletterBroadcastStatus.CANCELLED,
+            NewsletterBroadcastStatus.FAILED,
+          ]),
+        },
+      }),
+      this.broadcastRepo.count({
+        where: {
+          channelType: NewsletterChannelType.GENERAL,
+          status: NewsletterBroadcastStatus.SENT,
+        },
+      }),
+      this.broadcastRepo
+        .createQueryBuilder('b')
+        .select('MAX(b.openRatePercent)', 'bestOpenRate')
+        .where('b.channelType = :channelType', {
+          channelType: NewsletterChannelType.GENERAL,
+        })
+        .andWhere('b.status = :status', {
+          status: NewsletterBroadcastStatus.SENT,
+        })
+        .getRawOne<{ bestOpenRate: string | null }>(),
+    ]);
+
+    return {
+      tab: 'history',
+      cards: {
+        historicalPerformance: { transmissionCount: historyCount },
+        totalBroadcasts: { sentCount },
+        bestEngagement: {
+          bestOpenRatePercent: Number(bestOpenRow?.bestOpenRate ?? 0),
+        },
+        viewFlags: { archiveManagement: true },
+      },
+    };
+  }
+
+  async listWorkspace(
+    query: ListWorkspaceBroadcastsQueryDto,
+  ): Promise<Record<string, unknown>> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    const qb = this.broadcastRepo
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.articleLink', 'al')
+      .leftJoinAndSelect('b.broadcastSegments', 'bs')
+      .leftJoinAndSelect('b.attachments', 'att')
+      .where('b.channelType = :channelType', {
+        channelType: NewsletterChannelType.GENERAL,
+      });
+
+    if (query.tab === 'queue') {
+      qb.andWhere('b.status IN (:...statuses)', {
+        statuses: [
+          NewsletterBroadcastStatus.READY,
+          NewsletterBroadcastStatus.SCHEDULED,
+        ],
+      });
+    } else if (query.tab === 'drafts') {
+      qb.andWhere('b.status IN (:...statuses)', {
+        statuses: [
+          NewsletterBroadcastStatus.DRAFT,
+          NewsletterBroadcastStatus.REVIEW_PENDING,
+        ],
+      });
+    } else {
+      qb.andWhere('b.status IN (:...statuses)', {
+        statuses: [
+          NewsletterBroadcastStatus.SENT,
+          NewsletterBroadcastStatus.CANCELLED,
+          NewsletterBroadcastStatus.FAILED,
+        ],
+      });
+    }
+
+    if (query.frequencyType)
+      qb.andWhere('b.frequencyType = :frequencyType', {
+        frequencyType: query.frequencyType,
+      });
+    if (query.status)
+      qb.andWhere('b.status = :status', { status: query.status });
+
+    if (query.search?.trim()) {
+      const s = `%${query.search.trim().toLowerCase()}%`;
+      qb.andWhere(
+        `(LOWER(b.subjectLine) LIKE :s OR LOWER(COALESCE(b.internalName,'')) LIKE :s OR LOWER(COALESCE(al.sourceTitleSnapshot,'')) LIKE :s OR LOWER(COALESCE(al.sourceAuthorSnapshot,'')) LIKE :s)`,
+        { s },
+      );
+    }
+
+    if (query.contentTypes?.length) {
+      qb.andWhere('b.contentType IN (:...contentTypes)', {
+        contentTypes: query.contentTypes,
+      });
+    }
+
+    if (query.authorNames?.length) {
+      qb.andWhere('al.sourceAuthorSnapshot IN (:...authorNames)', {
+        authorNames: query.authorNames,
+      });
+    }
+
+    if (query.fromDate) {
+      const field =
+        query.tab === 'history'
+          ? 'COALESCE(b.sentAt, b.updatedAt)'
+          : 'COALESCE(b.scheduledAt, b.updatedAt)';
+      qb.andWhere(`${field} >= :fromDate`, {
+        fromDate: new Date(query.fromDate),
+      });
+    }
+
+    if (query.toDate) {
+      const field =
+        query.tab === 'history'
+          ? 'COALESCE(b.sentAt, b.updatedAt)'
+          : 'COALESCE(b.scheduledAt, b.updatedAt)';
+      qb.andWhere(`${field} <= :toDate`, { toDate: new Date(query.toDate) });
+    }
+
+    if (query.minRecipients !== undefined) {
+      qb.andWhere(
+        'COALESCE(b.sentRecipientsCount, b.estimatedRecipientsCount, 0) >= :minRecipients',
+        {
+          minRecipients: query.minRecipients,
+        },
+      );
+    }
+
+    if (query.minOpenRatePercent !== undefined) {
+      qb.andWhere('COALESCE(b.openRatePercent, 0) >= :minOpenRatePercent', {
+        minOpenRatePercent: query.minOpenRatePercent,
+      });
+    }
+
+    if (query.segmentIds?.length) {
+      qb.andWhere('bs.segmentId IN (:...segmentIds)', {
+        segmentIds: query.segmentIds,
+      });
+    }
+
+    // sorting
+    const sortBy =
+      query.sortBy ??
+      (query.tab === 'drafts'
+        ? 'lastModified'
+        : query.tab === 'history'
+          ? 'sentDate'
+          : 'queueSequence');
+    const sortOrder =
+      query.sortOrder ?? (query.tab === 'history' ? 'DESC' : 'ASC');
+
+    if (sortBy === 'scheduledDate') qb.orderBy('b.scheduledAt', sortOrder);
+    else if (sortBy === 'lastModified') qb.orderBy('b.updatedAt', sortOrder);
+    else if (sortBy === 'sentDate') qb.orderBy('b.sentAt', sortOrder);
+    else if (sortBy === 'openRate') qb.orderBy('b.openRatePercent', sortOrder);
+    else if (sortBy === 'clickRate')
+      qb.orderBy('b.clickRatePercent', sortOrder as any);
+    else if (sortBy === 'engagement')
+      qb.orderBy('b.openRatePercent', sortOrder);
+    else qb.orderBy('COALESCE(b.scheduledAt, b.updatedAt)', 'ASC');
+
+    qb.skip((page - 1) * limit).take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
+
+    const broadcastIds = items.map((x) => x.id);
+    const queueOrders = broadcastIds.length
+      ? await this.queueOrderRepo.find({
+          where: { broadcastId: In(broadcastIds) },
+        })
+      : [];
+    const queueOrderMap = new Map(
+      queueOrders.map((q) => [q.broadcastId, q.sequenceIndex]),
+    );
+
+    const allSegmentIds = [
+      ...new Set(
+        items.flatMap((i: any) =>
+          (i.broadcastSegments ?? []).map((x: any) => x.segmentId),
+        ),
+      ),
+    ];
+    const segments = allSegmentIds.length
+      ? await this.segmentRepo.findBy({ id: In(allSegmentIds) })
+      : [];
+    const segmentMap = new Map(segments.map((s) => [s.id, s]));
+
+    const rows = items.map((b: any) => {
+      const linkedSegments = (b.broadcastSegments ?? [])
+        .map((bs: any) => segmentMap.get(bs.segmentId))
+        .filter(Boolean);
+
+      const audienceLabel = this.getAudienceLabel(
+        b.audienceMode,
+        linkedSegments.map((s: any) => s.name),
+      );
+
+      const typeLabel =
+        b.contentType === NewsletterContentType.ARTICLE_LINK
+          ? b.articleLink?.sourceType === 'SPECIAL_REPORT'
+            ? 'Special Report'
+            : 'Clinical Article'
+          : 'Custom Message';
+
+      const articleTitle =
+        b.contentType === NewsletterContentType.ARTICLE_LINK
+          ? (b.articleLink?.sourceTitleSnapshot ?? b.subjectLine)
+          : b.subjectLine;
+
+      const authorName =
+        b.contentType === NewsletterContentType.ARTICLE_LINK
+          ? (b.articleLink?.sourceAuthorSnapshot ?? null)
+          : null;
+
+      const estReadMinutes =
+        b.contentType === NewsletterContentType.ARTICLE_LINK
+          ? ((b.articleLink as any)?.estimatedReadMinutesSnapshot ?? null)
+          : this.estimateReadMinutesFromCustomHtml(
+              (b.customContent as any)?.messageBodyHtml ?? '',
+            );
+
+      return {
+        id: b.id,
+        sequence:
+          query.tab === 'queue' ? (queueOrderMap.get(b.id) ?? null) : null,
+        scheduledDate: b.scheduledAt,
+        sentDate: b.sentAt,
+        lastModified: b.updatedAt,
+        frequency: b.frequencyType,
+        type: {
+          code: b.contentType,
+          displayLabel: typeLabel,
+          badgeVariant: this.getTypeBadgeVariant(typeLabel),
+        },
+        articleTitle,
+        subjectLine: b.subjectLine,
+        author: authorName ? { displayName: authorName } : null,
+        target: {
+          audienceMode: b.audienceMode,
+          displayLabel: audienceLabel,
+          segmentCount: linkedSegments.length,
+          segments: linkedSegments.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+          })),
+        },
+        estRead: estReadMinutes ? `${estReadMinutes} min` : null,
+        estReadMinutes,
+        recipients: b.sentRecipientsCount || b.estimatedRecipientsCount || 0,
+        engagement: {
+          openRatePercent: Number(b.openRatePercent || 0),
+          clickRatePercent: Number((b as any).clickRatePercent || 0),
+        },
+        status: {
+          code: b.status,
+          displayLabel: this.getStatusLabel(b.status),
+        },
+        actions: this.getWorkspaceActions(b, query.tab),
+      };
+    });
+
+    // filter by authorNames post-map if articleLink relation not loaded in all cases
+    const filteredRows = query.authorNames?.length
+      ? rows.filter(
+          (r) => r.author && query.authorNames!.includes(r.author.displayName),
+        )
+      : rows;
+
+    return {
+      tab: query.tab,
+      frequencyType: query.frequencyType ?? null,
+      items: filteredRows,
+      meta: { page, limit, total },
+      viewFlags: {
+        activeBroadcastingView: query.tab === 'queue',
+        draftWorkspace: query.tab === 'drafts',
+        archiveManagement: query.tab === 'history',
+      },
+      filterOptions: await this.getWorkspaceFilterOptions(),
+    };
+  }
+
+  async reorderQueue(
+    adminUserId: string,
+    dto: ReorderQueueBroadcastsDto,
+  ): Promise<Record<string, unknown>> {
+    const ids = [...new Set(dto.items.map((x) => x.broadcastId))];
+    if (ids.length !== dto.items.length) {
+      throw new BadRequestException('broadcastId values must be unique');
+    }
+
+    const seqs = dto.items.map((x) => x.sequenceIndex);
+    const expected = [...seqs].sort((a, b) => a - b);
+    for (let i = 0; i < expected.length; i++) {
+      if (expected[i] !== i + 1) {
+        throw new BadRequestException(
+          'sequenceIndex must be a continuous sequence starting at 1',
+        );
+      }
+    }
+
+    const broadcasts = await this.broadcastRepo.find({
+      where: {
+        id: In(ids),
+        channelType: NewsletterChannelType.GENERAL,
+        status: In([
+          NewsletterBroadcastStatus.READY,
+          NewsletterBroadcastStatus.SCHEDULED,
+        ]),
+        frequencyType: dto.frequencyType,
+      },
+      select: ['id', 'frequencyType'],
+    });
+
+    if (broadcasts.length !== ids.length) {
+      throw new NotFoundException(
+        'One or more queue broadcasts were not found in the selected frequency queue',
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const existing = await manager.find(NewsletterBroadcastQueueOrder, {
+        where: { broadcastId: In(ids) },
+      });
+      const existingMap = new Map(existing.map((e) => [e.broadcastId, e]));
+
+      const saves = dto.items.map((item) => {
+        const row =
+          existingMap.get(item.broadcastId) ??
+          manager.create(NewsletterBroadcastQueueOrder, {
+            broadcastId: item.broadcastId,
+            channelType: NewsletterChannelType.GENERAL,
+            frequencyType: dto.frequencyType,
+          });
+
+        row.sequenceIndex = item.sequenceIndex;
+        row.updatedByAdminId = adminUserId;
+        return row;
+      });
+
+      await manager.save(NewsletterBroadcastQueueOrder, saves);
+    });
+
+    await this.auditService.log({
+      entityType: 'QUEUE',
+      entityId: dto.frequencyType,
+      action: 'REORDER',
+      performedByAdminId: adminUserId,
+      meta: { itemCount: dto.items.length },
+    });
+
+    return {
+      message: 'Queue order updated successfully',
+      id: dto.frequencyType,
+      reorderedCount: dto.items.length,
+    };
+  }
+
+  async getCancelPreview(
+    id: string,
+    _query: GetCancelPreviewQueryDto,
+  ): Promise<Record<string, unknown>> {
+    const detail = (await this.getDetail(id)) as BroadcastDetail;
+
+    if (detail.status !== NewsletterBroadcastStatus.SCHEDULED) {
+      throw new UnprocessableEntityException(
+        'Cancel preview is only available for scheduled broadcasts',
+      );
+    }
+
+    return {
+      modal: {
+        title: 'Cancel Scheduled Broadcast?',
+        confirmButtonLabel: 'Yes, Cancel Schedule',
+        cancelButtonLabel: 'No, Keep Scheduled',
+        severity: 'danger',
+      },
+      payload: {
+        broadcastId: detail.id,
+        title: detail.articleLink?.sourceTitleSnapshot ?? detail.subjectLine,
+        labelType:
+          detail.contentType === NewsletterContentType.ARTICLE_LINK
+            ? 'Article Broadcast'
+            : 'Custom Broadcast',
+        recipientsCount: detail.estimatedRecipientsCount ?? 0,
+        scheduledAtUtc: detail.scheduledAt
+          ? detail.scheduledAt.toISOString()
+          : null,
+        timezone: detail.timezone,
+        scheduledAtDisplay: this.formatDateTimeLabel(
+          detail.scheduledAt,
+          detail.timezone,
+        ),
+      },
+    };
+  }
+
+  async getScheduleSuccessPayload(
+    id: string,
+    _query: GetScheduleSuccessQueryDto,
+  ): Promise<Record<string, unknown>> {
+    const detail = (await this.getDetail(id)) as BroadcastDetail;
+
+    if (detail.status !== NewsletterBroadcastStatus.SCHEDULED) {
+      throw new UnprocessableEntityException('Broadcast is not scheduled');
+    }
+
+    return {
+      modal: {
+        title: 'Broadcast Scheduled Successfully',
+        ctaLabel: 'Return to Dashboard',
+        tone: 'success',
+      },
+      payload: {
+        broadcastId: detail.id,
+        title: detail.articleLink?.sourceTitleSnapshot ?? detail.subjectLine,
+        recipientsCount: detail.estimatedRecipientsCount ?? 0,
+        scheduledAtUtc: detail.scheduledAt
+          ? detail.scheduledAt.toISOString()
+          : null,
+        timezone: detail.timezone,
+        scheduledAtDisplay: this.formatDateTimeLabel(
+          detail.scheduledAt,
+          detail.timezone,
+        ),
+        frequencyLabel: detail.frequencyType
+          ? this.getFrequencyLabel(detail.frequencyType)
+          : null,
+      },
+    };
+  }
+
+  async getUiViewPayload(id: string): Promise<Record<string, unknown>> {
+    const detail = (await this.getDetail(id)) as BroadcastDetail;
+
+    const recipientsCount = await this.resolveFinalOrEstimatedRecipientsCount(
+      detail.id,
+      detail.estimatedRecipientsCount ?? 0,
+    );
+
+    const basePanels = {
+      header: {
+        id: detail.id,
+        title:
+          detail.contentType === NewsletterContentType.ARTICLE_LINK
+            ? 'View Scheduled Blog Post'
+            : 'View Scheduled Broadcast',
+        status: detail.status,
+        actionsAllowed: detail.actionsAllowed,
+      },
+      summaryCards: {
+        recipients: recipientsCount,
+        scheduledForUtc: detail.scheduledAt,
+        scheduledForDisplay: this.formatDateTimeLabel(
+          detail.scheduledAt,
+          detail.timezone,
+        ),
+        frequency: detail.frequencyType,
+        frequencyDisplay: detail.frequencyType
+          ? this.getFrequencyLabel(detail.frequencyType)
+          : null,
+      },
+      deliveryLogistics: {
+        selectedCadence: detail.frequencyType,
+        selectedCadenceLabel:
+          detail.cadenceAnchorLabel ??
+          this.getFrequencyLabel(detail.frequencyType),
+        availableCadenceDateDisplay: detail.scheduledAt
+          ? this.formatDateLabel(detail.scheduledAt, detail.timezone)
+          : null,
+        scheduledTimeDisplay: detail.scheduledAt
+          ? this.formatTimeLabel(detail.scheduledAt, detail.timezone)
+          : null,
+        timezone: detail.timezone,
+      },
+      audience: {
+        mode: detail.audience.mode,
+        chips: detail.audience.segments.map((s: any) => s.name),
+      },
+    };
+
+    if (detail.contentType === NewsletterContentType.ARTICLE_LINK) {
+      return {
+        ...basePanels,
+        viewType: 'ARTICLE_LINK',
+        emailPreview: {
+          subject: detail.subjectLine,
+          fromLabel: 'Texas Airway Institute <education@tai.edu>',
+          article: {
+            title:
+              detail.articleLink?.sourceTitleSnapshot ?? detail.subjectLine,
+            excerpt: detail.articleLink?.sourceExcerptSnapshot ?? null,
+            heroImageUrl:
+              detail.articleLink?.sourceHeroImageUrlSnapshot ?? null,
+            ctaLabel: detail.articleLink?.ctaLabel ?? 'Read Full Article',
+          },
+        },
+      };
+    }
+
+    return {
+      ...basePanels,
+      viewType: 'CUSTOM_MESSAGE',
+      contentOverview: {
+        subjectLine: detail.subjectLine,
+        preheaderText: detail.preheaderText,
+      },
+      messageContent: {
+        html: detail.customContent?.messageBodyHtml ?? null,
+        text: detail.customContent?.messageBodyText ?? null,
+        personalizationTokens:
+          detail.customContent?.personalizationTokens ?? [],
+      },
+      attachments: (detail.attachments ?? []).map((a: any) => ({
+        ...a,
+        fileTypeLabel: this.getFileTypeLabel(a.mimeType),
+        iconKey: this.getAttachmentIconKey(a.mimeType),
+        downloadUrl: `/admin/newsletters/general/broadcasts/${detail.id}/attachments/${a.id}/download`, // implement signed URL endpoint later
+      })),
+    };
+  }
+
+  private async resolveFinalOrEstimatedRecipientsCount(
+    broadcastId: string,
+    estimated: number,
+  ): Promise<number> {
+    const job = await this.deliveryJobRepo.findOne({
+      where: { broadcastId },
+      order: { createdAt: 'DESC' } as any,
+    });
+    if (!job) return estimated;
+    return job.totalRecipients || estimated;
+  }
+
+  private getWorkspaceActions(b: any, tab: 'queue' | 'drafts' | 'history') {
+    if (tab === 'history') {
+      return {
+        view: true,
+        report: b.status === NewsletterBroadcastStatus.SENT,
+        duplicate: true,
+        edit: false,
+        delete: false,
+        cancel: false,
+      };
+    }
+    if (tab === 'drafts') {
+      return {
+        edit: true,
+        view: true,
+        delete: true,
+        schedule: true,
+      };
+    }
+    return {
+      edit: this.getActionsAllowed(b).edit,
+      view: true,
+      cancel: this.getActionsAllowed(b).cancel,
+      reorder: true,
+    };
+  }
+
+  private getAudienceLabel(
+    audienceMode: string,
+    segmentNames: string[],
+  ): string {
+    if (audienceMode === NewsletterAudienceMode.ALL_SUBSCRIBERS)
+      return 'All Subscribers';
+    if (segmentNames.length === 1) return segmentNames[0];
+    if (segmentNames.length > 1)
+      return `${segmentNames[0]} +${segmentNames.length - 1}`;
+    return 'Target cohorts';
+  }
+
+  private getTypeBadgeVariant(typeLabel: string): string {
+    if (/clinical/i.test(typeLabel)) return 'teal';
+    if (/special/i.test(typeLabel)) return 'purple';
+    if (/custom/i.test(typeLabel)) return 'gray';
+    return 'gray';
+  }
+
+  private getStatusLabel(status: string): string {
+    const map: Record<string, string> = {
+      DRAFT: 'Draft',
+      REVIEW_PENDING: 'Review Pending',
+      READY: 'Ready',
+      SCHEDULED: 'Scheduled',
+      SENT: 'Sent',
+      CANCELLED: 'Cancelled',
+      FAILED: 'Failed',
+    };
+    return map[status] ?? status;
+  }
+
+  private estimateReadMinutesFromCustomHtml(html: string): number | null {
+    if (!html) return null;
+    const text = html
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) return null;
+    return Math.max(1, Math.round(text.split(' ').length / 180));
+  }
+
+  private getFrequencyLabel(freq?: string | null): string | null {
+    if (!freq) return null;
+    if (freq === NewsletterFrequencyType.WEEKLY) return 'Weekly Broadcast';
+    if (freq === NewsletterFrequencyType.MONTHLY) return 'Monthly Broadcast';
+    return freq;
+  }
+
+  private formatDateTimeLabel(
+    dateValue?: string | Date | null,
+    timezone?: string | null,
+  ): string | null {
+    if (!dateValue) return null;
+    const dt = DateTime.fromJSDate(new Date(dateValue), {
+      zone: 'utc',
+    }).setZone(timezone || 'UTC');
+    return dt.toFormat('LLL dd, yyyy hh:mm a ZZZZ');
+  }
+
+  private formatDateLabel(
+    dateValue?: string | Date | null,
+    timezone?: string | null,
+  ): string | null {
+    if (!dateValue) return null;
+    return DateTime.fromJSDate(new Date(dateValue), { zone: 'utc' })
+      .setZone(timezone || 'UTC')
+      .toFormat('cccc, LLL dd, yyyy');
+  }
+
+  private formatTimeLabel(
+    dateValue?: string | Date | null,
+    timezone?: string | null,
+  ): string | null {
+    if (!dateValue) return null;
+    return DateTime.fromJSDate(new Date(dateValue), { zone: 'utc' })
+      .setZone(timezone || 'UTC')
+      .toFormat('hh:mm a ZZZZ');
+  }
+
+  private getAttachmentIconKey(mimeType: string): string {
+    if (/pdf/i.test(mimeType)) return 'pdf';
+    if (/image\//i.test(mimeType)) return 'image';
+    if (/word|document/i.test(mimeType)) return 'doc';
+    return 'file';
+  }
+
+  private getFileTypeLabel(mimeType: string): string {
+    if (/pdf/i.test(mimeType)) return 'PDF Document';
+    if (/image\/png/i.test(mimeType)) return 'PNG Image';
+    if (/image\/jpe?g/i.test(mimeType)) return 'JPEG Image';
+    return mimeType;
+  }
+
+  private async getWorkspaceFilterOptions(): Promise<Record<string, unknown>> {
+    const authors = await this.articleLinkRepo
+      .createQueryBuilder('al')
+      .select('DISTINCT al.sourceAuthorSnapshot', 'authorName')
+      .where('al.sourceAuthorSnapshot IS NOT NULL')
+      .orderBy('al.sourceAuthorSnapshot', 'ASC')
+      .limit(100)
+      .getRawMany<{ authorName: string }>();
+
+    const segments = await this.segmentRepo.find({
+      where: {
+        channelType: NewsletterChannelType.GENERAL,
+        isActive: true,
+      } as any,
+      select: ['id', 'name'],
+      order: { name: 'ASC' },
+      take: 100,
+    });
+
+    return {
+      contentTypes: Object.values(NewsletterContentType),
+      authors: authors.map((a) => a.authorName),
+      audienceSegments: segments.map((s) => ({ id: s.id, name: s.name })),
+      quickDateRanges: ['LAST_7_DAYS', 'LAST_30_DAYS', 'CUSTOM'],
     };
   }
 
@@ -970,7 +1995,7 @@ export class BroadcastsService {
 
   private getActionsAllowed(
     broadcast: NewsletterBroadcast,
-  ): Record<string, boolean> {
+  ): BroadcastActionsAllowed {
     const futureScheduled =
       broadcast.status === NewsletterBroadcastStatus.SCHEDULED &&
       !!broadcast.scheduledAt &&
@@ -983,11 +2008,13 @@ export class BroadcastsService {
           NewsletterBroadcastStatus.REVIEW_PENDING,
           NewsletterBroadcastStatus.READY,
         ].includes(broadcast.status) || futureScheduled,
+
       schedule: [
         NewsletterBroadcastStatus.DRAFT,
         NewsletterBroadcastStatus.REVIEW_PENDING,
         NewsletterBroadcastStatus.READY,
       ].includes(broadcast.status),
+
       cancel: futureScheduled,
     };
   }
@@ -999,5 +2026,73 @@ export class BroadcastsService {
         throw new ConflictException('Unique constraint conflict occurred');
     }
     throw error;
+  }
+
+  async getBroadcastReport(id: string): Promise<Record<string, unknown>> {
+    const broadcast = await this.broadcastRepo.findOne({
+      where: { id, channelType: NewsletterChannelType.GENERAL },
+      select: [
+        'id',
+        'subjectLine',
+        'status',
+        'sentAt',
+        'sentRecipientsCount',
+        'openRatePercent',
+      ],
+    });
+    if (!broadcast) throw new NotFoundException('Broadcast not found');
+
+    const rows = await this.deliveryRecipientRepo.find({
+      where: { broadcastId: id } as any,
+      select: [
+        'id',
+        'deliveryStatus',
+        'firstOpenedAt',
+        'firstClickedAt',
+        'sentAt',
+      ],
+      take: 5000,
+    });
+
+    const total = rows.length || broadcast.sentRecipientsCount || 0;
+    const opened = rows.filter((r) => !!r.firstOpenedAt).length;
+    const clicked = rows.filter((r) => !!r.firstClickedAt).length;
+    const delivered = rows.filter((r) =>
+      ['DELIVERED', 'OPENED', 'CLICKED'].includes(String(r.deliveryStatus)),
+    ).length;
+    const bounced = rows.filter(
+      (r) => String(r.deliveryStatus) === 'BOUNCED',
+    ).length;
+    const failed = rows.filter((r) =>
+      ['FAILED', 'DROPPED'].includes(String(r.deliveryStatus)),
+    ).length;
+
+    return {
+      report: {
+        broadcastId: broadcast.id,
+        subjectLine: broadcast.subjectLine,
+        sentAt: broadcast.sentAt,
+        status: broadcast.status,
+        recipients: {
+          total,
+          delivered,
+          opened,
+          clicked,
+          bounced,
+          failed,
+        },
+        rates: {
+          openRatePercent: total
+            ? Number(((opened / total) * 100).toFixed(1))
+            : Number(broadcast.openRatePercent || 0),
+          clickRatePercent: total
+            ? Number(((clicked / total) * 100).toFixed(1))
+            : 0,
+          deliveryRatePercent: total
+            ? Number(((delivered / total) * 100).toFixed(1))
+            : 0,
+        },
+      },
+    };
   }
 }

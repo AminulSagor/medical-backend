@@ -22,6 +22,15 @@ export class NewsletterSubscriber {
   @Column({ type: 'varchar', length: 180, nullable: true })
   fullName: string | null;
 
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  phone: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  clinicalRole: string | null;
+
+  @Column({ type: 'varchar', length: 180, nullable: true })
+  institution: string | null;
+
   @Column({
     type: 'enum',
     enum: NewsletterSubscriberStatus,

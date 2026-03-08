@@ -86,3 +86,14 @@ export enum NewsletterTransmissionEventType {
   FAILED = 'FAILED',
   UNSUBSCRIBED = 'UNSUBSCRIBED',
 }
+
+export enum CourseAnnouncementPriority {
+  GENERAL_UPDATE = 'GENERAL_UPDATE',
+  MATERIAL_SHARE = 'MATERIAL_SHARE',
+  URGENT_ALERT = 'URGENT_ALERT',
+}
+
+export enum CourseAnnouncementRecipientMode {
+  ALL = 'ALL',
+  SELECTED = 'SELECTED',
+}

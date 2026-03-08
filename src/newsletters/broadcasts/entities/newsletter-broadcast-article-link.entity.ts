@@ -47,6 +47,9 @@ export class NewsletterBroadcastArticleLink {
   @Column({ type: 'timestamptz', nullable: true })
   sourcePublishedAtSnapshot: Date | null;
 
+  @Column({ type: 'int', nullable: true })
+  estimatedReadMinutesSnapshot: number | null;
+
   @Column({ type: 'varchar', length: 80, default: 'Read Full Article' })
   ctaLabel: string;
 
