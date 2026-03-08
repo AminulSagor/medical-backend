@@ -101,6 +101,9 @@ export class NewsletterBroadcast {
   @Column({ type: 'numeric', precision: 5, scale: 2, default: 0 })
   openRatePercent: string; // TypeORM returns numeric as string in PG
 
+  @Column({ type: 'numeric', precision: 5, scale: 2, default: 0 })
+  clickRatePercent: string;
+
   @Column({ type: 'timestamptz', nullable: true })
   sentAt: Date | null;
 

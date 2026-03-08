@@ -5,20 +5,31 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { NewsletterCadenceSetting } from './entities/newsletter-cadence-settings.entity';
 import {
+  NewsletterBroadcastStatus,
   NewsletterChannelType,
   NewsletterFrequencyType,
 } from 'src/common/enums/newsletter-constants.enum';
 import { UpdateCadenceDto } from './dto/update-cadence.dto';
 import { GetAvailableCadenceSlotsQueryDto } from './dto/get-available-cadence-slots-query.dto';
+import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
+import { NewsletterBroadcastQueueOrder } from '../broadcasts/entities/newsletter-broadcast-queue-order.entity';
+import { buildCadenceSlots } from 'src/common/utils/newsletter-cadence-slots.util';
+import { PreviewCadenceRecalculationDto } from './dto/preview-cadence-recalculation.dto';
+import { ApplyCadenceRecalculationDto } from './dto/apply-cadence-recalculation.dto';
 
 @Injectable()
 export class CadenceService {
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(NewsletterCadenceSetting)
     private readonly cadenceRepo: Repository<NewsletterCadenceSetting>,
+    @InjectRepository(NewsletterBroadcast)
+    private readonly broadcastRepo: Repository<NewsletterBroadcast>,
+    @InjectRepository(NewsletterBroadcastQueueOrder)
+    private readonly queueOrderRepo: Repository<NewsletterBroadcastQueueOrder>,
   ) {}
 
   async getCurrent(): Promise<Record<string, unknown>> {
@@ -126,29 +137,273 @@ export class CadenceService {
       throw new UnprocessableEntityException('Monthly cadence is disabled');
     }
 
-    const now = new Date();
-    const slots: Array<Record<string, unknown>> = [];
+    const candidateSlots = buildCadenceSlots({
+      timezone: cadence.timezone,
+      frequencyType: query.frequencyType,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      count: 20,
+      weekly: {
+        enabled: cadence.weeklyEnabled,
+        releaseDay: cadence.weeklyReleaseDay,
+        releaseTime: cadence.weeklyReleaseTime,
+      },
+      monthly: {
+        enabled: cadence.monthlyEnabled,
+        dayOfMonth: cadence.monthlyDayOfMonth,
+        releaseTime: cadence.monthlyReleaseTime,
+      },
+    });
 
-    for (let i = 1; i <= 12; i++) {
-      const dt = new Date(now);
-      if (query.frequencyType === NewsletterFrequencyType.WEEKLY) {
-        dt.setDate(dt.getDate() + i * 7);
-      } else {
-        dt.setMonth(dt.getMonth() + i);
-      }
+    const slotIsoList = candidateSlots.map((s) => s.scheduledAtUtc);
+    let occupiedMap = new Map<
+      string,
+      { broadcastId: string; subjectLine: string }
+    >();
 
-      slots.push({
-        scheduledAtUtc: dt.toISOString(),
-        scheduledAtLocalLabel: dt.toUTCString(), // replace with timezone formatting later
-        isAvailable: true,
+    if (slotIsoList.length) {
+      const occupied = await this.broadcastRepo.find({
+        where: {
+          channelType: NewsletterChannelType.GENERAL,
+          status: NewsletterBroadcastStatus.SCHEDULED,
+          frequencyType: query.frequencyType,
+          scheduledAt: In(slotIsoList.map((d) => new Date(d))),
+        } as any,
+        select: ['id', 'subjectLine', 'scheduledAt'],
       });
+
+      occupiedMap = new Map(
+        occupied.map((o) => [
+          o.scheduledAt!.toISOString(),
+          { broadcastId: o.id, subjectLine: o.subjectLine },
+        ]),
+      );
     }
 
     return {
       frequencyType: query.frequencyType,
       timezone: cadence.timezone,
-      slots,
+      slots: candidateSlots.map((slot) => ({
+        ...slot,
+        isAvailable: !occupiedMap.has(slot.scheduledAtUtc),
+        occupiedBy: occupiedMap.get(slot.scheduledAtUtc) ?? null,
+      })),
     };
+  }
+
+  async previewRecalculation(
+    dto: PreviewCadenceRecalculationDto,
+  ): Promise<Record<string, unknown>> {
+    this.validate(dto);
+
+    const queuedBroadcasts = await this.broadcastRepo.find({
+      where: {
+        channelType: NewsletterChannelType.GENERAL,
+        status: NewsletterBroadcastStatus.SCHEDULED,
+      },
+      select: [
+        'id',
+        'subjectLine',
+        'frequencyType',
+        'scheduledAt',
+        'timezone',
+        'cadenceAnchorLabel',
+      ],
+      order: { scheduledAt: 'ASC' },
+      take: 500,
+    });
+
+    const weeklyRows = queuedBroadcasts.filter(
+      (b) => b.frequencyType === NewsletterFrequencyType.WEEKLY,
+    );
+    const monthlyRows = queuedBroadcasts.filter(
+      (b) => b.frequencyType === NewsletterFrequencyType.MONTHLY,
+    );
+
+    const weeklySlots = buildCadenceSlots({
+      timezone: dto.timezone,
+      frequencyType: NewsletterFrequencyType.WEEKLY,
+      count: Math.max(weeklyRows.length + 5, 20),
+      weekly: {
+        enabled: dto.weeklyEnabled,
+        releaseDay: dto.weeklyReleaseDay,
+        releaseTime: dto.weeklyReleaseTime,
+      },
+      monthly: { enabled: false },
+    });
+
+    const monthlySlots = buildCadenceSlots({
+      timezone: dto.timezone,
+      frequencyType: NewsletterFrequencyType.MONTHLY,
+      count: Math.max(monthlyRows.length + 5, 20),
+      monthly: {
+        enabled: dto.monthlyEnabled,
+        dayOfMonth: dto.monthlyDayOfMonth,
+        releaseTime: dto.monthlyReleaseTime,
+      },
+      weekly: { enabled: false },
+    });
+
+    const weeklyImpacts = weeklyRows.map((b, idx) => ({
+      broadcastId: b.id,
+      subjectLine: b.subjectLine,
+      frequencyType: b.frequencyType,
+      oldScheduledAtUtc: b.scheduledAt?.toISOString() ?? null,
+      newScheduledAtUtc: weeklySlots[idx]?.scheduledAtUtc ?? null,
+      changed:
+        (b.scheduledAt?.toISOString() ?? null) !==
+        (weeklySlots[idx]?.scheduledAtUtc ?? null),
+    }));
+
+    const monthlyImpacts = monthlyRows.map((b, idx) => ({
+      broadcastId: b.id,
+      subjectLine: b.subjectLine,
+      frequencyType: b.frequencyType,
+      oldScheduledAtUtc: b.scheduledAt?.toISOString() ?? null,
+      newScheduledAtUtc: monthlySlots[idx]?.scheduledAtUtc ?? null,
+      changed:
+        (b.scheduledAt?.toISOString() ?? null) !==
+        (monthlySlots[idx]?.scheduledAtUtc ?? null),
+    }));
+
+    const all = [...weeklyImpacts, ...monthlyImpacts];
+    const changedCount = all.filter((x) => x.changed).length;
+
+    return {
+      summary: {
+        totalScheduledQueued: all.length,
+        changedCount,
+        unchangedCount: all.length - changedCount,
+        timezone: dto.timezone,
+      },
+      impacts: all.slice(0, 100), // UI preview list
+      truncated: all.length > 100,
+    };
+  }
+
+  async applyWithRecalculation(
+    adminUserId: string,
+    dto: ApplyCadenceRecalculationDto,
+  ): Promise<Record<string, unknown>> {
+    this.validate(dto);
+
+    const preview = await this.previewRecalculation(dto);
+
+    const cadenceBefore = await this.cadenceRepo.findOne({
+      where: { channelType: NewsletterChannelType.GENERAL },
+    });
+
+    let cadence = cadenceBefore;
+    if (!cadence) {
+      cadence = this.cadenceRepo.create({
+        channelType: NewsletterChannelType.GENERAL,
+      });
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      cadence!.weeklyEnabled = dto.weeklyEnabled;
+      cadence!.weeklyCycleStartDate = dto.weeklyEnabled
+        ? dto.weeklyCycleStartDate
+        : null;
+      cadence!.weeklyReleaseDay = dto.weeklyEnabled
+        ? dto.weeklyReleaseDay
+        : null;
+      cadence!.weeklyReleaseTime = dto.weeklyEnabled
+        ? dto.weeklyReleaseTime
+        : null;
+
+      cadence!.monthlyEnabled = dto.monthlyEnabled;
+      cadence!.monthlyCycleStartDate = dto.monthlyEnabled
+        ? dto.monthlyCycleStartDate
+        : null;
+      cadence!.monthlyDayOfMonth = dto.monthlyEnabled
+        ? dto.monthlyDayOfMonth
+        : null;
+      cadence!.monthlyReleaseTime = dto.monthlyEnabled
+        ? dto.monthlyReleaseTime
+        : null;
+
+      cadence!.timezone = dto.timezone.trim();
+      cadence!.updatedByAdminId = adminUserId;
+      cadence!.version = (cadence!.version ?? 0) + 1;
+
+      const savedCadence = await manager.save(
+        NewsletterCadenceSetting,
+        cadence!,
+      );
+
+      if (dto.recalculateScheduledQueue !== false) {
+        const queued = await manager.find(NewsletterBroadcast, {
+          where: {
+            channelType: NewsletterChannelType.GENERAL,
+            status: NewsletterBroadcastStatus.SCHEDULED,
+          },
+          select: ['id', 'frequencyType', 'scheduledAt', 'subjectLine'],
+          order: { scheduledAt: 'ASC' },
+          take: 500,
+        });
+
+        const weekly = queued.filter(
+          (b) => b.frequencyType === NewsletterFrequencyType.WEEKLY,
+        );
+        const monthly = queued.filter(
+          (b) => b.frequencyType === NewsletterFrequencyType.MONTHLY,
+        );
+
+        const weeklySlots = dto.weeklyEnabled
+          ? buildCadenceSlots({
+              timezone: dto.timezone,
+              frequencyType: NewsletterFrequencyType.WEEKLY,
+              count: Math.max(weekly.length + 5, 20),
+              weekly: {
+                enabled: dto.weeklyEnabled,
+                releaseDay: dto.weeklyReleaseDay,
+                releaseTime: dto.weeklyReleaseTime,
+              },
+              monthly: { enabled: false },
+            })
+          : [];
+
+        const monthlySlots = dto.monthlyEnabled
+          ? buildCadenceSlots({
+              timezone: dto.timezone,
+              frequencyType: NewsletterFrequencyType.MONTHLY,
+              count: Math.max(monthly.length + 5, 20),
+              monthly: {
+                enabled: dto.monthlyEnabled,
+                dayOfMonth: dto.monthlyDayOfMonth,
+                releaseTime: dto.monthlyReleaseTime,
+              },
+              weekly: { enabled: false },
+            })
+          : [];
+
+        for (let i = 0; i < weekly.length; i++) {
+          if (!weeklySlots[i]) continue;
+          weekly[i].scheduledAt = new Date(weeklySlots[i].scheduledAtUtc);
+          weekly[i].timezone = dto.timezone;
+          weekly[i].cadenceVersionAtScheduling = savedCadence.version;
+        }
+
+        for (let i = 0; i < monthly.length; i++) {
+          if (!monthlySlots[i]) continue;
+          monthly[i].scheduledAt = new Date(monthlySlots[i].scheduledAtUtc);
+          monthly[i].timezone = dto.timezone;
+          monthly[i].cadenceVersionAtScheduling = savedCadence.version;
+        }
+
+        if (weekly.length) await manager.save(NewsletterBroadcast, weekly);
+        if (monthly.length) await manager.save(NewsletterBroadcast, monthly);
+      }
+
+      return {
+        message: 'General newsletter cadence updated successfully',
+        id: savedCadence.id,
+        identifier: savedCadence.timezone,
+        version: savedCadence.version,
+        recalculation: preview.summary,
+      };
+    });
   }
 
   private validate(dto: UpdateCadenceDto): void {

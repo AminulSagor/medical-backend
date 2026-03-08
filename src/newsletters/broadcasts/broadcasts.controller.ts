@@ -24,6 +24,11 @@ import { AddBroadcastAttachmentDto } from './dto/add-broadcast-attachment.dto';
 import { SearchArticleSourcesQueryDto } from './dto/search-article-sources-query.dto';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from 'src/auth/decorators/roles.decorator';
+import { GetWorkspaceMetricsQueryDto } from './dto/get-workspace-metrics-query.dto';
+import { ListWorkspaceBroadcastsQueryDto } from './dto/list-workspace-broadcasts-query.dto';
+import { ReorderQueueBroadcastsDto } from './dto/reorder-queue-broadcasts.dto';
+import { GetCancelPreviewQueryDto } from './dto/get-cancel-preview-query.dto';
+import { GetScheduleSuccessQueryDto } from './dto/get-schedule-success-query.dto';
 
 @Controller('admin/newsletters/general/broadcasts')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -114,5 +119,57 @@ export class BroadcastsController {
     @Body() dto: CancelBroadcastDto,
   ): Promise<Record<string, unknown>> {
     return this.broadcastsService.cancel(req.user.id, id, dto);
+  }
+
+  @Get('workspace/metrics')
+  getWorkspaceMetrics(
+    @Query() query: GetWorkspaceMetricsQueryDto,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.getWorkspaceMetrics(query);
+  }
+
+  @Get('workspace/list')
+  listWorkspace(
+    @Query() query: ListWorkspaceBroadcastsQueryDto,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.listWorkspace(query);
+  }
+
+  @Post('queue/reorder')
+  reorderQueue(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: ReorderQueueBroadcastsDto,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.reorderQueue(req.user.id, dto);
+  }
+
+  @Get(':id/ui-view')
+  getUiView(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.getUiViewPayload(id);
+  }
+
+  @Get(':id/cancel-preview')
+  getCancelPreview(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: GetCancelPreviewQueryDto,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.getCancelPreview(id, query);
+  }
+
+  @Get(':id/schedule-success')
+  getScheduleSuccessPayload(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: GetScheduleSuccessQueryDto,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.getScheduleSuccessPayload(id, query);
+  }
+
+  @Get(':id/report')
+  getBroadcastReport(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.getBroadcastReport(id);
   }
 }

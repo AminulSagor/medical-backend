@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -14,6 +15,8 @@ import { CadenceService } from './cadence.service';
 import { UpdateCadenceDto } from './dto/update-cadence.dto';
 import { GetAvailableCadenceSlotsQueryDto } from './dto/get-available-cadence-slots-query.dto';
 import type { AuthenticatedRequest } from 'src/common/interfaces/authenticated-request.interface';
+import { PreviewCadenceRecalculationDto } from './dto/preview-cadence-recalculation.dto';
+import { ApplyCadenceRecalculationDto } from './dto/apply-cadence-recalculation.dto';
 
 @Controller('admin/newsletters/general/cadence')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -39,5 +42,20 @@ export class CadenceController {
     @Query() query: GetAvailableCadenceSlotsQueryDto,
   ): Promise<Record<string, unknown>> {
     return this.cadenceService.getAvailableSlots(query);
+  }
+
+  @Post('recalculation/preview')
+  previewRecalculation(
+    @Body() dto: PreviewCadenceRecalculationDto,
+  ): Promise<Record<string, unknown>> {
+    return this.cadenceService.previewRecalculation(dto);
+  }
+
+  @Post('recalculation/apply')
+  applyRecalculation(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: ApplyCadenceRecalculationDto,
+  ): Promise<Record<string, unknown>> {
+    return this.cadenceService.applyWithRecalculation(req.user.id, dto);
   }
 }

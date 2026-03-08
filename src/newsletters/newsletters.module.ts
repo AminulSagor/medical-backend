@@ -52,6 +52,12 @@ import { NewsletterAuditService } from './audit/newsletter-audit.service';
 import { NewsletterAuditLog } from './audit/entities/newsletter-audit-log.entity';
 import { NewsletterBroadcastQueueOrder } from './broadcasts/entities/newsletter-broadcast-queue-order.entity';
 import { NewsletterSubscriberNote } from './audience/entities/newsletter-subscriber-note.entity';
+import { ArticleSourceAdapterService } from './broadcasts/article-source-adapter.service';
+import { DeliveryWebhooksController } from './delivery/delivery-webhooks.controller';
+import { DeliveryWebhookService } from './delivery/delivery-webhook.service';
+import { BlogArticleSourceService } from './broadcasts/blog-article-source.service';
+import { BlogPost } from 'src/blog/entities/blog-post.entity';
+import { CourseAnnouncementsModule } from './course-announcements/course-announcements.module';
 
 @Module({
   imports: [
@@ -85,7 +91,10 @@ import { NewsletterSubscriberNote } from './audience/entities/newsletter-subscri
 
       // audit
       NewsletterAuditLog,
+
+      BlogPost,
     ]),
+    CourseAnnouncementsModule,
   ],
   controllers: [
     DashboardController,
@@ -94,6 +103,7 @@ import { NewsletterSubscriberNote } from './audience/entities/newsletter-subscri
     SubscribersController,
     SegmentsController,
     UnsubscribeController,
+    DeliveryWebhooksController,
   ],
   providers: [
     DashboardService,
@@ -110,12 +120,18 @@ import { NewsletterSubscriberNote } from './audience/entities/newsletter-subscri
 
     DeliveryService,
     DeliveryWorkerService,
-    ProviderAdapterService,
     SesProvider,
+    {
+      provide: ProviderAdapterService,
+      useClass: SesProvider,
+    },
 
     UnsubscribeService,
 
     NewsletterAuditService,
+    ArticleSourceAdapterService,
+    DeliveryWebhookService,
+    BlogArticleSourceService,
   ],
   exports: [
     BroadcastsService,
