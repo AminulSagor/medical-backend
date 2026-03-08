@@ -37,4 +37,4 @@ import { UsersModule } from "../users/users.module";
     controllers: [WorkshopsController, PublicWorkshopsController],
     providers: [WorkshopsService],
 })
-export class WorkshopsModule { }
+export class WorkshopsModule {}
