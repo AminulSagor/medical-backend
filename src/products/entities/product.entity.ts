@@ -44,6 +44,9 @@ export class Product {
     @Column({ type: "text", nullable: true })
     clinicalDescription?: string;
 
+    @Column({ type: "varchar", length: 120, nullable: true })
+    brand?: string;
+
     @Index()
     @Column({ type: "uuid", array: true, default: () => "ARRAY[]::uuid[]" })
     categoryId: string[];

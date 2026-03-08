@@ -52,6 +52,11 @@ export class CreateProductDto {
     @IsString()
     clinicalDescription: string;
 
+    @IsOptional()
+    @IsString()
+    @MaxLength(120)
+    brand?: string;
+
     @IsArray()
     @ArrayMinSize(1) // ✅ must contain at least 1 benefit
     @ValidateNested({ each: true })

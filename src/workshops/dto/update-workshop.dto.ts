@@ -5,7 +5,6 @@ import {
     IsInt,
     IsOptional,
     IsString,
-    IsUUID,
     MaxLength,
     Min,
     ValidateNested,
@@ -13,7 +12,7 @@ import {
 import { Type } from "class-transformer";
 import { WorkshopDeliveryMode, WorkshopStatus } from "../entities/workshop.entity";
 
-class CreateWorkshopSegmentDto {
+class UpdateWorkshopSegmentDto {
     @IsInt()
     @Min(1)
     segmentNumber: number;
@@ -34,7 +33,7 @@ class CreateWorkshopSegmentDto {
     endTime: string;
 }
 
-class CreateWorkshopDayDto {
+class UpdateWorkshopDayDto {
     // "2026-02-22"
     @IsString()
     date: string;
@@ -45,11 +44,11 @@ class CreateWorkshopDayDto {
 
     @IsArray()
     @ValidateNested({ each: true })
-    @Type(() => CreateWorkshopSegmentDto)
-    segments: CreateWorkshopSegmentDto[];
+    @Type(() => UpdateWorkshopSegmentDto)
+    segments: UpdateWorkshopSegmentDto[];
 }
 
-class CreateWorkshopGroupDiscountDto {
+class UpdateWorkshopGroupDiscountDto {
     @IsInt()
     @Min(1)
     minimumAttendees: number;
@@ -59,17 +58,19 @@ class CreateWorkshopGroupDiscountDto {
     groupRatePerPerson: string;
 }
 
-export class CreateWorkshopDto {
+export class UpdateWorkshopDto {
+    @IsOptional()
     @IsEnum(WorkshopDeliveryMode)
-    deliveryMode: WorkshopDeliveryMode;
+    deliveryMode?: WorkshopDeliveryMode;
 
     @IsOptional()
     @IsEnum(WorkshopStatus)
     status?: WorkshopStatus;
 
+    @IsOptional()
     @IsString()
     @MaxLength(220)
-    title: string;
+    title?: string;
 
     @IsOptional()
     @IsString()
@@ -83,14 +84,16 @@ export class CreateWorkshopDto {
     @IsString()
     learningObjectives?: string;
 
+    @IsOptional()
     @IsBoolean()
-    offersCmeCredits: boolean;
+    offersCmeCredits?: boolean;
 
+    @IsOptional()
     @IsArray()
     @IsString({ each: true })
-    facilityIds: string[];
+    facilityIds?: string[];
 
-    // Online workshop specific fields (optional, used when deliveryMode is "online")
+    // Online workshop specific fields
     @IsOptional()
     @IsString()
     @MaxLength(100)
@@ -109,35 +112,40 @@ export class CreateWorkshopDto {
     @IsBoolean()
     autoRecordSession?: boolean;
 
+    @IsOptional()
     @IsInt()
     @Min(1)
-    capacity: number;
+    capacity?: number;
 
+    @IsOptional()
     @IsInt()
     @Min(0)
-    alertAt: number;
+    alertAt?: number;
 
+    @IsOptional()
     @IsString()
-    standardBaseRate: string;
+    standardBaseRate?: string;
 
+    @IsOptional()
     @IsBoolean()
-    groupDiscountEnabled: boolean;
+    groupDiscountEnabled?: boolean;
 
     // if enabled=true, you will send at least one record
     @IsOptional()
     @IsArray()
     @ValidateNested({ each: true })
-    @Type(() => CreateWorkshopGroupDiscountDto)
-    groupDiscounts?: CreateWorkshopGroupDiscountDto[];
+    @Type(() => UpdateWorkshopGroupDiscountDto)
+    groupDiscounts?: UpdateWorkshopGroupDiscountDto[];
 
     // assign existing faculty IDs (your faculty create API already exists)
     @IsOptional()
     @IsArray()
-    @IsUUID("4", { each: true })
+    @IsString({ each: true })
     facultyIds?: string[];
 
+    @IsOptional()
     @IsArray()
     @ValidateNested({ each: true })
-    @Type(() => CreateWorkshopDayDto)
-    days: CreateWorkshopDayDto[];
+    @Type(() => UpdateWorkshopDayDto)
+    days?: UpdateWorkshopDayDto[];
 }

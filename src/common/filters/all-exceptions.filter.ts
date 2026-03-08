@@ -23,14 +23,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
             ? (exception.getResponse() as any)?.message || exception.message
             : "Internal server error";
 
+        // Skip logging for development tool polling (VS Code, Postman, etc.)
+        const skipLogging = req.url === '/__server_sent_events__';
+        
         // ✅ IMPORTANT: log the real error + stack trace in terminal
-        // eslint-disable-next-line no-console
-        console.error("🔥 API ERROR:", {
-            method: req.method,
-            url: req.url,
-            status,
-            exception,
-        });
+        if (!skipLogging) {
+            // eslint-disable-next-line no-console
+            console.error("🔥 API ERROR:", {
+                method: req.method,
+                url: req.url,
+                status,
+                exception,
+            });
+        }
 
         // return minimal response
         res.status(status).json({

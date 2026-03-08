@@ -17,7 +17,7 @@ export class MailService {
 
         // ✅ Check if SMTP is properly configured (not placeholder values)
         const smtpMissing = !host || !user || !pass || !this.from;
-        const hasPlaceholders = user?.includes("your_email") || host?.includes("smtp.gmail.com");
+        const hasPlaceholders = user?.includes("your_email") || pass?.includes("your_email_password");
         this.isConfigured = !smtpMissing && !hasPlaceholders;
 
         if (this.isConfigured) {
@@ -55,8 +55,10 @@ export class MailService {
           </div>
         `,
             });
+            console.log(`✅ OTP email sent successfully to ${to}`);
         } catch (err) {
-            throw new InternalServerErrorException("Failed to send OTP email");
+            console.error("📧 Email sending failed:", err);
+            throw new InternalServerErrorException(`Failed to send OTP email: ${err.message}`);
         }
     }
 }

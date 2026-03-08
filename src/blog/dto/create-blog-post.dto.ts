@@ -7,6 +7,8 @@ import {
     IsUUID,
     IsDateString,
     MaxLength,
+    IsInt,
+    Min,
 } from "class-validator";
 import { PublishingStatus } from "../entities/blog-post.entity";
 
@@ -37,6 +39,11 @@ export class CreateBlogPostDto {
     @IsOptional()
     @IsString()
     excerpt?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    readTimeMinutes?: number;
 
     // ── Relation IDs ──
 

@@ -55,6 +55,11 @@ export class UpdateProductDto {
     clinicalDescription?: string;
 
     @IsOptional()
+    @IsString()
+    @MaxLength(120)
+    brand?: string;
+
+    @IsOptional()
     @IsArray()
     @ArrayMinSize(1)
     @IsUUID('all', { each: true })

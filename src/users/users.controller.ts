@@ -4,6 +4,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UsersService } from "./users.service";
 import { UpdateAdminEmailDto, ChangeAdminPasswordDto } from "./dto/admin-profile-settings.dto";
+import { MasterDirectoryQueryDto } from "./dto/master-directory.query.dto";
 
 @Controller("admin/users")
 export class UsersController {
@@ -14,6 +15,14 @@ export class UsersController {
     @Roles("admin")
     list(@Query() query: any) {
         return this.usersService.adminListUsers(query);
+    }
+
+    // ✅ MASTER USER DIRECTORY
+    @Get("directory/master")
+    @UseGuards(AuthGuard("jwt"), RolesGuard)
+    @Roles("admin")
+    getMasterDirectory(@Query() query: MasterDirectoryQueryDto) {
+        return this.usersService.getMasterDirectory(query);
     }
 
 

@@ -13,6 +13,7 @@ import { Tag } from "../tags/entities/tag.entity";
 import { CreateBlogPostDto } from "./dto/create-blog-post.dto";
 import { UpdateBlogPostDto } from "./dto/update-blog-post.dto";
 import { ListBlogPostsQueryDto } from "./dto/list-blog-posts.query.dto";
+import { ListPublicBlogsQueryDto } from "./dto/list-public-blogs.query.dto";
 
 @Injectable()
 export class BlogService {
@@ -106,6 +107,7 @@ export class BlogService {
                 : undefined,
             isFeatured: dto.isFeatured ?? false,
             excerpt: dto.excerpt,
+            readTimeMinutes: dto.readTimeMinutes ?? 5,
             publishedAt,
             authors,
             categories,
@@ -287,5 +289,122 @@ export class BlogService {
         }
         await this.postRepo.remove(post);
         return { deleted: true };
+    }
+
+    // ────────────────── PUBLIC ENDPOINTS ──────────────────
+
+    private sanitizePublicAuthor(author: User) {
+        return {
+            id: author.id,
+            fullLegalName: author.fullLegalName,
+            professionalRole: author.professionalRole,
+            profilePhotoUrl: author.profilePhotoUrl,
+        };
+    }
+
+    async findAllPublic(query: ListPublicBlogsQueryDto) {
+        const page = query.page ?? 1;
+        const limit = query.limit ?? 10;
+        const skip = (page - 1) * limit;
+
+        const qb = this.postRepo
+            .createQueryBuilder("post")
+            .leftJoinAndSelect("post.authors", "authors")
+            .leftJoinAndSelect("post.categories", "categories")
+            .leftJoinAndSelect("post.tags", "tags")
+            .where("post.publishingStatus = :status", { status: PublishingStatus.PUBLISHED });
+
+        // Search filter
+        if (query.search?.trim()) {
+            const s = `%${query.search.trim().toLowerCase()}%`;
+            qb.andWhere(
+                "(LOWER(post.title) LIKE :s OR LOWER(post.excerpt) LIKE :s OR LOWER(post.content) LIKE :s)",
+                { s }
+            );
+        }
+
+        // Category filter
+        if (query.categoryId?.trim()) {
+            qb.andWhere("categories.id = :categoryId", { categoryId: query.categoryId });
+        }
+
+        // Sorting
+        switch (query.sortBy) {
+            case 'oldest':
+                qb.orderBy("post.publishedAt", "ASC");
+                break;
+            case 'featured':
+                qb.orderBy("post.isFeatured", "DESC").addOrderBy("post.publishedAt", "DESC");
+                break;
+            case 'latest':
+            default:
+                qb.orderBy("post.publishedAt", "DESC");
+                break;
+        }
+
+        const [posts, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+        const items = posts.map(post => ({
+            id: post.id,
+            title: post.title,
+            description: post.excerpt || post.content?.substring(0, 200),
+            coverImageUrl: post.coverImageUrl,
+            categories: post.categories.map(cat => ({
+                id: cat.id,
+                name: cat.name,
+            })),
+            authors: post.authors.map(author => this.sanitizePublicAuthor(author)),
+            readTimeMinutes: post.readTimeMinutes,
+            publishedAt: post.publishedAt,
+            isFeatured: post.isFeatured,
+        }));
+
+        return {
+            items,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+    async findOnePublic(id: string) {
+        const post = await this.postRepo.findOne({
+            where: { 
+                id, 
+                publishingStatus: PublishingStatus.PUBLISHED 
+            },
+            relations: ["authors", "categories", "tags", "seo"],
+        });
+
+        if (!post) {
+            throw new NotFoundException("Blog post not found or not published");
+        }
+
+        return {
+            id: post.id,
+            title: post.title,
+            content: post.content,
+            description: post.excerpt,
+            coverImageUrl: post.coverImageUrl,
+            categories: post.categories.map(cat => ({
+                id: cat.id,
+                name: cat.name,
+            })),
+            tags: post.tags.map(tag => ({
+                id: tag.id,
+                name: tag.name,
+            })),
+            authors: post.authors.map(author => this.sanitizePublicAuthor(author)),
+            readTimeMinutes: post.readTimeMinutes,
+            publishedAt: post.publishedAt,
+            isFeatured: post.isFeatured,
+            seo: {
+                metaTitle: post.seo?.metaTitle,
+                metaDescription: post.seo?.metaDescription,
+            },
+        };
     }
 }

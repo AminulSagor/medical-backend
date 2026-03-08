@@ -18,6 +18,11 @@ export enum WorkshopDeliveryMode {
     ONLINE = "online",
 }
 
+export enum WorkshopStatus {
+    DRAFT = "draft",
+    PUBLISHED = "published",
+}
+
 @Entity("workshops")
 export class Workshop {
     @PrimaryGeneratedColumn("uuid")
@@ -33,6 +38,10 @@ export class Workshop {
     @Column({ type: "enum", enum: WorkshopDeliveryMode })
     deliveryMode: WorkshopDeliveryMode;
 
+    @Index()
+    @Column({ type: "enum", enum: WorkshopStatus, default: WorkshopStatus.DRAFT })
+    status: WorkshopStatus;
+
     // cover image url
     @Column({ type: "text", nullable: true })
     coverImageUrl?: string;
@@ -44,13 +53,23 @@ export class Workshop {
     @Column({ type: "boolean", default: false })
     offersCmeCredits: boolean;
 
-    @Column({ type: "text", nullable: true })
-    cmeCreditsInfo?: string;
-
-    // location
+    // location - array for multiple facilities or ["online"] for online workshops
     @Index()
-    @Column({ type: "uuid" })
-    facilityId: string;
+    @Column({ type: "simple-array" })
+    facilityIds: string[];
+
+    // Online workshop specific fields
+    @Column({ type: "varchar", length: 100, nullable: true })
+    webinarPlatform?: string; // e.g., "Zoom", "Teams", "Google Meet"
+
+    @Column({ type: "text", nullable: true })
+    meetingLink?: string;
+
+    @Column({ type: "varchar", length: 200, nullable: true })
+    meetingPassword?: string;
+
+    @Column({ type: "boolean", default: false })
+    autoRecordSession: boolean;
 
     // inventory
     @Column({ type: "int" })
