@@ -7,8 +7,8 @@ export class ListWorkshopsQueryDto {
     q?: string; // search by title
 
     @IsOptional()
-    @IsUUID()
-    facilityId?: string;
+    @IsString()
+    facilityId?: string; // filter workshops that include this facilityId
 
     @IsOptional()
     @IsUUID()
@@ -17,6 +17,10 @@ export class ListWorkshopsQueryDto {
     @IsOptional()
     @IsIn(["in_person", "online"])
     deliveryMode?: "in_person" | "online";
+
+    @IsOptional()
+    @IsIn(["draft", "published"])
+    status?: "draft" | "published";
 
     @IsOptional()
     @IsIn(["true", "false"])

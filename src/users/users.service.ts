@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { User, UserRole } from "./entities/user.entity";
+import { User, UserRole, UserStatus } from "./entities/user.entity";
 import { Faculty } from "../faculty/entities/faculty.entity";
 import * as bcrypt from "bcrypt";
+import { MasterDirectoryQueryDto } from "./dto/master-directory.query.dto";
 
 function toInt(v: any, fallback: number) {
     const n = parseInt(String(v ?? ""), 10);
@@ -305,6 +306,152 @@ export class UsersService {
         user.password = hash;
 
         return this.usersRepo.save(user);
+    }
+
+
+    // ✅ MASTER USER DIRECTORY
+    async getMasterDirectory(query: MasterDirectoryQueryDto) {
+        const page = query.page ?? 1;
+        const limit = query.limit ?? 20;
+        const skip = (page - 1) * limit;
+
+        // Calculate statistics
+        const stats = await this.calculateDirectoryStatistics();
+
+        // Build query for user table
+        const qb = this.usersRepo.createQueryBuilder("user");
+
+        // Search filter
+        if (query.search?.trim()) {
+            const s = `%${query.search.trim().toLowerCase()}%`;
+            qb.andWhere(
+                "(LOWER(user.fullLegalName) LIKE :s OR LOWER(user.medicalEmail) LIKE :s)",
+                { s }
+            );
+        }
+
+        // Role filter
+        if (query.role) {
+            qb.andWhere("user.role = :role", { role: query.role });
+        }
+
+        // Status filter
+        if (query.status) {
+            qb.andWhere("user.status = :status", { status: query.status });
+        }
+
+        // Sorting
+        switch (query.sortBy) {
+            case 'name':
+                qb.orderBy("user.fullLegalName", query.sortOrder === 'asc' ? 'ASC' : 'DESC');
+                break;
+            case 'email':
+                qb.orderBy("user.medicalEmail", query.sortOrder === 'asc' ? 'ASC' : 'DESC');
+                break;
+            case 'courses':
+                qb.orderBy("user.coursesCount", query.sortOrder === 'asc' ? 'ASC' : 'DESC');
+                break;
+            case 'joinedDate':
+            default:
+                qb.orderBy("user.createdAt", query.sortOrder === 'asc' ? 'ASC' : 'DESC');
+                break;
+        }
+
+        const [users, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+        // Transform users to table format
+        const tableData = users.map(user => ({
+            id: user.id,
+            userIdentity: {
+                name: user.fullLegalName,
+                email: user.medicalEmail,
+                profilePhoto: user.profilePhotoUrl,
+            },
+            role: user.role,
+            credential: user.credentials || user.professionalRole,
+            status: user.status,
+            courses: user.coursesCount,
+            joinedDate: user.createdAt,
+            lastActive: user.lastActiveAt,
+        }));
+
+        return {
+            statistics: stats,
+            table: {
+                data: tableData,
+                meta: {
+                    page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit),
+                },
+            },
+        };
+    }
+
+    private async calculateDirectoryStatistics() {
+        // Total community count
+        const totalCommunity = await this.usersRepo.count();
+
+        // Active students count
+        const activeStudents = await this.usersRepo.count({
+            where: {
+                role: UserRole.STUDENT,
+                status: UserStatus.ACTIVE,
+            },
+        });
+
+        // Growth pulse (users joined in last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const recentUsers = await this.usersRepo
+            .createQueryBuilder("user")
+            .where("user.createdAt >= :thirtyDaysAgo", { thirtyDaysAgo })
+            .getCount();
+
+        const previousUsers = await this.usersRepo
+            .createQueryBuilder("user")
+            .where("user.createdAt < :thirtyDaysAgo", { thirtyDaysAgo })
+            .getCount();
+
+        const growthPulse = previousUsers > 0 
+            ? ((recentUsers / previousUsers) * 100).toFixed(1) + '%'
+            : '0%';
+
+        // Engagement rate (users active in last 7 days / total users)
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+        const activeUsersLastWeek = await this.usersRepo
+            .createQueryBuilder("user")
+            .where("user.lastActiveAt >= :sevenDaysAgo", { sevenDaysAgo })
+            .getCount();
+
+        const engagementRate = totalCommunity > 0
+            ? ((activeUsersLastWeek / totalCommunity) * 100).toFixed(1) + '%'
+            : '0%';
+
+        // Role distribution
+        const roleCounts = await this.usersRepo
+            .createQueryBuilder("user")
+            .select("user.role", "role")
+            .addSelect("COUNT(*)", "count")
+            .groupBy("user.role")
+            .getRawMany();
+
+        const roleDistribution = roleCounts.reduce((acc, item) => {
+            acc[item.role] = parseInt(item.count);
+            return acc;
+        }, {} as Record<string, number>);
+
+        return {
+            totalCommunity,
+            activeStudents,
+            growthPulse,
+            engagementRate,
+            roleDistribution,
+        };
     }
 
 }

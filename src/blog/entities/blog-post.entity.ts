@@ -53,6 +53,9 @@ export class BlogPost {
     @Column({ type: "text", nullable: true })
     excerpt?: string;
 
+    @Column({ type: "int", default: 5 })
+    readTimeMinutes: number;
+
     @Index()
     @Column({ type: "timestamptz", nullable: true })
     publishedAt?: Date;

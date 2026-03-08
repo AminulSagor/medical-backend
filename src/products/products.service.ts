@@ -8,6 +8,8 @@ import { QueryFailedError } from "typeorm";
 import { GetProductsQueryDto } from "./dto/get-products.query.dto";
 import { NotFoundException } from "@nestjs/common";
 import { UpdateProductDto } from "./dto/update-product.dto";
+import { ListProductsPublicQueryDto } from "./dto/list-products-public.query.dto";
+import { CartRequestDto } from "./dto/cart.dto";
 
 
 @Injectable()
@@ -56,6 +58,7 @@ export class ProductsService {
             // ✅ products table
             name: dto.name,
             clinicalDescription: dto.clinicalDescription ?? undefined,
+            brand: dto.brand ?? undefined,
             categoryId: dto.categoryId,
             tags: dto.tags ?? [],
             actualPrice: dto.actualPrice ?? "0",
@@ -273,6 +276,7 @@ export class ProductsService {
         // --- apply updates to products table ---
         if (dto.name !== undefined) product.name = dto.name;
         if (dto.clinicalDescription !== undefined) product.clinicalDescription = dto.clinicalDescription;
+        if (dto.brand !== undefined) product.brand = dto.brand;
         if (dto.categoryId !== undefined) product.categoryId = dto.categoryId;
         if (dto.tags !== undefined) product.tags = dto.tags;
 
@@ -316,6 +320,253 @@ export class ProductsService {
             }
             throw error;
         }
+    }
+
+
+    // ✅ PUBLIC: Get all categories with product count and brands
+    async getCategoriesWithProductCount() {
+        const categories = await this.categoriesRepo.find();
+
+        // Get all active products
+        const products = await this.productsRepo.find({
+            where: { isActive: true },
+            select: ['id', 'categoryId', 'brand', 'name', 'clinicalDescription', 'actualPrice', 'offerPrice'],
+            relations: ['details'],
+        });
+
+        // Get unique brands
+        const brands = [...new Set(products.map(p => p.brand).filter(Boolean))];
+
+        // Calculate product count per category
+        const categoriesWithCount = categories.map(category => {
+            const productCount = products.filter(p => 
+                p.categoryId.includes(category.id)
+            ).length;
+
+            // Get representative products for this category (limit to 4)
+            const categoryProducts = products
+                .filter(p => p.categoryId.includes(category.id))
+                .slice(0, 4)
+                .map(p => ({
+                    id: p.id,
+                    photo: p.details?.images?.[0] || null,
+                    category: category.name,
+                    title: p.name,
+                    description: p.clinicalDescription,
+                    price: p.actualPrice,
+                    discountedPrice: p.offerPrice,
+                }));
+
+            return {
+                id: category.id,
+                name: category.name,
+                productCount,
+                products: categoryProducts,
+            };
+        });
+
+        return {
+            categories: categoriesWithCount,
+            brands,
+        };
+    }
+
+
+    // ✅ PUBLIC: Get products with filters
+    async findAllPublic(query: ListProductsPublicQueryDto) {
+        const page = query.page ?? 1;
+        const limit = query.limit ?? 12;
+        const skip = (page - 1) * limit;
+
+        const qb = this.productsRepo.createQueryBuilder("p")
+            .leftJoinAndSelect("p.details", "details")
+            .where("p.isActive = :isActive", { isActive: true });
+
+        // Search filter
+        if (query.search && query.search.trim()) {
+            const s = `%${query.search.trim().toLowerCase()}%`;
+            qb.andWhere(
+                `(
+                    LOWER(p.name) LIKE :s
+                    OR LOWER(p.sku) LIKE :s
+                    OR LOWER(p.clinicalDescription) LIKE :s
+                )`,
+                { s }
+            );
+        }
+
+        // Category filter
+        if (query.categoryIds && query.categoryIds.length > 0) {
+            qb.andWhere(`p.categoryId && :categoryIds`, { 
+                categoryIds: query.categoryIds 
+            });
+        }
+
+        // Brand filter
+        if (query.brands && query.brands.length > 0) {
+            qb.andWhere("p.brand IN (:...brands)", { brands: query.brands });
+        }
+
+        // Price range filter
+        if (query.minPrice) {
+            qb.andWhere("CAST(p.offerPrice AS DECIMAL) >= :minPrice", { 
+                minPrice: query.minPrice 
+            });
+        }
+
+        if (query.maxPrice) {
+            qb.andWhere("CAST(p.offerPrice AS DECIMAL) <= :maxPrice", { 
+                maxPrice: query.maxPrice 
+            });
+        }
+
+        // Sorting
+        switch (query.sortBy) {
+            case 'price-asc':
+                qb.orderBy("CAST(p.offerPrice AS DECIMAL)", "ASC");
+                break;
+            case 'price-desc':
+                qb.orderBy("CAST(p.offerPrice AS DECIMAL)", "DESC");
+                break;
+            case 'name-asc':
+                qb.orderBy("p.name", "ASC");
+                break;
+            case 'name-desc':
+                qb.orderBy("p.name", "DESC");
+                break;
+            case 'newest':
+            default:
+                qb.orderBy("p.createdAt", "DESC");
+                break;
+        }
+
+        const total = await qb.getCount();
+        const products = await qb.skip(skip).take(limit).getMany();
+
+        // Get category names for products
+        const categoryIds = [...new Set(products.flatMap(p => p.categoryId))];
+        const categories = await this.categoriesRepo.find({
+            where: categoryIds.map(id => ({ id })),
+        });
+
+        const categoryMap = new Map(categories.map(c => [c.id, c.name]));
+
+        const items = products.map(p => ({
+            id: p.id,
+            photo: p.details?.images?.[0] || null,
+            category: p.categoryId.map(id => categoryMap.get(id)).filter(Boolean).join(', '),
+            title: p.name,
+            description: p.clinicalDescription,
+            price: p.actualPrice,
+            discountedPrice: p.offerPrice,
+            brand: p.brand,
+            inStock: p.stockQuantity > 0,
+        }));
+
+        return {
+            items,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+
+    // ✅ PUBLIC: Get full product details by ID
+    async getProductDetails(id: string) {
+        const product = await this.productsRepo.findOne({
+            where: { id, isActive: true },
+            relations: ['details'],
+        });
+
+        if (!product) {
+            throw new NotFoundException("Product not found");
+        }
+
+        // Get category names
+        const categories = await this.categoriesRepo.find({
+            where: product.categoryId.map(id => ({ id })),
+        });
+
+        return {
+            id: product.id,
+            name: product.name,
+            brand: product.brand,
+            sku: product.sku,
+            clinicalDescription: product.clinicalDescription,
+            categories: categories.map(c => ({ id: c.id, name: c.name })),
+            tags: product.tags,
+            actualPrice: product.actualPrice,
+            offerPrice: product.offerPrice,
+            bulkPriceTiers: product.bulkPriceTiers,
+            stockQuantity: product.stockQuantity,
+            inStock: product.stockQuantity > 0,
+            backorder: product.backorder,
+            images: product.details?.images || [],
+            frontendBadges: product.details?.frontendBadges || [],
+            clinicalBenefits: product.details?.clinicalBenefits || [],
+            technicalSpecifications: product.details?.technicalSpecifications || [],
+            frequentlyBoughtTogether: product.details?.frequentlyBoughtTogether || [],
+            bundleUpsells: product.details?.bundleUpsells || [],
+            createdAt: product.createdAt,
+            updatedAt: product.updatedAt,
+        };
+    }
+
+
+    // ✅ PUBLIC: Calculate cart summary
+    async calculateCart(dto: CartRequestDto) {
+        const TAX_RATE = 0.10; // 10% tax rate (adjust as needed)
+
+        const productIds = dto.items.map(item => item.productId);
+        const products = await this.productsRepo.find({
+            where: productIds.map(id => ({ id })),
+            relations: ['details'],
+        });
+
+        if (products.length !== productIds.length) {
+            throw new BadRequestException("Some products not found");
+        }
+
+        const productMap = new Map(products.map(p => [p.id, p]));
+
+        let subtotal = 0;
+        const cartItems = dto.items.map(item => {
+            const product = productMap.get(item.productId);
+            if (!product) {
+                throw new BadRequestException(`Product not found: ${item.productId}`);
+            }
+
+            const price = Number(product.offerPrice || product.actualPrice);
+            const itemTotal = price * item.quantity;
+            subtotal += itemTotal;
+
+            return {
+                productId: product.id,
+                photo: product.details?.images?.[0] || null,
+                name: product.name,
+                sku: product.sku,
+                inStock: product.stockQuantity > 0,
+                price: product.offerPrice || product.actualPrice,
+                quantity: item.quantity,
+                itemTotal: itemTotal.toFixed(2),
+            };
+        });
+
+        const estimatedTax = subtotal * TAX_RATE;
+        const orderTotal = subtotal + estimatedTax;
+
+        return {
+            items: cartItems,
+            orderSummary: {
+                subtotal: subtotal.toFixed(2),
+                estimatedTax: estimatedTax.toFixed(2),
+                orderTotal: orderTotal.toFixed(2),
+            },
+        };
     }
 
 

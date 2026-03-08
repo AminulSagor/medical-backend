@@ -9,8 +9,10 @@ This Postman collection contains all endpoints for the Medical Backend API. The 
 - **2 Faculty Endpoints** - Create faculty, List faculty
 - **2 Facility Endpoints** - Create facility, List facilities
 - **2 Workshop Endpoints** - Create workshop, List workshops
+- **4 Public Product Endpoints** - Get categories, List products, Product details, Cart calculation
+- **2 Public Blog Endpoints** - List latest blogs, Get blog details
 
-**Total: 21 Endpoints**
+**Total: 25 Endpoints**
 
 ---
 
@@ -260,6 +262,220 @@ Authorization: Bearer {{accessToken}}
   - `stockQuantity` (integer)
   - `isActive` (boolean)
   - And more fields for partial updates
+
+---
+
+## Public Product Endpoints (No authentication required)
+
+### 1. Get Categories with Product Count
+- **Method:** GET
+- **URL:** `/public/products/categories`
+- **Auth:** None (Public endpoint)
+- **Returns:** 
+  - `categories`: Array of category objects with:
+    - `id`: Category UUID
+    - `name`: Category name
+    - `productCount`: Total active products in category
+    - `products`: Array of up to 4 sample products with:
+      - `id`: Product ID
+      - `photo`: First product image URL
+      - `category`: Category name
+      - `title`: Product name
+      - `description`: Clinical description
+      - `price`: Actual price
+      - `discountedPrice`: Offer price
+  - `brands`: Array of unique brand names
+
+### 2. List Products with Filters
+- **Method:** GET
+- **URL:** `/public/products`
+- **Auth:** None (Public endpoint)
+- **Query Parameters (all optional):**
+  - `page` (integer, min 1, default: 1) - Page number
+  - `limit` (integer, min 1, default: 12) - Items per page
+  - `search` (string) - Search in name, SKU, description
+  - `categoryIds` (array of UUIDs) - Filter by category IDs (can add multiple)
+  - `brands` (array of strings) - Filter by brands (can add multiple)
+  - `minPrice` (number string) - Minimum price filter
+  - `maxPrice` (number string) - Maximum price filter
+  - `sortBy` (enum) - Sort options:
+    - `price-asc`: Price low to high
+    - `price-desc`: Price high to low
+    - `name-asc`: Name A-Z
+    - `name-desc`: Name Z-A
+    - `newest`: Most recent (default)
+- **Returns:** 
+  - `items`: Array of product objects with:
+    - `id`: Product ID
+    - `photo`: First product image
+    - `category`: Category name(s)
+    - `title`: Product name
+    - `description`: Clinical description
+    - `price`: Actual price
+    - `discountedPrice`: Offer price
+    - `brand`: Brand name
+    - `inStock`: Boolean stock status
+  - `meta`: Pagination metadata
+    - `page`: Current page
+    - `limit`: Items per page
+    - `total`: Total items
+    - `totalPages`: Total pages
+
+### 3. Get Product Details
+- **Method:** GET
+- **URL:** `/public/products/:id`
+- **Auth:** None (Public endpoint)
+- **Path Parameters:**
+  - `id` (UUID) - Product ID
+- **Returns:** Complete product details including:
+  - Basic info: `id`, `name`, `brand`, `sku`, `clinicalDescription`
+  - Categories: Array of category objects with `id` and `name`
+  - Tags: Array of product tags
+  - Pricing: `actualPrice`, `offerPrice`, `bulkPriceTiers`
+  - Stock: `stockQuantity`, `inStock`, `backorder`
+  - Media: `images` (array), `frontendBadges` (array)
+  - Clinical benefits: Array of benefit objects with `icon`, `title`, `description`
+  - Technical specifications: Array of spec objects with `name`, `value`
+  - Related products: `frequentlyBoughtTogether`, `bundleUpsells`
+  - Timestamps: `createdAt`, `updatedAt`
+
+### 4. Calculate Cart
+- **Method:** POST
+- **URL:** `/public/products/cart/calculate`
+- **Auth:** None (Public endpoint)
+- **Request Body (CartRequestDto):**
+  ```json
+  {
+    "items": [
+      {
+        "productId": "750e8400-e29b-41d4-a716-446655440005",
+        "quantity": 2
+      }
+    ]
+  }
+  ```
+  - `items` (array) - REQUIRED, must not be empty
+    - `productId` (UUID) - REQUIRED
+    - `quantity` (integer, min 1) - REQUIRED
+- **Validation Rules:**
+  - Items array must contain at least one item
+  - Each productId must be a valid UUID
+  - Each quantity must be at least 1
+  - All products must exist in the database
+- **Returns:**
+  - `items`: Array of cart items with:
+    - `productId`: Product UUID
+    - `photo`: First product image
+    - `name`: Product name
+    - `sku`: Product SKU
+    - `inStock`: Boolean stock status
+    - `price`: Offer price or actual price
+    - `quantity`: Quantity ordered
+    - `itemTotal`: Price × quantity
+  - `orderSummary`:
+    - `subtotal`: Sum of all item totals
+    - `estimatedTax`: 10% of subtotal
+    - `orderTotal`: subtotal + estimatedTax
+
+**DTO Validation Examples:**
+
+✅ **Valid Request:**
+```json
+{
+  "items": [
+    {
+      "productId": "750e8400-e29b-41d4-a716-446655440005",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+❌ **Invalid - Missing items:**
+```json
+{}
+// Error: "items must be an array", "items should not be empty"
+```
+
+❌ **Invalid - Quantity less than 1:**
+```json
+{
+  "items": [
+    {
+      "productId": "750e8400-e29b-41d4-a716-446655440005",
+      "quantity": 0
+    }
+  ]
+}
+// Error: "quantity must not be less than 1"
+```
+
+❌ **Invalid - Invalid UUID:**
+```json
+{
+  "items": [
+    {
+      "productId": "invalid-uuid",
+      "quantity": 1
+    }
+  ]
+}
+// Error: "productId must be a UUID"
+```
+
+---
+
+## Public Blog Endpoints (No authentication required)
+
+### 1. List Latest Blogs
+- **Method:** GET
+- **URL:** `/public/blogs`
+- **Auth:** None (Public endpoint)
+- **Query Parameters (all optional):**
+  - `page` (integer, min 1, default: 1) - Page number
+  - `limit` (integer, min 1, default: 10) - Items per page
+  - `search` (string) - Search in title, excerpt, content
+  - `categoryId` (UUID) - Filter by category
+  - `sortBy` (enum) - Sort options:
+    - `latest`: Most recent (default)
+    - `oldest`: Oldest first
+    - `featured`: Featured posts first
+- **Returns:** 
+  - `items`: Array of blog posts with:
+    - `id`: Blog post UUID
+    - `title`: Blog post title
+    - `description`: Excerpt or content preview (max 200 chars)
+    - `coverImageUrl`: Cover image URL
+    - `categories`: Array of category objects (`id`, `name`)
+    - `authors`: Array of author objects with:
+      - `id`: Author UUID
+      - `fullLegalName`: Author full name
+      - `professionalRole`: Professional role/title
+      - `profilePhotoUrl`: Author profile photo URL
+    - `readTimeMinutes`: Estimated reading time in minutes
+    - `publishedAt`: Publication timestamp
+    - `isFeatured`: Featured flag
+  - `meta`: Pagination metadata (`page`, `limit`, `total`, `totalPages`)
+
+**Use case:** Blog listing page, homepage blog section
+
+### 2. Get Blog Post Details
+- **Method:** GET
+- **URL:** `/public/blogs/:id`
+- **Auth:** None (Public endpoint)
+- **Path Parameters:**
+  - `id` (UUID) - Blog post ID
+- **Returns:** Complete blog post details including:
+  - Basic info: `id`, `title`, `content` (full HTML), `description`, `coverImageUrl`
+  - Categories: Array of category objects
+  - Tags: Array of tag objects with `id` and `name`
+  - Authors: Array with profile photos and professional roles
+  - Reading info: `readTimeMinutes`, `publishedAt`, `isFeatured`
+  - SEO: `metaTitle`, `metaDescription`
+
+**Note:** Only published blog posts are accessible through public endpoints
+
+**Use case:** Blog detail/reading page
 
 ---
 

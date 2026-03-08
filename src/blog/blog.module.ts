@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { BlogController } from "./blog.controller";
+import { PublicBlogController } from "./public-blog.controller";
 import { BlogService } from "./blog.service";
 import { BlogSchedulerService } from "./blog-scheduler.service";
 import { BlogPost } from "./entities/blog-post.entity";
@@ -14,7 +15,7 @@ import { RolesGuard } from "../auth/guards/roles.guard";
     imports: [
         TypeOrmModule.forFeature([BlogPost, BlogPostSeo, User, BlogCategory, Tag]),
     ],
-    controllers: [BlogController],
+    controllers: [BlogController, PublicBlogController],
     providers: [BlogService, BlogSchedulerService, RolesGuard],
 })
 export class BlogModule { }
