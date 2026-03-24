@@ -1,0 +1,76 @@
+import {
+    IsString,
+    IsOptional,
+    IsEnum,
+    IsBoolean,
+    IsArray,
+    IsUUID,
+    IsDateString,
+    MaxLength,
+    IsInt,
+    Min,
+} from "class-validator";
+import { PublishingStatus } from "../entities/blog-post.entity";
+
+export class CreateBlogPostDto {
+    @IsString()
+    @MaxLength(300)
+    title: string;
+
+    @IsString()
+    content: string;
+
+    @IsOptional()
+    @IsString()
+    coverImageUrl?: string;
+
+    @IsOptional()
+    @IsEnum(PublishingStatus)
+    publishingStatus?: PublishingStatus;
+
+    @IsOptional()
+    @IsDateString()
+    scheduledPublishDate?: string;
+
+    @IsOptional()
+    @IsBoolean()
+    isFeatured?: boolean;
+
+    @IsOptional()
+    @IsString()
+    excerpt?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    readTimeMinutes?: number;
+
+    // ── Relation IDs ──
+
+    @IsOptional()
+    @IsArray()
+    @IsUUID("4", { each: true })
+    authorIds?: string[];
+
+    @IsOptional()
+    @IsArray()
+    @IsUUID("4", { each: true })
+    categoryIds?: string[];
+
+    @IsOptional()
+    @IsArray()
+    @IsUUID("4", { each: true })
+    tagIds?: string[];
+
+    // ── SEO ──
+
+    @IsOptional()
+    @IsString()
+    @MaxLength(160)
+    seoMetaTitle?: string;
+
+    @IsOptional()
+    @IsString()
+    @MaxLength(320)
+    seoMetaDescription?: string;
+}
