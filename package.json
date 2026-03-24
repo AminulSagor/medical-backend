@@ -20,30 +20,21 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
-<<<<<<< HEAD
     "@aws-sdk/client-s3": "^3.1000.0",
     "@aws-sdk/s3-request-presigner": "^3.1000.0",
-=======
->>>>>>> bbf3fc4b2e65c5959e867a6da6cede01ca43704e
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.0.1",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
-<<<<<<< HEAD
     "@nestjs/schedule": "^6.1.1",
-=======
->>>>>>> bbf3fc4b2e65c5959e867a6da6cede01ca43704e
     "@nestjs/typeorm": "^11.0.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
-<<<<<<< HEAD
     "cron": "^4.4.0",
     "luxon": "^3.7.2",
-=======
->>>>>>> bbf3fc4b2e65c5959e867a6da6cede01ca43704e
     "ms": "^2.1.3",
     "nodemailer": "^8.0.1",
     "passport": "^0.7.0",
@@ -51,12 +42,8 @@
     "pg": "^8.18.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-<<<<<<< HEAD
     "typeorm": "^0.3.28",
     "uuid": "^9.0.1"
-=======
-    "typeorm": "^0.3.28"
->>>>>>> bbf3fc4b2e65c5959e867a6da6cede01ca43704e
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
