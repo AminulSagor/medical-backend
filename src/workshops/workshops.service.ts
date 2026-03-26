@@ -694,6 +694,22 @@ export class WorkshopsService {
     };
   }
 
+  async getWorkshopById(id: string) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id },
+      relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
+      order: {
+        days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
+      },
+    });
+
+    if (!workshop) {
+      throw new NotFoundException(`Workshop with ID ${id} not found`);
+    }
+
+    return workshop;
+  }
+
   async getPublicWorkshopById(id: string) {
     // Find workshop with all relations
     const workshop = await this.workshopsRepo.findOne({

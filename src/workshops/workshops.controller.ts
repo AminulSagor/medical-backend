@@ -34,6 +34,13 @@ export class WorkshopsController {
     return this.service.update(id, dto);
   }
 
+  @Get(':id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  findOne(@Param('id') id: string) {
+    return this.service.getWorkshopById(id);
+  }
+
   @Get()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
