@@ -9,6 +9,15 @@ export class Facility {
     @Column({ type: "varchar", length: 200 })
     name: string;
 
+    @Column({ type: "varchar", length: 100 })
+    roomNumber: string;
+
     @Column({ type: "varchar", length: 400 })
-    address: string;
+    physicalAddress: string;
+
+    @Column({ type: "int" })
+    capacity: number;
+
+    @Column({ type: "text", nullable: true })
+    notes: string | null;
 }

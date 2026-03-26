@@ -14,13 +14,22 @@ export class FacilitiesService {
         const name = dto.name?.trim();
         if (!name) throw new BadRequestException("Facility name is required");
 
-        const address = dto.address?.trim();
-        if (!address) throw new BadRequestException("Facility address is required");
+        const roomNumber = dto.roomNumber?.trim();
+        if (!roomNumber) throw new BadRequestException("Room number is required");
+
+        const physicalAddress = dto.physicalAddress?.trim();
+        if (!physicalAddress) throw new BadRequestException("Physical address is required");
 
         const exists = await this.repo.findOne({ where: { name } });
         if (exists) throw new BadRequestException("Facility already exists");
 
-        const facility = this.repo.create({ name, address });
+        const facility = this.repo.create({
+            name,
+            roomNumber,
+            physicalAddress,
+            capacity: dto.capacity,
+            notes: dto.notes?.trim() || null,
+        });
         return await this.repo.save(facility);
     }
 
@@ -47,10 +56,24 @@ export class FacilitiesService {
             facility.name = name;
         }
 
-        if (dto.address !== undefined) {
-            const address = dto.address.trim();
-            if (!address) throw new BadRequestException("Facility address is required");
-            facility.address = address;
+        if (dto.roomNumber !== undefined) {
+            const roomNumber = dto.roomNumber.trim();
+            if (!roomNumber) throw new BadRequestException("Room number is required");
+            facility.roomNumber = roomNumber;
+        }
+
+        if (dto.physicalAddress !== undefined) {
+            const physicalAddress = dto.physicalAddress.trim();
+            if (!physicalAddress) throw new BadRequestException("Physical address is required");
+            facility.physicalAddress = physicalAddress;
+        }
+
+        if (dto.capacity !== undefined) {
+            facility.capacity = dto.capacity;
+        }
+
+        if (dto.notes !== undefined) {
+            facility.notes = dto.notes?.trim() || null;
         }
 
         return await this.repo.save(facility);

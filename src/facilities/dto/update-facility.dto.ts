@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
 
 export class UpdateFacilityDto {
     @IsOptional()
@@ -8,6 +8,21 @@ export class UpdateFacilityDto {
 
     @IsOptional()
     @IsString()
+    @MaxLength(100)
+    roomNumber?: string;
+
+    @IsOptional()
+    @IsString()
     @MaxLength(400)
-    address?: string;
+    physicalAddress?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    capacity?: number;
+
+    @IsOptional()
+    @IsString()
+    @MaxLength(2000)
+    notes?: string;
 }
