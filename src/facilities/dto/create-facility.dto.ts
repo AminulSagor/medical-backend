@@ -1,11 +1,22 @@
-import { IsString, MaxLength } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from "class-validator";
 
 export class CreateFacilityDto {
     @IsString()
+    @IsNotEmpty()
     @MaxLength(200)
-    name: string;
+    facilityName: string;
 
     @IsString()
+    @IsNotEmpty()
+    @MaxLength(50)
+    roomNumber: string;
+
+    @IsString()
+    @IsNotEmpty()
     @MaxLength(400)
-    address: string;
+    physicalAddress: string;
+
+    @IsOptional()
+    @IsString()
+    capacityNotes?: string;
 }

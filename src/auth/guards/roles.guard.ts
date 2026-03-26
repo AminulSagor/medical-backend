@@ -23,13 +23,16 @@ export class RolesGuard implements CanActivate {
         const req = context.switchToHttp().getRequest();
         const jwtUser = req.user;
 
+        console.log("[RolesGuard] jwtUser:", jwtUser);
+        console.log("[RolesGuard] requiredRoles:", requiredRoles);
+
         if (!jwtUser) throw new ForbiddenException("Unauthorized");
 
         const role = jwtUser.role;
-        if (!role) throw new ForbiddenException("Unauthorized");
+        if (!role) throw new ForbiddenException("Unauthorized - no role in token");
 
         if (!requiredRoles.includes(role)) {
-            throw new ForbiddenException("Admin only");
+            throw new ForbiddenException(`Admin only (your role: ${role})`);
         }
 
         return true;

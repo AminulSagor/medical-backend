@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, Index } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, UpdateDateColumn } from "typeorm";
 
 @Entity("facilities")
 export class Facility {
@@ -7,8 +7,20 @@ export class Facility {
 
     @Index()
     @Column({ type: "varchar", length: 200 })
-    name: string;
+    facilityName: string;
+
+    @Column({ type: "varchar", length: 50 })
+    roomNumber: string;
 
     @Column({ type: "varchar", length: 400 })
-    address: string;
+    physicalAddress: string;
+
+    @Column({ type: "text", nullable: true })
+    capacityNotes?: string;
+
+    @CreateDateColumn()
+    createdAt: Date;
+
+    @UpdateDateColumn()
+    updatedAt: Date;
 }
