@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { CreateFacilityDto } from "./dto/create-facility.dto";
+import { UpdateFacilityDto } from "./dto/update-facility.dto";
 import { FacilitiesService } from "./facilities.service";
 
 @Controller("admin/facilities")
@@ -19,5 +20,20 @@ export class FacilitiesController {
     @Get()
     list() {
         return this.service.listActive();
+    }
+
+    @Get(":id")
+    findOne(@Param("id", ParseUUIDPipe) id: string) {
+        return this.service.findOne(id);
+    }
+
+    @Patch(":id")
+    update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateFacilityDto) {
+        return this.service.update(id, dto);
+    }
+
+    @Delete(":id")
+    remove(@Param("id", ParseUUIDPipe) id: string) {
+        return this.service.remove(id);
     }
 }
