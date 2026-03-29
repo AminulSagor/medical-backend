@@ -7,6 +7,7 @@ import {
     ParseUUIDPipe,
     Patch,
     Post,
+    Query,
     UseGuards,
 } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
@@ -21,12 +22,12 @@ import { BulkCreateBlogCategoryDto } from "./dto/bulk-create-blog-category.dto";
 export class BlogCategoriesController {
     constructor(private readonly service: BlogCategoriesService) { }
 
-    // List all blog categories
+    // List all blog categories (with optional ?q= search)
     @Get()
     @UseGuards(AuthGuard("jwt"), RolesGuard)
     @Roles("admin")
-    list() {
-        return this.service.list();
+    list(@Query("q") q?: string) {
+        return this.service.list(q);
     }
 
     // Get single blog category

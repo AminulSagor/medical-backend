@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -13,8 +13,8 @@ export class TagsController {
     @Get()
     @UseGuards(AuthGuard("jwt"), RolesGuard)
     @Roles("admin")
-    list() {
-        return this.tagsService.list();
+    list(@Query("q") q?: string) {
+        return this.tagsService.list(q);
     }
 
     @Post()

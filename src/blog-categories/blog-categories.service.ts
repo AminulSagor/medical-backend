@@ -4,7 +4,7 @@ import {
     NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { ILike, Repository } from "typeorm";
 import { QueryFailedError } from "typeorm";
 import { BlogCategory } from "./entities/blog-category.entity";
 import { CreateBlogCategoryDto } from "./dto/create-blog-category.dto";
@@ -44,7 +44,13 @@ export class BlogCategoriesService {
         }
     }
 
-    async list() {
+    async list(q?: string) {
+        if (q && q.trim()) {
+            return this.repo.find({
+                where: { name: ILike(`%${q.trim()}%`) },
+                order: { name: "ASC" },
+            });
+        }
         return this.repo.find({ order: { name: "ASC" } });
     }
 
