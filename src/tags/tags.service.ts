@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { ILike, Repository } from "typeorm";
 import { Tag } from "./entities/tag.entity";
 import { CreateTagDto } from "./dto/create-tag.dto";
 import { BulkCreateTagDto } from "./dto/bulk-create-tag.dto";
@@ -58,7 +58,13 @@ export class TagsService {
         });
     }
 
-    async list() {
+    async list(q?: string) {
+        if (q && q.trim()) {
+            return this.tagRepo.find({
+                where: { name: ILike(`%${q.trim()}%`) },
+                order: { name: "ASC" },
+            });
+        }
         return this.tagRepo.find({ order: { name: "ASC" } });
     }
 }

@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ILike, In, Repository } from 'typeorm';
 import { Category } from './entities/category.entity';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { BulkCreateCategoryDto } from './dto/bulk-create-category.dto';
@@ -9,7 +9,13 @@ import { BulkCreateCategoryDto } from './dto/bulk-create-category.dto';
 export class CategoriesService {
   constructor(@InjectRepository(Category) private repo: Repository<Category>) {}
 
-  async list() {
+  async list(q?: string) {
+    if (q && q.trim()) {
+      return this.repo.find({
+        where: { name: ILike(`%${q.trim()}%`) },
+        order: { name: 'ASC' },
+      });
+    }
     return this.repo.find({ order: { name: 'ASC' } });
   }
 
@@ -27,19 +33,24 @@ export class CategoriesService {
   }
 
   async bulkCreate(dto: BulkCreateCategoryDto) {
-    const items = dto.categories.map((c) => ({ name: c.name.trim() }));
+    const names = dto.categories.map((c) => c.name.trim());
 
-    await this.repo
-      .createQueryBuilder()
-      .insert()
-      .into(Category)
-      .values(items)
-      .orIgnore()
-      .execute();
-
-    const names = items.map((i) => i.name);
-    return this.repo.find({
+    // Find already existing categories
+    const existing = await this.repo.find({
       where: names.map((name) => ({ name })),
+    });
+    const existingNames = new Set(existing.map((e) => e.name));
+
+    // Only insert truly new ones
+    const newNames = names.filter((name) => !existingNames.has(name));
+    if (newNames.length > 0) {
+      const newEntities = newNames.map((name) => this.repo.create({ name }));
+      await this.repo.save(newEntities);
+    }
+
+    // Return all requested categories (existing + newly created)
+    return this.repo.find({
+      where: { name: In(names) },
       order: { name: 'ASC' },
     });
   }
