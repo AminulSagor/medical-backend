@@ -63,14 +63,36 @@ export class BlogCategoriesService {
             };
         });
 
+        // Check for existing categories first
+        const existingNames = await this.repo
+            .createQueryBuilder()
+            .select("name")
+            .where("name IN (:...names)", { names: items.map(i => i.name) })
+            .getRawMany();
+        
+        const existingNamesSet = new Set(existingNames.map(e => e.name));
+        
+        // Filter out existing categories
+        const newItems = items.filter(item => !existingNamesSet.has(item.name));
+        
+        if (newItems.length === 0) {
+            // All categories already exist, return existing ones
+            const names = items.map((i) => i.name);
+            return this.repo.find({
+                where: names.map((name) => ({ name })),
+                order: { name: "ASC" },
+            });
+        }
+
+        // Insert only new categories
         await this.repo
             .createQueryBuilder()
             .insert()
             .into(BlogCategory)
-            .values(items)
-            .orIgnore()
+            .values(newItems)
             .execute();
 
+        // Return all categories (existing + new)
         const names = items.map((i) => i.name);
         return this.repo.find({
             where: names.map((name) => ({ name })),
