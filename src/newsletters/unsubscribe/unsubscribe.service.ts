@@ -468,7 +468,7 @@ export class UnsubscribeService {
     await this.requestRepo.save(reqEntity);
 
     return {
-      message: 'You have been unsubscribed successfully',
+      message: 'You have been unsubscribed successfully !',
       id: subscriber.id,
       identifier: subscriber.email,
     };
