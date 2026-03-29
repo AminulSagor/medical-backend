@@ -58,6 +58,7 @@ import { DeliveryWebhookService } from './delivery/delivery-webhook.service';
 import { BlogArticleSourceService } from './broadcasts/blog-article-source.service';
 import { BlogPost } from 'src/blog/entities/blog-post.entity';
 import { CourseAnnouncementsModule } from './course-announcements/course-announcements.module';
+import { TransmissionsModule } from './transmissions/transmissions.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { CourseAnnouncementsModule } from './course-announcements/course-announc
       BlogPost,
     ]),
     CourseAnnouncementsModule,
+    TransmissionsModule,
   ],
   controllers: [
     DashboardController,
