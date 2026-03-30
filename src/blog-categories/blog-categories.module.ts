@@ -10,6 +10,6 @@ import { User } from "../users/entities/user.entity";
     imports: [TypeOrmModule.forFeature([BlogCategory, User])],
     controllers: [BlogCategoriesController],
     providers: [BlogCategoriesService, RolesGuard],
-    exports: [TypeOrmModule],
+    exports: [TypeOrmModule, BlogCategoriesService],
 })
 export class BlogCategoriesModule { }

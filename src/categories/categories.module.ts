@@ -1,14 +1,11 @@
 import { Module } from "@nestjs/common";
-import { TypeOrmModule } from "@nestjs/typeorm";
-import { Category } from "./entities/category.entity";
 import { CategoriesController } from "./categories.controller";
-import { CategoriesService } from "./categories.service";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { User } from "../users/entities/user.entity";
+import { BlogCategoriesModule } from "../blog-categories/blog-categories.module";
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Category, User])],
+    imports: [BlogCategoriesModule],
     controllers: [CategoriesController],
-    providers: [CategoriesService, RolesGuard],
+    providers: [RolesGuard],
 })
 export class CategoriesModule { }

@@ -1,13 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, In, Repository } from 'typeorm';
-import { Category } from './entities/category.entity';
+import { BlogCategory } from '../blog-categories/entities/blog-category.entity';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { BulkCreateCategoryDto } from './dto/bulk-create-category.dto';
 
 @Injectable()
 export class CategoriesService {
-  constructor(@InjectRepository(Category) private repo: Repository<Category>) {}
+  constructor(@InjectRepository(BlogCategory) private repo: Repository<BlogCategory>) {}
 
   async list(q?: string) {
     if (q && q.trim()) {
@@ -21,6 +21,10 @@ export class CategoriesService {
 
   async create(dto: CreateCategoryDto) {
     const name = dto.name.trim();
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
 
     const exists = await this.repo.findOne({
       where: { name },
@@ -28,23 +32,31 @@ export class CategoriesService {
 
     if (exists) throw new BadRequestException('Category already exists');
 
-    const category = this.repo.create({ name });
+    const category = this.repo.create({ name, slug, isActive: true });
     return this.repo.save(category);
   }
 
   async bulkCreate(dto: BulkCreateCategoryDto) {
-    const names = dto.categories.map((c) => c.name.trim());
+    const items = dto.categories.map((c) => {
+      const name = c.name.trim();
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+      return { name, slug, isActive: true };
+    });
 
     // Find already existing categories
+    const names = items.map((i) => i.name);
     const existing = await this.repo.find({
       where: names.map((name) => ({ name })),
     });
     const existingNames = new Set(existing.map((e) => e.name));
 
     // Only insert truly new ones
-    const newNames = names.filter((name) => !existingNames.has(name));
-    if (newNames.length > 0) {
-      const newEntities = newNames.map((name) => this.repo.create({ name }));
+    const newItems = items.filter((item) => !existingNames.has(item.name));
+    if (newItems.length > 0) {
+      const newEntities = newItems.map((item) => this.repo.create(item));
       await this.repo.save(newEntities);
     }
 
