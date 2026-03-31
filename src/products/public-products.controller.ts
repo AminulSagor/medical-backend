@@ -13,6 +13,12 @@ export class PublicProductsController {
         return this.productsService.getCategoriesWithProductCount();
     }
 
+    // ✅ Alias for filters (backward compatibility)
+    @Get("categories")
+    async getCategories() {
+        return this.productsService.getCategoriesWithProductCount();
+    }
+
     // ✅ Get products with filters (category, brand, price range)
     @Get()
     async listProducts(@Query() query: ListProductsPublicQueryDto) {
