@@ -94,6 +94,11 @@ export class UpdateProductDto {
   sku?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  barcode?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   stockQuantity?: number;
