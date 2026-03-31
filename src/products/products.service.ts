@@ -374,37 +374,29 @@ export class ProductsService {
     // Get unique brands
     const brands = [...new Set(products.map((p) => p.brand).filter(Boolean))];
 
+    // Calculate price range
+    const prices = products.map((p) => Number(p.offerPrice) || Number(p.actualPrice) || 0);
+    const priceRange = {
+      min: prices.length > 0 ? Math.min(...prices) : 0,
+      max: prices.length > 0 ? Math.max(...prices) : 0,
+    };
+
     // Calculate product count per category
     const categoriesWithCount = categories.map((category) => {
       const productCount = products.filter((p) =>
         p.categoryId.includes(category.id),
       ).length;
 
-      // Get representative products for this category (limit to 4)
-      const categoryProducts = products
-        .filter((p) => p.categoryId.includes(category.id))
-        .slice(0, 4)
-        .map((p) => ({
-          id: p.id,
-          photo: p.details?.images?.[0] || null,
-          category: category.name,
-          title: p.name,
-          description: p.clinicalDescription,
-          price: p.actualPrice,
-          discountedPrice: p.offerPrice,
-        }));
-
       return {
-        id: category.id,
         name: category.name,
         productCount,
-        products: categoryProducts,
       };
     });
 
     return {
       categories: categoriesWithCount,
       brands,
+      priceRange,
     };
   }
 
@@ -507,6 +499,7 @@ export class ProductsService {
       discountedPrice: p.offerPrice,
       brand: p.brand,
       inStock: p.stockQuantity > 0,
+      badge: p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') || null,
     }));
 
     return {
