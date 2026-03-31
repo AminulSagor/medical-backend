@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from "class-validator";
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 
 export class GetProductsQueryDto {
     @IsOptional()
@@ -21,7 +21,19 @@ export class GetProductsQueryDto {
 
     @IsOptional()
     @IsString()
-    category?: string; // "All" or category name
+    category?: string; // "All" or category name (legacy)
+
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
+    categoryNames?: string[];
+
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
+    tagNames?: string[];
 
     @IsOptional()
     @IsIn(["all", "active", "out_of_stock", "low_stock"])

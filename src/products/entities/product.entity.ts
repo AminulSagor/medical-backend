@@ -68,6 +68,10 @@ export class Product {
   @Column({ type: 'varchar', length: 80 })
   sku: string;
 
+  @Index()
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  barcode?: string;
+
   @Column({ type: 'int', default: 0 })
   stockQuantity: number;
 

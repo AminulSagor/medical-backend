@@ -1,5 +1,5 @@
 import { IsOptional, IsString, IsNumberString, IsInt, Min, IsArray } from "class-validator";
-import { Type } from "class-transformer";
+import { Type, Transform } from "class-transformer";
 
 export class ListProductsPublicQueryDto {
     @IsOptional()
@@ -18,16 +18,18 @@ export class ListProductsPublicQueryDto {
     @IsString()
     search?: string;
 
-    // Filter by category ID(s)
+    // Filter by category name(s)
     @IsOptional()
     @IsArray()
     @IsString({ each: true })
-    categoryIds?: string[];
+    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
+    categoryNames?: string[];
 
     // Filter by brand(s)
     @IsOptional()
     @IsArray()
     @IsString({ each: true })
+    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
     brands?: string[];
 
     // Price range filters

@@ -68,6 +68,7 @@ export class ProductsService {
         price: t.price,
       })),
       sku: dto.sku,
+      barcode: dto.barcode ?? undefined,
       stockQuantity: dto.stockQuantity ?? 0,
       lowStockAlert: dto.lowStockAlert ?? 0,
       isActive: dto.isActive ?? true,
@@ -141,14 +142,25 @@ export class ProductsService {
       qb.andWhere('p.stockQuantity <= p.lowStockAlert');
     }
 
-    // --- category filter ---
-    // Since categoryId is now an array, we skip this filter
-    // Category filtering would require more complex array operations
-    // if (query.category && query.category.trim() && query.category !== "All") {
-    //     qb.andWhere("LOWER(c.name) = LOWER(:categoryName)", {
-    //         categoryName: query.category.trim(),
-    //     });
-    // }
+    // --- category filter by names ---
+    if (query.categoryNames && query.categoryNames.length > 0) {
+      const categories = await this.categoriesRepo.find({
+        where: query.categoryNames.map((name) => ({ name })),
+      });
+      const categoryIds = categories.map((c) => c.id);
+      if (categoryIds.length > 0) {
+        qb.andWhere('p.categoryId && :categoryIds', {
+          categoryIds,
+        });
+      }
+    }
+
+    // --- tags filter by names ---
+    if (query.tagNames && query.tagNames.length > 0) {
+      qb.andWhere('p.tags && :tagNames', {
+        tagNames: query.tagNames,
+      });
+    }
 
     // --- search (name, sku, tags) ---
     if (query.search && query.search.trim()) {
@@ -293,6 +305,7 @@ export class ProductsService {
       product.bulkPriceTiers = dto.bulkPriceTiers;
 
     if (dto.sku !== undefined) product.sku = dto.sku;
+    if (dto.barcode !== undefined) product.barcode = dto.barcode;
     if (dto.stockQuantity !== undefined)
       product.stockQuantity = dto.stockQuantity;
     if (dto.lowStockAlert !== undefined)
@@ -419,11 +432,17 @@ export class ProductsService {
       );
     }
 
-    // Category filter
-    if (query.categoryIds && query.categoryIds.length > 0) {
-      qb.andWhere(`p.categoryId && :categoryIds`, {
-        categoryIds: query.categoryIds,
+    // Category filter by names
+    if (query.categoryNames && query.categoryNames.length > 0) {
+      const categories = await this.categoriesRepo.find({
+        where: query.categoryNames.map((name) => ({ name })),
       });
+      const categoryIds = categories.map((c) => c.id);
+      if (categoryIds.length > 0) {
+        qb.andWhere('p.categoryId && :categoryIds', {
+          categoryIds,
+        });
+      }
     }
 
     // Brand filter
