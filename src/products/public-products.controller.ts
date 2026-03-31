@@ -7,9 +7,9 @@ import { CartRequestDto } from "./dto/cart.dto";
 export class PublicProductsController {
     constructor(private readonly productsService: ProductsService) { }
 
-    // ✅ Get all categories with product count and brands
-    @Get("categories")
-    async getCategories() {
+    // ✅ Get filter options (categories, brands, price range)
+    @Get("filters")
+    async getFilters() {
         return this.productsService.getCategoriesWithProductCount();
     }
 
