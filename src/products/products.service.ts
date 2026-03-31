@@ -110,6 +110,74 @@ export class ProductsService {
     }
   }
 
+  // ✅ ADMIN: Search products (for frequently bought together)
+  async searchProducts(q: string) {
+    if (!q || !q.trim()) {
+      return [];
+    }
+
+    const search = `%${q.trim().toLowerCase()}%`;
+
+    const products = await this.productsRepo
+      .createQueryBuilder('p')
+      .select(['p.id', 'p.name', 'p.sku'])
+      .where('LOWER(p.name) LIKE :search', { search })
+      .orWhere('LOWER(p.sku) LIKE :search', { search })
+      .orderBy('p.name', 'ASC')
+      .limit(10)
+      .getMany();
+
+    return products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+    }));
+  }
+
+  // ✅ ADMIN: Get single product by ID (for edit mode)
+  async findOneAdmin(id: string) {
+    const product = await this.productsRepo.findOne({
+      where: { id },
+      relations: ['details'],
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    // Get category names
+    const categories = await this.categoriesRepo.find({
+      where: product.categoryId.map((catId) => ({ id: catId })),
+    });
+
+    return {
+      id: product.id,
+      name: product.name,
+      clinicalDescription: product.clinicalDescription,
+      brand: product.brand,
+      sku: product.sku,
+      barcode: product.barcode,
+      categoryId: product.categoryId,
+      categories: categories.map((c) => ({ id: c.id, name: c.name })),
+      tags: product.tags,
+      actualPrice: product.actualPrice,
+      offerPrice: product.offerPrice,
+      bulkPriceTiers: product.bulkPriceTiers,
+      stockQuantity: product.stockQuantity,
+      lowStockAlert: product.lowStockAlert,
+      backorder: product.backorder,
+      isActive: product.isActive,
+      images: product.details?.images || [],
+      frontendBadges: product.details?.frontendBadges || [],
+      clinicalBenefits: product.details?.clinicalBenefits || [],
+      technicalSpecifications: product.details?.technicalSpecifications || [],
+      frequentlyBoughtTogether: product.details?.frequentlyBoughtTogether || [],
+      bundleUpsells: product.details?.bundleUpsells || [],
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt,
+    };
+  }
+
   async findAll(query: GetProductsQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;

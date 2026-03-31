@@ -20,6 +20,13 @@ export class ProductsController {
         return this.productsService.create(dto);
     }
 
+    // ✅ Search products (for frequently bought together)
+    @Get("search")
+    @UseGuards(AuthGuard("jwt"), RolesGuard)
+    @Roles("admin")
+    search(@Query("q") q: string) {
+        return this.productsService.searchProducts(q);
+    }
 
     @Get()
     @UseGuards(AuthGuard("jwt"), RolesGuard)
@@ -28,6 +35,13 @@ export class ProductsController {
         return this.productsService.findAll(query);
     }
 
+    // ✅ Get single product by ID (for edit mode)
+    @Get(":id")
+    @UseGuards(AuthGuard("jwt"), RolesGuard)
+    @Roles("admin")
+    getOne(@Param("id") id: string) {
+        return this.productsService.findOneAdmin(id);
+    }
 
     @Patch(":id")
     @UseGuards(AuthGuard("jwt"), RolesGuard)
