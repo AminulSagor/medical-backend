@@ -549,17 +549,20 @@ export class ProductsService {
     const products = await qb.skip(skip).take(limit).getMany();
 
     // Get category names for products
-    const categoryIds = [...new Set(products.flatMap((p) => p.categoryId))];
-    const categories = await this.categoriesRepo.find({
-      where: categoryIds.map((id) => ({ id })),
-    });
-
-    const categoryMap = new Map(categories.map((c) => [c.id, c.name]));
+    const categoryIds = [...new Set(products.flatMap((p) => p.categoryId || []))];
+    let categoryMap = new Map<string, string>();
+    
+    if (categoryIds.length > 0) {
+      const categories = await this.categoriesRepo.find({
+        where: categoryIds.map((id) => ({ id })),
+      });
+      categoryMap = new Map(categories.map((c) => [c.id, c.name]));
+    }
 
     const items = products.map((p) => ({
       id: p.id,
       photo: p.details?.images?.[0] || null,
-      category: p.categoryId
+      category: (p.categoryId || [])
         .map((id) => categoryMap.get(id))
         .filter(Boolean)
         .join(', '),
@@ -595,9 +598,12 @@ export class ProductsService {
     }
 
     // Get category names
-    const categories = await this.categoriesRepo.find({
-      where: product.categoryId.map((id) => ({ id })),
-    });
+    let categories: { id: string; name: string }[] = [];
+    if (product.categoryId && product.categoryId.length > 0) {
+      categories = await this.categoriesRepo.find({
+        where: product.categoryId.map((id) => ({ id })),
+      });
+    }
 
     // Get rating summary
     const ratingResult = await this.reviewsRepo
