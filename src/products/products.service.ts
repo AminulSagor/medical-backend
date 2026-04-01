@@ -10,12 +10,14 @@ import { NotFoundException } from '@nestjs/common';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ListProductsPublicQueryDto } from './dto/list-products-public.query.dto';
 import { CartRequestDto } from './dto/cart.dto';
+import { Review, ReviewStatus } from '../reviews/entities/review.entity';
 
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectRepository(Product) private productsRepo: Repository<Product>,
     @InjectRepository(Category) private categoriesRepo: Repository<Category>,
+    @InjectRepository(Review) private reviewsRepo: Repository<Review>,
   ) {}
 
   async create(dto: CreateProductDto) {
@@ -597,6 +599,22 @@ export class ProductsService {
       where: product.categoryId.map((id) => ({ id })),
     });
 
+    // Get rating summary
+    const ratingResult = await this.reviewsRepo
+      .createQueryBuilder('r')
+      .select('AVG(r.rating)', 'averageRating')
+      .addSelect('COUNT(r.id)', 'reviewsCount')
+      .where('r.productId = :productId', { productId: id })
+      .andWhere('r.status = :status', { status: ReviewStatus.APPROVED })
+      .getRawOne();
+
+    const rating = {
+      average: ratingResult.averageRating
+        ? parseFloat(parseFloat(ratingResult.averageRating).toFixed(1))
+        : 0,
+      count: parseInt(ratingResult.reviewsCount, 10) || 0,
+    };
+
     return {
       id: product.id,
       name: product.name,
@@ -617,6 +635,7 @@ export class ProductsService {
       technicalSpecifications: product.details?.technicalSpecifications || [],
       frequentlyBoughtTogether: product.details?.frequentlyBoughtTogether || [],
       bundleUpsells: product.details?.bundleUpsells || [],
+      rating,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
     };

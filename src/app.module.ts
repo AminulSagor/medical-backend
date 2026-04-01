@@ -17,6 +17,7 @@ import { TagsModule } from './tags/tags.module';
 import { BlogCategoriesModule } from './blog-categories/blog-categories.module';
 import { NewslettersModule } from './newsletters/newsletters.module';
 import { ProductTagsModule } from './product-tags/product-tags.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ProductTagsModule } from './product-tags/product-tags.module';
     BlogCategoriesModule,
     NewslettersModule,
     ProductTagsModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}
