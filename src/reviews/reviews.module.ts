@@ -8,15 +8,19 @@ import {
   ReviewsController,
   AdminReviewsController,
 } from './reviews.controller';
+import { ExpertReview } from './entities/expert-review.entity';
+import { ExpertReviewsController } from './expert-reviews.controller';
+import { ExpertReviewsService } from './expert-reviews.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Review, Product])],
+  imports: [TypeOrmModule.forFeature([Review, Product, ExpertReview])],
   controllers: [
     PublicReviewsController,
     ReviewsController,
     AdminReviewsController,
+    ExpertReviewsController,
   ],
-  providers: [ReviewsService],
-  exports: [ReviewsService],
+  providers: [ReviewsService, ExpertReviewsService],
+  exports: [ReviewsService, ExpertReviewsService],
 })
 export class ReviewsModule {}
