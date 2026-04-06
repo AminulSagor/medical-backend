@@ -37,6 +37,8 @@ http://localhost:3000
 | Method | Endpoint | Description | DTO Input |
 |--------|----------|-------------|-----------|
 | GET | `/admin/users` | List all users | - |
+| GET | `/admin/users/directory/master` | Master directory with advanced filters, search, sorting, pagination | MasterDirectoryQueryDto |
+| PATCH | `/admin/users/:userId/role` | Update user's system role (ADMIN, USER, STUDENT, INSTRUCTOR) | UpdateUserRoleDto |
 | PATCH | `/admin/users/adminProfile/settings/email` | Update admin email | UpdateAdminEmailDto |
 | PATCH | `/admin/users/adminProfile/settings/password` | Change password | ChangeAdminPasswordDto |
 
@@ -342,6 +344,8 @@ Recommended attendance statuses:
 - **ChangeAdminPasswordDto**: currentPassword, newPassword
 - **UpdateMyProfileDto**: profilePicture, firstName, lastName, phoneNumber, title, role, institutionOrHospital, npiNumber
 - **ChangePasswordDto**: currentPassword, newPassword
+- **MasterDirectoryQueryDto**: page, limit, search, role, status, sortBy, sortOrder
+- **UpdateUserRoleDto**: role (enum: ADMIN, USER, STUDENT, INSTRUCTOR)
 
 ### Category DTOs
 - **CreateCategoryDto**: name
@@ -425,24 +429,34 @@ All errors follow this format:
 ## Common Workflows
 
 ### 1. Complete Admin Setup
-1. POST `/auth/register` → Create admin account
+1. POST `/auth/register` → Create admin account (gets ADMIN role)
 2. POST `/auth/login` → Get JWT token
 3. Save token to `accessToken` variable
 4. Use token in all subsequent requests
 
-### 2. Create Product Catalog
+### 2. User Registration (Students)
+1. POST `/auth/register` → User signs up (gets STUDENT role automatically)
+2. POST `/auth/login` → User logs in
+3. User can view/edit profile with GET/PATCH `/users/profile`
+
+### 3. Add Faculty (Instructors)
+1. POST `/admin/faculty` → Admin creates faculty record
+2. System automatically creates user account with INSTRUCTOR role
+3. Faculty member can login with email assigned during faculty creation
+4. Faculty has access to all instructor endpoints
+
+### 4. Create Product Catalog
 1. POST `/admin/categories` → Create categories
 2. POST `/admin/products` → Create products (reference categories)
 3. GET `/admin/products` → Verify products created
 4. PATCH `/admin/products/:id` → Update as needed
 
-### 3. Setup Workshop
+### 5. Setup Workshop
 1. POST `/admin/facilities` → Create facility
-2. POST `/admin/faculty` → Create faculty members (optional)
-3. POST `/admin/workshops` → Create workshop (reference facility)
-4. GET `/admin/workshops` → List and verify
+2. POST `/admin/workshops` → Create workshop (reference facility)
+3. GET `/admin/workshops` → List and verify
 
-### 4. Workshop Booking to Attendance (Current Flow)
+### 6. Workshop Booking to Attendance (Current Flow)
 1. GET `/workshops` → User browses published workshops
 2. GET `/workshops/:id` → User reviews workshop detail + seats/pricing
 3. POST `/workshops/checkout/order-summary` → User submits attendee info
@@ -450,16 +464,16 @@ All errors follow this format:
 5. POST `/workshops/reservations` → Confirm reservation from attendee IDs
 6. Use returned reservation attendees as attendance roster (until attendance endpoints are added)
 
-### 5. Account Management
+### 7. Account Management
 1. PATCH `/admin/users/adminProfile/settings/email` → Update email
 2. PATCH `/admin/users/adminProfile/settings/password` → Change password
 
-### 6. User Self Profile
+### 8. User Self Profile
 1. GET `/users/profile` → Get your profile details
 2. PATCH `/users/profile` → Update your profile (email cannot be edited)
 3. PATCH `/users/password` → Change your password
 
-### 7. Password Reset Flow
+### 9. Password Reset Flow
 1. POST `/auth/send-otp` → Request OTP
 2. POST `/auth/verify-otp` → Verify code
 3. PUT `/auth/reset-password` → Set new password
@@ -472,6 +486,8 @@ All errors follow this format:
 - **Documentation**: `POSTMAN_GUIDE.md` (this directory/)
 - **User Self Profile Details**: `USER_PROFILE_DETAILS.md`
 - **User Password Change Details**: `USER_PASSWORD_CHANGE_DETAILS.md`
+- **User Role Update Details**: `USER_ROLE_UPDATE_DETAILS.md`
+- **Master Directory Details**: `MASTER_DIRECTORY_DETAILS.md`
 - **Source Code**: `src/` (TypeScript source files)
 
 ---
@@ -497,6 +513,14 @@ All errors follow this format:
 - [ ] Get self profile (`/users/profile`)
 - [ ] Update self profile (`/users/profile`)
 - [ ] Change user password (`/users/password`)
+- [ ] Access master directory with default params
+- [ ] Search master directory by name
+- [ ] Filter master directory by role and status
+- [ ] Sort master directory by different fields
+- [ ] Test pagination on master directory
+- [ ] Update user role to STUDENT
+- [ ] Update user role to INSTRUCTOR
+- [ ] Update user role to ADMIN
 - [ ] Update admin email
 - [ ] Change admin password
 - [ ] Test pagination on list endpoints

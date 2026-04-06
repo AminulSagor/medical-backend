@@ -6,6 +6,7 @@ import {
   Body,
   Req,
   UseGuards,
+  Param,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -16,6 +17,7 @@ import {
   ChangeAdminPasswordDto,
 } from './dto/admin-profile-settings.dto';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
+import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 
 @Controller('admin/users')
 export class UsersController {
@@ -63,5 +65,16 @@ export class UsersController {
       dto.currentPassword,
       dto.newPassword,
     );
+  }
+
+  // ✅ UPDATE USER ROLE (Admin only)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  @Patch(':userId/role')
+  updateUserRole(
+    @Param('userId') userId: string,
+    @Body() dto: UpdateUserRoleDto,
+  ) {
+    return this.usersService.updateUserRole(userId, dto.role);
   }
 }

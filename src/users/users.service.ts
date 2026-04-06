@@ -442,6 +442,26 @@ export class UsersService {
     return this.usersRepo.save(user);
   }
 
+  // ✅ UPDATE USER ROLE (Admin only)
+  async updateUserRole(userId: string, newRole: UserRole) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    user.role = newRole;
+    const updated = await this.usersRepo.save(user);
+
+    return {
+      message: 'User role updated successfully',
+      data: {
+        id: updated.id,
+        fullLegalName: updated.fullLegalName,
+        medicalEmail: updated.medicalEmail,
+        role: updated.role,
+        status: updated.status,
+      },
+    };
+  }
+
   // ✅ MASTER USER DIRECTORY
   async getMasterDirectory(query: MasterDirectoryQueryDto) {
     const page = query.page ?? 1;
