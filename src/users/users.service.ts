@@ -33,6 +33,10 @@ function pickStatus(status: any) {
   return null;
 }
 
+async function adminGetUserProfile(userId:string){
+  const user = await this.usersRepo.findOne
+}
+
 function splitFullLegalName(fullLegalName?: string | null): {
   firstName: string | null;
   lastName: string | null;
@@ -458,6 +462,40 @@ export class UsersService {
         medicalEmail: updated.medicalEmail,
         role: updated.role,
         status: updated.status,
+      },
+    };
+  }
+
+  // ✅ GET SINGLE USER PROFILE (Admin only)
+  async adminGetUserProfile(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    return {
+      message: 'User profile fetched successfully',
+      data: {
+        id: user.id,
+        fullName: user.fullLegalName,
+        firstName: user.firstName || null,
+        lastName: user.lastName || null,
+        email: user.medicalEmail,
+        phoneNumber: user.phoneNumber || null,
+        profilePhoto: user.profilePhotoUrl || null,
+        role: user.role,
+        professionalRole: user.professionalRole,
+        professionalTitle: user.professionalTitle || null,
+        credentials: user.credentials || null,
+        institutionOrHospital: user.institutionOrHospital || null,
+        npiNumber: user.npiNumber || null,
+        status: user.status,
+        isVerified: user.isVerified,
+        coursesCount: user.coursesCount,
+        joinedDate: user.createdAt,
+        lastActive: user.lastActiveAt || null,
+        updatedAt: user.updatedAt,
       },
     };
   }

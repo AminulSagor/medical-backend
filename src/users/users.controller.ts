@@ -38,6 +38,14 @@ export class UsersController {
     return this.usersService.getMasterDirectory(query);
   }
 
+  // ✅ GET SINGLE USER PROFILE (Admin only)
+  @Get(':userId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  getUserProfile(@Param('userId') userId: string) {
+    return this.usersService.adminGetUserProfile(userId);
+  }
+
   // ✅ ADMIN PROFILE SETTINGS
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
