@@ -11,6 +11,8 @@ import { Faculty } from '../faculty/entities/faculty.entity';
 import * as bcrypt from 'bcrypt';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
 import { UpdateMyProfileDto, ChangePasswordDto } from './dto/update-my-profile.dto';
+import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
+import { ActivateDeactivateUserDto } from './dto/activate-deactivate-user.dto';
 
 function toInt(v: any, fallback: number) {
   const n = parseInt(String(v ?? ''), 10);
@@ -496,6 +498,125 @@ export class UsersService {
         joinedDate: user.createdAt,
         lastActive: user.lastActiveAt || null,
         updatedAt: user.updatedAt,
+      },
+    };
+  }
+
+  // ✅ ADMIN UPDATE USER DETAILS
+  async adminUpdateUser(userId: string, dto: any) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    // Update optional fields
+    if (dto.profilePicture !== undefined && dto.profilePicture !== null) {
+      user.profilePhotoUrl = dto.profilePicture.trim();
+    }
+
+    if (dto.firstName !== undefined && dto.firstName !== null) {
+      user.firstName = dto.firstName.trim();
+    }
+
+    if (dto.lastName !== undefined && dto.lastName !== null) {
+      user.lastName = dto.lastName.trim();
+    }
+
+    if (dto.phoneNumber !== undefined && dto.phoneNumber !== null) {
+      user.phoneNumber = dto.phoneNumber.trim();
+    }
+
+    if (dto.title !== undefined && dto.title !== null) {
+      const title = dto.title.trim();
+      user.professionalTitle = title;
+      user.credentials = title;
+    }
+
+    if (dto.professionalRole !== undefined && dto.professionalRole !== null) {
+      user.professionalRole = dto.professionalRole.trim();
+    }
+
+    if (dto.role !== undefined && dto.role !== null) {
+      user.role = dto.role;
+    }
+
+    if (dto.status !== undefined && dto.status !== null) {
+      user.status = dto.status;
+    }
+
+    if (
+      dto.institutionOrHospital !== undefined &&
+      dto.institutionOrHospital !== null
+    ) {
+      user.institutionOrHospital = dto.institutionOrHospital.trim();
+    }
+
+    if (dto.npiNumber !== undefined && dto.npiNumber !== null) {
+      user.npiNumber = dto.npiNumber.trim();
+    }
+
+    // Update full legal name from first and last name
+    const parsedCurrent = splitFullLegalName(user.fullLegalName);
+    const firstName = user.firstName?.trim() || parsedCurrent.firstName || '';
+    const lastName = user.lastName?.trim() || parsedCurrent.lastName || '';
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName.length > 0) {
+      user.fullLegalName = fullName;
+    }
+
+    const updated = await this.usersRepo.save(user);
+
+    return {
+      message: 'User details updated successfully',
+      data: {
+        id: updated.id,
+        fullName: updated.fullLegalName,
+        firstName: updated.firstName || null,
+        lastName: updated.lastName || null,
+        email: updated.medicalEmail,
+        phoneNumber: updated.phoneNumber || null,
+        profilePhoto: updated.profilePhotoUrl || null,
+        role: updated.role,
+        professionalRole: updated.professionalRole,
+        professionalTitle: updated.professionalTitle || null,
+        credentials: updated.credentials || null,
+        institutionOrHospital: updated.institutionOrHospital || null,
+        npiNumber: updated.npiNumber || null,
+        status: updated.status,
+      },
+    };
+  }
+
+  // ✅ ACTIVATE/DEACTIVATE USER (Admin only)
+  async activateDeactivateUser(
+    userId: string,
+    dto: ActivateDeactivateUserDto,
+  ) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    // Update status
+    user.status = dto.status;
+
+    // Update isVerified if provided
+    if (dto.isVerified !== undefined) {
+      user.isVerified = dto.isVerified;
+    }
+
+    const updated = await this.usersRepo.save(user);
+
+    return {
+      message: `User ${dto.status === 'active' ? 'activated' : 'deactivated'} successfully`,
+      data: {
+        id: updated.id,
+        fullName: updated.fullLegalName,
+        email: updated.medicalEmail,
+        status: updated.status,
+        isVerified: updated.isVerified,
       },
     };
   }

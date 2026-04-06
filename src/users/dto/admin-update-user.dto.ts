@@ -1,0 +1,65 @@
+import {
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  IsEnum,
+} from 'class-validator';
+import { UserRole, UserStatus } from '../entities/user.entity';
+
+export class AdminUpdateUserDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  profilePicture?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  firstName?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  lastName?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(30)
+  phoneNumber?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(150)
+  title?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(150)
+  professionalRole?: string;
+
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
+
+  @IsOptional()
+  @IsEnum(UserStatus)
+  status?: UserStatus;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  institutionOrHospital?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
+  npiNumber?: string | null;
+}
