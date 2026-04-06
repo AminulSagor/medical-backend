@@ -18,6 +18,8 @@ import {
 } from './dto/admin-profile-settings.dto';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
+import { ActivateDeactivateUserDto } from './dto/activate-deactivate-user.dto';
 
 @Controller('admin/users')
 export class UsersController {
@@ -73,6 +75,28 @@ export class UsersController {
       dto.currentPassword,
       dto.newPassword,
     );
+  }
+
+  // ✅ UPDATE USER BASIC INFO (Admin only)
+  @Patch(':userId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  updateUserByAdmin(
+    @Param('userId') userId: string,
+    @Body() dto: AdminUpdateUserDto,
+  ) {
+    return this.usersService.adminUpdateUser(userId, dto);
+  }
+
+  // ✅ ACTIVATE/DEACTIVATE USER (Admin only)
+  @Patch(':userId/status')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  activateDeactivateUser(
+    @Param('userId') userId: string,
+    @Body() dto: ActivateDeactivateUserDto,
+  ) {
+    return this.usersService.activateDeactivateUser(userId, dto);
   }
 
   // ✅ UPDATE USER ROLE (Admin only)
