@@ -10,12 +10,14 @@ import { NotFoundException } from '@nestjs/common';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ListProductsPublicQueryDto } from './dto/list-products-public.query.dto';
 import { CartRequestDto } from './dto/cart.dto';
+import { Review, ReviewStatus } from '../reviews/entities/review.entity';
 
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectRepository(Product) private productsRepo: Repository<Product>,
     @InjectRepository(Category) private categoriesRepo: Repository<Category>,
+    @InjectRepository(Review) private reviewsRepo: Repository<Review>,
   ) {}
 
   async create(dto: CreateProductDto) {
@@ -547,17 +549,20 @@ export class ProductsService {
     const products = await qb.skip(skip).take(limit).getMany();
 
     // Get category names for products
-    const categoryIds = [...new Set(products.flatMap((p) => p.categoryId))];
-    const categories = await this.categoriesRepo.find({
-      where: categoryIds.map((id) => ({ id })),
-    });
-
-    const categoryMap = new Map(categories.map((c) => [c.id, c.name]));
+    const categoryIds = [...new Set(products.flatMap((p) => p.categoryId || []))];
+    let categoryMap = new Map<string, string>();
+    
+    if (categoryIds.length > 0) {
+      const categories = await this.categoriesRepo.find({
+        where: categoryIds.map((id) => ({ id })),
+      });
+      categoryMap = new Map(categories.map((c) => [c.id, c.name]));
+    }
 
     const items = products.map((p) => ({
       id: p.id,
       photo: p.details?.images?.[0] || null,
-      category: p.categoryId
+      category: (p.categoryId || [])
         .map((id) => categoryMap.get(id))
         .filter(Boolean)
         .join(', '),
@@ -593,9 +598,28 @@ export class ProductsService {
     }
 
     // Get category names
-    const categories = await this.categoriesRepo.find({
-      where: product.categoryId.map((id) => ({ id })),
-    });
+    let categories: { id: string; name: string }[] = [];
+    if (product.categoryId && product.categoryId.length > 0) {
+      categories = await this.categoriesRepo.find({
+        where: product.categoryId.map((id) => ({ id })),
+      });
+    }
+
+    // Get rating summary
+    const ratingResult = await this.reviewsRepo
+      .createQueryBuilder('r')
+      .select('AVG(r.rating)', 'averageRating')
+      .addSelect('COUNT(r.id)', 'reviewsCount')
+      .where('r.productId = :productId', { productId: id })
+      .andWhere('r.status = :status', { status: ReviewStatus.APPROVED })
+      .getRawOne();
+
+    const rating = {
+      average: ratingResult.averageRating
+        ? parseFloat(parseFloat(ratingResult.averageRating).toFixed(1))
+        : 0,
+      count: parseInt(ratingResult.reviewsCount, 10) || 0,
+    };
 
     return {
       id: product.id,
@@ -617,6 +641,7 @@ export class ProductsService {
       technicalSpecifications: product.details?.technicalSpecifications || [],
       frequentlyBoughtTogether: product.details?.frequentlyBoughtTogether || [],
       bundleUpsells: product.details?.bundleUpsells || [],
+      rating,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
     };
