@@ -63,7 +63,7 @@ export class User {
   isVerified: boolean;
 
   // ✅ ADD THIS (admin/user)
-  @Column({ type: 'enum', enum: UserRole, default: UserRole.USER })
+  @Column({ type: 'enum', enum: UserRole, default: UserRole.STUDENT })
   role: UserRole;
 
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })

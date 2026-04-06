@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterDto } from './dto/register.dto';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 import { UnauthorizedException } from '@nestjs/common';
 import { LoginDto } from './dto/login.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
@@ -68,6 +68,7 @@ export class AuthService {
       professionalRole: dto.professionalRole.trim(),
       password: passwordHash,
       isVerified: false,
+      role: UserRole.STUDENT,  // ✅ Default to STUDENT on signup
     });
 
     const saved = await this.userRepo.save(user);
