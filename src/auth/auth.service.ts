@@ -55,8 +55,15 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
+    const fullLegalName = dto.fullLegalName.trim();
+    const nameTokens = fullLegalName.split(/\s+/);
+    const firstName = nameTokens[0] ?? '';
+    const lastName = nameTokens.slice(1).join(' ') || undefined;
+
     const user = this.userRepo.create({
-      fullLegalName: dto.fullLegalName.trim(),
+      fullLegalName,
+      firstName,
+      lastName,
       medicalEmail,
       professionalRole: dto.professionalRole.trim(),
       password: passwordHash,

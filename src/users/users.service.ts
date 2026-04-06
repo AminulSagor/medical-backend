@@ -10,6 +10,7 @@ import { User, UserRole, UserStatus } from './entities/user.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import * as bcrypt from 'bcrypt';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
 
 function toInt(v: any, fallback: number) {
   const n = parseInt(String(v ?? ''), 10);
@@ -32,12 +33,119 @@ function pickStatus(status: any) {
   return null;
 }
 
+function splitFullLegalName(fullLegalName?: string | null): {
+  firstName: string | null;
+  lastName: string | null;
+} {
+  const clean = String(fullLegalName ?? '').trim();
+  if (!clean) {
+    return { firstName: null, lastName: null };
+  }
+
+  const tokens = clean.split(/\s+/);
+  if (tokens.length === 1) {
+    return { firstName: tokens[0], lastName: null };
+  }
+
+  return {
+    firstName: tokens[0],
+    lastName: tokens.slice(1).join(' '),
+  };
+}
+
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
   ) {}
+
+  private buildSelfProfilePayload(user: User) {
+    const fallback = splitFullLegalName(user.fullLegalName);
+
+    const firstName = user.firstName?.trim() || fallback.firstName || null;
+    const lastName = user.lastName?.trim() || fallback.lastName || null;
+    const title = user.professionalTitle?.trim() || user.credentials?.trim() || null;
+
+    return {
+      profilePicture: user.profilePhotoUrl ?? null,
+      firstName,
+      lastName,
+      emailAddress: user.medicalEmail,
+      phoneNumber: user.phoneNumber ?? null,
+      title,
+      role: user.professionalRole,
+      institutionOrHospital: user.institutionOrHospital ?? null,
+      npiNumber: user.npiNumber ?? null,
+    };
+  }
+
+  async getMyProfile(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return {
+      message: 'Profile fetched successfully',
+      data: this.buildSelfProfilePayload(user),
+    };
+  }
+
+  async updateMyProfile(userId: string, dto: UpdateMyProfileDto) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (dto.profilePicture !== undefined && dto.profilePicture !== null) {
+      user.profilePhotoUrl = dto.profilePicture.trim();
+    }
+
+    if (dto.firstName !== undefined && dto.firstName !== null) {
+      user.firstName = dto.firstName.trim();
+    }
+
+    if (dto.lastName !== undefined && dto.lastName !== null) {
+      user.lastName = dto.lastName.trim();
+    }
+
+    if (dto.phoneNumber !== undefined && dto.phoneNumber !== null) {
+      user.phoneNumber = dto.phoneNumber.trim();
+    }
+
+    if (dto.title !== undefined && dto.title !== null) {
+      const title = dto.title.trim();
+      user.professionalTitle = title;
+      user.credentials = title;
+    }
+
+    if (dto.role !== undefined && dto.role !== null) {
+      user.professionalRole = dto.role.trim();
+    }
+
+    if (
+      dto.institutionOrHospital !== undefined &&
+      dto.institutionOrHospital !== null
+    ) {
+      user.institutionOrHospital = dto.institutionOrHospital.trim();
+    }
+
+    if (dto.npiNumber !== undefined && dto.npiNumber !== null) {
+      user.npiNumber = dto.npiNumber.trim();
+    }
+
+    const parsedCurrent = splitFullLegalName(user.fullLegalName);
+    const firstName = user.firstName?.trim() || parsedCurrent.firstName || '';
+    const lastName = user.lastName?.trim() || parsedCurrent.lastName || '';
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName.length > 0) {
+      user.fullLegalName = fullName;
+    }
+
+    const updated = await this.usersRepo.save(user);
+
+    return {
+      message: 'Profile updated successfully',
+      data: this.buildSelfProfilePayload(updated),
+    };
+  }
 
   async adminListUsers(query: any) {
     const tabCounts = await this.getTabCounts();
