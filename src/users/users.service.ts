@@ -10,7 +10,7 @@ import { User, UserRole, UserStatus } from './entities/user.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import * as bcrypt from 'bcrypt';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
-import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
+import { UpdateMyProfileDto, ChangePasswordDto } from './dto/update-my-profile.dto';
 
 function toInt(v: any, fallback: number) {
   const n = parseInt(String(v ?? ''), 10);
@@ -144,6 +144,31 @@ export class UsersService {
     return {
       message: 'Profile updated successfully',
       data: this.buildSelfProfilePayload(updated),
+    };
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) throw new BadRequestException('Current password is incorrect');
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    user.password = hash;
+
+    const updated = await this.usersRepo.save(user);
+
+    return {
+      message: 'Password changed successfully',
+      data: {
+        id: updated.id,
+        medicalEmail: updated.medicalEmail,
+      },
     };
   }
 

@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class UpdateMyProfileDto {
   @IsOptional()
@@ -47,4 +47,15 @@ export class UpdateMyProfileDto {
   @MinLength(1)
   @MaxLength(50)
   npiNumber?: string | null;
+}
+
+export class ChangePasswordDto {
+  @IsNotEmpty()
+  @IsString()
+  currentPassword!: string;
+
+  @IsNotEmpty()
+  @IsString()
+  @MinLength(8)
+  newPassword!: string;
 }
