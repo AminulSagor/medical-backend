@@ -28,6 +28,12 @@ export class User {
   @Column({ type: 'varchar', length: 200 })
   fullLegalName: string;
 
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  firstName?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  lastName?: string;
+
   @Index('UQ_users_medicalEmail', { unique: true })
   @Column({ type: 'varchar', length: 320 })
   medicalEmail: string;
@@ -37,6 +43,18 @@ export class User {
 
   @Column({ type: 'text', nullable: true })
   profilePhotoUrl?: string;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  phoneNumber?: string;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  professionalTitle?: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  institutionOrHospital?: string;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  npiNumber?: string;
 
   @Column({ type: 'varchar', length: 255 })
   password: string;
