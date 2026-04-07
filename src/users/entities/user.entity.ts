@@ -56,6 +56,28 @@ export class User {
   @Column({ type: 'varchar', length: 50, nullable: true })
   npiNumber?: string;
 
+  // Default shipping address used in public checkout flow
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  shippingFullName?: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  shippingAddressLine1?: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  shippingAddressLine2?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  shippingCity?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  shippingState?: string;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  shippingPostalCode?: string;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  shippingCountry?: string;
+
   @Column({ type: 'varchar', length: 255 })
   password: string;
 

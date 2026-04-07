@@ -7,6 +7,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderTimeline } from './entities/order-timeline.entity';
+import { Product } from '../products/entities/product.entity';
+import { User } from '../users/entities/user.entity';
 import {
   FulfillmentStatus,
   PaymentStatus,
@@ -17,18 +19,444 @@ import { UpdateOrderDispatchDto } from './dto/update-order-dispatch.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
 import { PrintShippingLabelDto } from './dto/print-shipping-label.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import {
+  PublicOrderSummaryItemDto,
+  PublicOrderSummaryRequestDto,
+} from './dto/public-order-summary.dto';
+import { ShippingAddressDto } from './dto/shipping-address.dto';
+import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 import PDFDocument from 'pdfkit';
 import * as bwipjs from 'bwip-js';
 import * as QRCode from 'qrcode';
+import Stripe = require('stripe');
+
+type CalculatedPublicOrderItem = {
+  productId: string;
+  name: string;
+  sku: string | null;
+  photo: string | null;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+};
+
+type CalculatedPublicOrderSummary = {
+  items: CalculatedPublicOrderItem[];
+  subtotal: number;
+  estimatedShipping: number;
+  estimatedTax: number;
+  orderTotal: number;
+};
 
 @Injectable()
 export class OrdersService {
+  private static readonly DEFAULT_TAX_RATE = 0.1;
+  private static readonly DEFAULT_SHIPPING_AMOUNT = 15;
+  private static readonly DEFAULT_FREE_SHIPPING_THRESHOLD = 200;
+
   constructor(
     @InjectRepository(Order)
     private readonly ordersRepo: Repository<Order>,
     @InjectRepository(OrderTimeline)
     private readonly timelineRepo: Repository<OrderTimeline>,
+    @InjectRepository(Product)
+    private readonly productsRepo: Repository<Product>,
+    @InjectRepository(User)
+    private readonly usersRepo: Repository<User>,
   ) {}
+
+  private formatAmount(value: number): string {
+    return value.toFixed(2);
+  }
+
+  private parsePositiveNumber(value: string | number | null | undefined): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  private resolveProductUnitPrice(product: Product): number {
+    const offerPrice = this.parsePositiveNumber(product.offerPrice);
+    if (offerPrice > 0) {
+      return offerPrice;
+    }
+
+    const actualPrice = this.parsePositiveNumber(product.actualPrice);
+    if (actualPrice <= 0) {
+      throw new BadRequestException(
+        `Product ${product.id} has invalid pricing configuration`,
+      );
+    }
+
+    return actualPrice;
+  }
+
+  private estimateShipping(subtotal: number): number {
+    const configuredShipping = Number(
+      process.env.CHECKOUT_ESTIMATED_SHIPPING ??
+        OrdersService.DEFAULT_SHIPPING_AMOUNT,
+    );
+    const configuredThreshold = Number(
+      process.env.CHECKOUT_FREE_SHIPPING_THRESHOLD ??
+        OrdersService.DEFAULT_FREE_SHIPPING_THRESHOLD,
+    );
+
+    const shippingAmount =
+      Number.isFinite(configuredShipping) && configuredShipping >= 0
+        ? configuredShipping
+        : OrdersService.DEFAULT_SHIPPING_AMOUNT;
+    const freeThreshold =
+      Number.isFinite(configuredThreshold) && configuredThreshold >= 0
+        ? configuredThreshold
+        : OrdersService.DEFAULT_FREE_SHIPPING_THRESHOLD;
+
+    if (subtotal >= freeThreshold) {
+      return 0;
+    }
+
+    return shippingAmount;
+  }
+
+  private estimateTax(subtotal: number): number {
+    const configuredTaxRate = Number(
+      process.env.CHECKOUT_ESTIMATED_TAX_RATE ?? OrdersService.DEFAULT_TAX_RATE,
+    );
+    const taxRate =
+      Number.isFinite(configuredTaxRate) && configuredTaxRate >= 0
+        ? configuredTaxRate
+        : OrdersService.DEFAULT_TAX_RATE;
+
+    return subtotal * taxRate;
+  }
+
+  private normalizeShippingAddress(dto: ShippingAddressDto): ShippingAddressDto {
+    return {
+      fullName: dto.fullName.trim(),
+      addressLine1: dto.addressLine1.trim(),
+      addressLine2: dto.addressLine2?.trim() || undefined,
+      city: dto.city.trim(),
+      state: dto.state.trim(),
+      zipCode: dto.zipCode.trim(),
+      country: dto.country?.trim() || 'US',
+    };
+  }
+
+  private validateShippingAddress(address: ShippingAddressDto | null): asserts address is ShippingAddressDto {
+    if (!address) {
+      throw new BadRequestException(
+        'Shipping address is required before checkout',
+      );
+    }
+
+    if (
+      !address.fullName ||
+      !address.addressLine1 ||
+      !address.city ||
+      !address.state ||
+      !address.zipCode
+    ) {
+      throw new BadRequestException(
+        'Shipping address requires fullName, addressLine1, city, state, zipCode',
+      );
+    }
+  }
+
+  private getUserShippingAddress(user: User): ShippingAddressDto | null {
+    const fullName = user.shippingFullName?.trim() || user.fullLegalName?.trim();
+    const addressLine1 = user.shippingAddressLine1?.trim();
+    const city = user.shippingCity?.trim();
+    const state = user.shippingState?.trim();
+    const zipCode = user.shippingPostalCode?.trim();
+
+    if (!fullName || !addressLine1 || !city || !state || !zipCode) {
+      return null;
+    }
+
+    return {
+      fullName,
+      addressLine1,
+      addressLine2: user.shippingAddressLine2?.trim() || undefined,
+      city,
+      state,
+      zipCode,
+      country: user.shippingCountry?.trim() || 'US',
+    };
+  }
+
+  private async buildPublicOrderSummary(
+    items: PublicOrderSummaryItemDto[],
+  ): Promise<CalculatedPublicOrderSummary> {
+    if (!items || items.length === 0) {
+      throw new BadRequestException('At least one cart item is required');
+    }
+
+    const uniqueProductIds = [...new Set(items.map((item) => item.productId))];
+
+    const products = await this.productsRepo.find({
+      where: uniqueProductIds.map((id) => ({ id, isActive: true })),
+      relations: ['details'],
+    });
+
+    if (products.length !== uniqueProductIds.length) {
+      throw new BadRequestException('Some products are invalid or inactive');
+    }
+
+    const productMap = new Map(products.map((product) => [product.id, product]));
+
+    let subtotal = 0;
+    const mappedItems: CalculatedPublicOrderItem[] = items.map((item) => {
+      const product = productMap.get(item.productId);
+      if (!product) {
+        throw new BadRequestException(`Product not found: ${item.productId}`);
+      }
+
+      const unitPrice = this.resolveProductUnitPrice(product);
+      const lineTotal = unitPrice * item.quantity;
+      subtotal += lineTotal;
+
+      return {
+        productId: product.id,
+        name: product.name,
+        sku: product.sku ?? null,
+        photo: product.details?.images?.[0] ?? null,
+        quantity: item.quantity,
+        unitPrice,
+        lineTotal,
+      };
+    });
+
+    const estimatedShipping = this.estimateShipping(subtotal);
+    const estimatedTax = this.estimateTax(subtotal);
+    const orderTotal = subtotal + estimatedShipping + estimatedTax;
+
+    return {
+      items: mappedItems,
+      subtotal,
+      estimatedShipping,
+      estimatedTax,
+      orderTotal,
+    };
+  }
+
+  private toPublicSummaryResponse(summary: CalculatedPublicOrderSummary) {
+    return {
+      items: summary.items.map((item) => ({
+        productId: item.productId,
+        name: item.name,
+        sku: item.sku,
+        photo: item.photo,
+        quantity: item.quantity,
+        unitPrice: this.formatAmount(item.unitPrice),
+        lineTotal: this.formatAmount(item.lineTotal),
+      })),
+      subtotal: this.formatAmount(summary.subtotal),
+      estimatedShipping: this.formatAmount(summary.estimatedShipping),
+      estimatedTax: this.formatAmount(summary.estimatedTax),
+      orderTotal: this.formatAmount(summary.orderTotal),
+    };
+  }
+
+  async getPublicOrderSummary(dto: PublicOrderSummaryRequestDto) {
+    const summary = await this.buildPublicOrderSummary(dto.items);
+
+    return {
+      message: 'Order summary calculated successfully',
+      data: this.toPublicSummaryResponse(summary),
+    };
+  }
+
+  async getMyShippingAddress(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const savedAddress = this.getUserShippingAddress(user);
+    const payload = savedAddress
+      ? savedAddress
+      : {
+          fullName: user.fullLegalName ?? '',
+          addressLine1: '',
+          addressLine2: '',
+          city: '',
+          state: '',
+          zipCode: '',
+          country: 'US',
+        };
+
+    const isComplete = Boolean(
+      payload.fullName &&
+        payload.addressLine1 &&
+        payload.city &&
+        payload.state &&
+        payload.zipCode,
+    );
+
+    return {
+      message: 'Shipping address fetched successfully',
+      data: {
+        ...payload,
+        isComplete,
+      },
+    };
+  }
+
+  async updateMyShippingAddress(userId: string, dto: ShippingAddressDto) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const address = this.normalizeShippingAddress(dto);
+    this.validateShippingAddress(address);
+
+    user.shippingFullName = address.fullName;
+    user.shippingAddressLine1 = address.addressLine1;
+    user.shippingAddressLine2 = address.addressLine2;
+    user.shippingCity = address.city;
+    user.shippingState = address.state;
+    user.shippingPostalCode = address.zipCode;
+    user.shippingCountry = address.country || 'US';
+
+    const saved = await this.usersRepo.save(user);
+
+    return {
+      message: 'Shipping address updated successfully',
+      data: {
+        fullName: saved.shippingFullName,
+        addressLine1: saved.shippingAddressLine1,
+        addressLine2: saved.shippingAddressLine2,
+        city: saved.shippingCity,
+        state: saved.shippingState,
+        zipCode: saved.shippingPostalCode,
+        country: saved.shippingCountry || 'US',
+        isComplete: true,
+      },
+    };
+  }
+
+  async createStripeCheckoutSession(
+    userId: string,
+    dto: CreateCheckoutSessionDto,
+  ) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const summary = await this.buildPublicOrderSummary(dto.items);
+
+    const requestAddress = dto.shippingAddress
+      ? this.normalizeShippingAddress(dto.shippingAddress)
+      : null;
+    const shippingAddress = requestAddress ?? this.getUserShippingAddress(user);
+    this.validateShippingAddress(shippingAddress);
+
+    if (requestAddress) {
+      user.shippingFullName = requestAddress.fullName;
+      user.shippingAddressLine1 = requestAddress.addressLine1;
+      user.shippingAddressLine2 = requestAddress.addressLine2;
+      user.shippingCity = requestAddress.city;
+      user.shippingState = requestAddress.state;
+      user.shippingPostalCode = requestAddress.zipCode;
+      user.shippingCountry = requestAddress.country || 'US';
+      await this.usersRepo.save(user);
+    }
+
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecretKey) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+
+    const successUrl =
+      dto.successUrl || process.env.STRIPE_CHECKOUT_SUCCESS_URL;
+    const cancelUrl = dto.cancelUrl || process.env.STRIPE_CHECKOUT_CANCEL_URL;
+
+    if (!successUrl || !cancelUrl) {
+      throw new BadRequestException(
+        'successUrl and cancelUrl are required (request body or env)',
+      );
+    }
+
+    const stripe = Stripe(stripeSecretKey);
+
+    const lineItems =
+      summary.items.map((item) => ({
+        quantity: item.quantity,
+        price_data: {
+          currency: 'usd',
+          unit_amount: Math.round(item.unitPrice * 100),
+          product_data: {
+            name: item.name,
+            metadata: {
+              productId: item.productId,
+              sku: item.sku ?? '',
+            },
+          },
+        },
+      }));
+
+    if (summary.estimatedShipping > 0) {
+      lineItems.push({
+        quantity: 1,
+        price_data: {
+          currency: 'usd',
+          unit_amount: Math.round(summary.estimatedShipping * 100),
+          product_data: {
+            name: 'Estimated Shipping',
+            metadata: {
+              productId: 'shipping',
+              sku: 'shipping',
+            },
+          },
+        },
+      });
+    }
+
+    if (summary.estimatedTax > 0) {
+      lineItems.push({
+        quantity: 1,
+        price_data: {
+          currency: 'usd',
+          unit_amount: Math.round(summary.estimatedTax * 100),
+          product_data: {
+            name: 'Estimated Tax',
+            metadata: {
+              productId: 'tax',
+              sku: 'tax',
+            },
+          },
+        },
+      });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      customer_email: user.medicalEmail,
+      line_items: lineItems,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        userId,
+        shippingFullName: shippingAddress.fullName,
+        shippingAddressLine1: shippingAddress.addressLine1,
+        shippingAddressLine2: shippingAddress.addressLine2 || '',
+        shippingCity: shippingAddress.city,
+        shippingState: shippingAddress.state,
+        shippingPostalCode: shippingAddress.zipCode,
+        shippingCountry: shippingAddress.country || 'US',
+      },
+    });
+
+    return {
+      message: 'Stripe checkout session created successfully',
+      data: {
+        sessionId: session.id,
+        checkoutUrl: session.url,
+        shippingAddress,
+        orderSummary: this.toPublicSummaryResponse(summary),
+      },
+    };
+  }
 
   async getSummary() {
     const revenueRaw = await this.ordersRepo
