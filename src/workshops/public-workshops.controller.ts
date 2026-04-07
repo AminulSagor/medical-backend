@@ -4,6 +4,8 @@ import { WorkshopsService } from "./workshops.service";
 import { PublicListWorkshopsQueryDto } from "./dto/public-list-workshops.query.dto";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { CheckoutOrderSummaryDto } from "./dto/checkout-order-summary.dto";
+import { CreateWorkshopPaymentSessionDto } from "./dto/create-workshop-payment-session.dto";
+import { VerifyWorkshopPaymentDto } from "./dto/verify-workshop-payment.dto";
 
 @Controller("workshops")
 export class PublicWorkshopsController {
@@ -31,6 +33,20 @@ export class PublicWorkshopsController {
     getOrderSummary(@Request() req: any, @Param("id") id: string) {
         const userId = req.user.id;
         return this.service.getOrderSummary(userId, id);
+    }
+
+    @Post("checkout/payment-session")
+    @UseGuards(AuthGuard("jwt"))
+    createPaymentSession(@Request() req: any, @Body() dto: CreateWorkshopPaymentSessionDto) {
+        const userId = req.user.id;
+        return this.service.createPaymentSession(userId, dto);
+    }
+
+    @Post("checkout/payment-verify")
+    @UseGuards(AuthGuard("jwt"))
+    verifyPayment(@Request() req: any, @Body() dto: VerifyWorkshopPaymentDto) {
+        const userId = req.user.id;
+        return this.service.verifyPayment(userId, dto);
     }
 
     @Post("reservations")

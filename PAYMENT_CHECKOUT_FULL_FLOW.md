@@ -1,46 +1,38 @@
-# Payment + Checkout Full Flow (Workshop and Product)
+# Checkout Implementation Contract (Tested)
 
-This document answers:
-- Where payment is currently implemented
-- What is still missing for full payment completion
-- Full API flow for workshop and product from order to successful purchase
+This is the frontend integration contract for full purchase flow with payment completion.
 
-## 1) Current Payment Implementation Status
+Test run status:
+- Date: 2026-04-08
+- Result: Product full buy flow passed, Workshop full buy flow passed
+- Payment completion source: Stripe webhook to backend
 
-## Product payment
-Implemented now:
-- Public summary calculation: POST /public/orders/summary
-- Shipping address get/update: GET/PATCH /public/orders/shipping-address
-- Stripe checkout session creation: POST /public/orders/checkout/stripe-session
+Validated endpoints in live run:
+- POST /public/orders/summary -> 201
+- GET /public/orders/shipping-address -> 200
+- PATCH /public/orders/shipping-address -> 200
+- POST /payments/checkout-session (product) -> 201
+- GET /payments/session-status/:sessionId (pending) -> 200
+- POST /payments/webhooks/stripe -> 200
+- GET /payments/session-status/:sessionId (paid) -> 200
+- GET /admin/orders/:id -> 200
+- POST /workshops/checkout/order-summary -> 201
+- GET /workshops/checkout/order-summary/:id -> 200
+- POST /payments/checkout-session (workshop) -> 201
+- GET /payments/session-status/:sessionId (pending) -> 200
+- POST /payments/webhooks/stripe -> 200
+- GET /payments/session-status/:sessionId (paid) -> 200
+- POST /workshops/reservations -> 201
 
-Code locations:
-- src/orders/public-orders.controller.ts
-- src/orders/orders.service.ts
-
-Missing for true "successfully bought" completion:
-- Stripe webhook endpoint to confirm payment and persist final order row
-- Public success endpoint to fetch final purchased order details by session/order id
-
-## Workshop payment
-Implemented now:
-- Workshop order summary (pricing/attendees): POST /workshops/checkout/order-summary
-- Get summary by id: GET /workshops/checkout/order-summary/:id
-- Reservation confirmation: POST /workshops/reservations
-
-Code locations:
-- src/workshops/public-workshops.controller.ts
-- src/workshops/workshops.service.ts
-
-Missing for full payment flow:
-- Workshop Stripe checkout session endpoint
-- Workshop payment verification/finalization endpoint (usually webhook-driven)
-- Reservation should be finalized after successful payment, not before
+Important:
+- Frontend must NOT call the webhook endpoint.
+- Stripe calls webhook endpoint after payment events.
 
 ---
 
-## 2) Product Full Flow (Order -> Checkout -> Payment -> Purchased)
+## Product
 
-## Step 1: Build cart summary (public)
+## Step 1: Build checkout summary
 Endpoint: POST /public/orders/summary
 Auth: No
 
@@ -49,97 +41,81 @@ Request body:
 {
   "items": [
     {
-      "productId": "6872d2ba-7958-4de7-b9cb-4f2c0eb57d8b",
+      "productId": "<product-uuid>",
       "quantity": 2
-    },
-    {
-      "productId": "f2454d92-0589-42e5-95e6-7a321be8e65f",
-      "quantity": 1
     }
-  ],
-  "currency": "usd"
+  ]
 }
 ```
 
-Success response:
+Success response (201):
 ```json
 {
   "message": "Order summary calculated successfully",
   "data": {
     "items": [
       {
-        "productId": "6872d2ba-7958-4de7-b9cb-4f2c0eb57d8b",
-        "name": "Portable Airway Trainer",
-        "sku": "AT-9000",
-        "photo": "https://cdn.example.com/products/airway-trainer-1.jpg",
+        "productId": "<product-uuid>",
+        "name": "Flow Product",
+        "sku": "FLOW-SKU-123",
+        "photo": "https://example.com/flow-product.jpg",
         "quantity": 2,
-        "unitPrice": "899.00",
-        "lineTotal": "1798.00"
+        "unitPrice": "99.00",
+        "lineTotal": "198.00"
       }
     ],
-    "subtotal": "1897.00",
+    "subtotal": "198.00",
     "estimatedShipping": "15.00",
-    "estimatedTax": "189.70",
-    "orderTotal": "2101.70"
+    "estimatedTax": "19.80",
+    "orderTotal": "232.80"
   }
 }
 ```
 
-Common errors:
-- 400 At least one cart item is required
-- 400 Some products are invalid or inactive
-
-## Step 2: Check authentication before checkout
-Frontend behavior:
-- If user has no JWT: redirect to login
-- If user has JWT: continue to shipping step
-
-## Step 3: Get saved shipping address
+## Step 2: Read saved shipping address
 Endpoint: GET /public/orders/shipping-address
-Auth: JWT required
+Auth: Bearer token required
 
-Success response:
+Success response (200):
 ```json
 {
   "message": "Shipping address fetched successfully",
   "data": {
-    "fullName": "Dr. Sarah Hall",
-    "addressLine1": "100 Main St",
-    "addressLine2": "Suite 201",
-    "city": "Houston",
-    "state": "TX",
-    "zipCode": "77001",
+    "fullName": "Flow Buyer",
+    "addressLine1": "",
+    "addressLine2": "",
+    "city": "",
+    "state": "",
+    "zipCode": "",
     "country": "US",
-    "isComplete": true
+    "isComplete": false
   }
 }
 ```
 
-## Step 4: Update shipping address (if needed)
+## Step 3: Save shipping address
 Endpoint: PATCH /public/orders/shipping-address
-Auth: JWT required
+Auth: Bearer token required
 
 Request body:
 ```json
 {
-  "fullName": "Dr. Sarah Hall",
-  "addressLine1": "100 Main St",
-  "addressLine2": "Suite 201",
+  "fullName": "Flow Buyer",
+  "addressLine1": "100 Main Street",
   "city": "Houston",
   "state": "TX",
-  "zipCode": "77001",
-  "country": "US"
+  "zipCode": "77001"
 }
 ```
 
-Success response:
+Success response (200):
 ```json
 {
   "message": "Shipping address updated successfully",
   "data": {
-    "fullName": "Dr. Sarah Hall",
-    "addressLine1": "100 Main St",
-    "addressLine2": "Suite 201",
+    "fullName": "Flow Buyer",
+    "addressLine1": "100 Main Street",
+    "addressLine2": "Suite 10",
     "city": "Houston",
     "state": "TX",
     "zipCode": "77001",
@@ -149,16 +125,17 @@ Success response:
 }
 ```
 
-## Step 5: Create Stripe checkout session
-Endpoint: POST /public/orders/checkout/stripe-session
-Auth: JWT required
+## Step 4: Create payment session
+Endpoint: POST /payments/checkout-session
+Auth: Bearer token required
 
-Request body (saved shipping):
+Request body:
 ```json
 {
+  "domainType": "product",
   "items": [
     {
-      "productId": "6872d2ba-7958-4de7-b9cb-4f2c0eb57d8b",
+      "productId": "<product-uuid>",
       "quantity": 2
     }
   ],
@@ -167,218 +144,289 @@ Request body (saved shipping):
 }
 ```
 
-Success response:
+Success response (201):
 ```json
 {
-  "message": "Stripe checkout session created successfully",
+  "message": "Checkout session created successfully",
   "data": {
-    "sessionId": "cs_test_xxx",
-    "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_xxx",
+    "paymentId": "<payment-uuid>",
+    "domainType": "product",
+    "sessionId": "cs_test_...",
+    "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_...",
     "shippingAddress": {
-      "fullName": "Dr. Sarah Hall",
-      "addressLine1": "100 Main St",
-      "addressLine2": "Suite 201",
+      "fullName": "Flow Buyer",
+      "addressLine1": "100 Main Street",
+      "addressLine2": "Suite 10",
       "city": "Houston",
       "state": "TX",
       "zipCode": "77001",
       "country": "US"
     },
     "orderSummary": {
-      "subtotal": "1798.00",
-      "estimatedShipping": "0.00",
-      "estimatedTax": "179.80",
-      "orderTotal": "1977.80"
+      "subtotal": "198.00",
+      "estimatedShipping": "15.00",
+      "estimatedTax": "19.80",
+      "orderTotal": "232.80"
     }
   }
 }
 ```
 
-Frontend behavior:
-- Redirect browser to data.checkoutUrl
+Frontend action:
+- Redirect user to data.checkoutUrl.
 
-## Step 6: Payment success finalization (required for complete purchase)
-This part is not implemented yet in current code and is required for "successfully bought".
+## Step 5: Stripe-hosted payment
+- User pays on Stripe page.
+- Stripe sends event to POST /payments/webhooks/stripe.
+- Backend marks payment as paid and creates final order + timeline.
 
-Recommended endpoint:
-- POST /payments/stripe/webhook
-
-Recommended webhook logic:
-1. Verify Stripe signature using endpoint secret
-2. Handle checkout.session.completed event
-3. Create orders row with:
-   - type = product
-   - paymentStatus = paid
-   - fulfillmentStatus = unfulfilled
-   - customer + shipping snapshot
-   - order items + totals
-4. Create timeline events:
-   - order_placed
-   - payment_authorized
-5. Save mapping between stripe session id and created order id
-
-Recommended webhook success response:
+Webhook response (200):
 ```json
 {
-  "received": true
+  "received": true,
+  "eventType": "checkout.session.completed"
 }
 ```
 
-## Step 7: Checkout success page fetch
-Recommended endpoint:
-- GET /public/orders/checkout/success?sessionId=cs_test_xxx
+## Step 6: Poll payment result from frontend
+Endpoint: GET /payments/session-status/:sessionId
+Auth: Bearer token required
 
-Recommended success response:
+Pending response:
 ```json
 {
-  "message": "Purchase completed successfully",
+  "message": "Payment session status fetched successfully",
   "data": {
-    "orderId": "ORD-100045",
-    "paymentStatus": "paid",
-    "fulfillmentStatus": "unfulfilled",
-    "grandTotal": "1977.80"
+    "paymentId": "<payment-uuid>",
+    "domainType": "product",
+    "status": "pending",
+    "providerSessionId": "cs_test_...",
+    "finalizedRefId": null
   }
 }
 ```
 
+Paid response:
+```json
+{
+  "message": "Payment session status fetched successfully",
+  "data": {
+    "paymentId": "<payment-uuid>",
+    "domainType": "product",
+    "status": "paid",
+    "providerSessionId": "cs_test_...",
+    "finalizedRefId": "<order-uuid>",
+    "paidAt": "2026-04-08T00:00:00.000Z"
+  }
+}
+```
+
+Meaning of finalizedRefId for product:
+- This is the created order id.
+
 ---
 
-## 3) Workshop Full Flow (Order -> Checkout -> Payment -> Booked)
+## Workshop
 
-## Step 1: Create workshop order summary
+## Step 1: Create workshop order summary (attendees + pricing)
 Endpoint: POST /workshops/checkout/order-summary
-Auth: JWT required
+Auth: Bearer token required
 
 Request body:
 ```json
 {
-  "workshopId": "9f6bc4f5-e8c2-4f9d-97f2-6e6a946b0f0d",
+  "workshopId": "<workshop-uuid>",
   "attendees": [
     {
-      "fullName": "Dr. Sarah Hall",
-      "professionalRole": "Anesthesiologist",
-      "email": "sarah@example.com"
+      "fullName": "Flow Attendee One",
+      "professionalRole": "Nurse",
+      "npiNumber": "1234567890",
+      "email": "attendee1@example.com"
     },
     {
-      "fullName": "Dr. Omar Nabil",
-      "professionalRole": "Pulmonologist",
-      "email": "omar@example.com"
+      "fullName": "Flow Attendee Two",
+      "professionalRole": "Resident",
+      "email": "attendee2@example.com"
     }
   ]
 }
 ```
 
-Success response:
+Success response (201):
 ```json
 {
   "message": "Order summary created successfully",
   "data": {
-    "orderSummaryId": "7488ca14-6071-45b8-bd97-b4e78ff2776f",
+    "orderSummaryId": "<order-summary-uuid>",
+    "workshop": {
+      "id": "<workshop-uuid>",
+      "title": "Flow Workshop",
+      "deliveryMode": "online",
+      "coverImageUrl": null
+    },
+    "attendees": [
+      {
+        "id": "<attendee-uuid-1>",
+        "index": 1,
+        "fullName": "Flow Attendee One",
+        "professionalRole": "Nurse",
+        "npiNumber": "1234567890",
+        "email": "attendee1@example.com"
+      },
+      {
+        "id": "<attendee-uuid-2>",
+        "index": 2,
+        "fullName": "Flow Attendee Two",
+        "professionalRole": "Resident",
+        "email": "attendee2@example.com"
+      }
+    ],
     "numberOfAttendees": 2,
     "pricing": {
-      "standardPricePerSeat": "399.00",
-      "appliedPricePerSeat": "399.00",
-      "discountApplied": false,
-      "totalPrice": "798.00"
-    }
+      "totalPrice": "300.00"
+    },
+    "status": "pending"
   }
 }
 ```
 
-## Step 2: (Recommended) Create workshop Stripe checkout session
-Not implemented yet and required for full payment flow.
+Frontend requirement:
+- Keep attendee ids from this response; they are needed later in reservation API.
 
-Recommended endpoint:
-- POST /workshops/checkout/payment-session
+## Step 2: Optional summary refresh
+Endpoint: GET /workshops/checkout/order-summary/:id
+Auth: Bearer token required
 
-Recommended request body:
+Success response (200):
 ```json
 {
-  "orderSummaryId": "7488ca14-6071-45b8-bd97-b4e78ff2776f",
+  "message": "Order summary fetched successfully",
+  "data": {
+    "orderSummaryId": "<order-summary-uuid>",
+    "status": "pending"
+  }
+}
+```
+
+## Step 3: Create payment session
+Endpoint: POST /payments/checkout-session
+Auth: Bearer token required
+
+Request body:
+```json
+{
+  "domainType": "workshop",
+  "orderSummaryId": "<order-summary-uuid>",
   "successUrl": "http://localhost:5173/workshops/checkout/success?session_id={CHECKOUT_SESSION_ID}",
   "cancelUrl": "http://localhost:5173/workshops/checkout/cancel"
 }
 ```
 
-Recommended success response:
+Success response (201):
 ```json
 {
-  "message": "Workshop checkout session created successfully",
+  "message": "Checkout session created successfully",
   "data": {
-    "sessionId": "cs_test_workshop_xxx",
-    "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_workshop_xxx",
-    "orderSummaryId": "7488ca14-6071-45b8-bd97-b4e78ff2776f",
-    "totalAmount": "798.00"
+    "paymentId": "<payment-uuid>",
+    "domainType": "workshop",
+    "sessionId": "cs_test_...",
+    "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_...",
+    "workshop": {
+      "id": "<workshop-uuid>",
+      "title": "Flow Workshop"
+    },
+    "orderSummaryId": "<order-summary-uuid>",
+    "numberOfAttendees": 2,
+    "totalPrice": "300.00"
   }
 }
 ```
 
-## Step 3: Stripe payment success finalization (required)
-Recommended webhook:
-- POST /payments/stripe/webhook
+Frontend action:
+- Redirect user to data.checkoutUrl.
 
-Recommended workshop webhook logic:
-1. Verify event signature
-2. For workshop session completed:
-   - mark workshop order summary as completed/paid
-   - create reservation with status confirmed
-   - lock attendee seats
-3. Save mapping stripe session id <-> reservation id
+## Step 4: Stripe-hosted payment
+- User pays on Stripe page.
+- Stripe calls POST /payments/webhooks/stripe.
+- Backend marks workshop payment as paid and marks order summary as completed.
 
-## Step 4: Booking success fetch
-Recommended endpoint:
-- GET /workshops/checkout/success?sessionId=cs_test_workshop_xxx
-
-Recommended success response:
+Webhook response (200):
 ```json
 {
-  "message": "Workshop booked and paid successfully",
+  "received": true,
+  "eventType": "checkout.session.completed"
+}
+```
+
+## Step 5: Poll payment result
+Endpoint: GET /payments/session-status/:sessionId
+Auth: Bearer token required
+
+Pending response:
+```json
+{
+  "message": "Payment session status fetched successfully",
   "data": {
-    "reservationId": "26e967d4-d449-4b46-b0f6-6187ed2ab66d",
-    "workshopId": "9f6bc4f5-e8c2-4f9d-97f2-6e6a946b0f0d",
-    "paymentStatus": "paid",
-    "reservationStatus": "confirmed",
-    "totalPrice": "798.00"
+    "domainType": "workshop",
+    "status": "pending",
+    "finalizedRefId": null
+  }
+}
+```
+
+Paid response:
+```json
+{
+  "message": "Payment session status fetched successfully",
+  "data": {
+    "domainType": "workshop",
+    "status": "paid",
+    "finalizedRefId": "<order-summary-uuid>"
+  }
+}
+```
+
+Meaning of finalizedRefId for workshop:
+- This is the paid order summary id.
+
+## Step 6: Final reservation creation (actual booking)
+Endpoint: POST /workshops/reservations
+Auth: Bearer token required
+
+Request body:
+```json
+{
+  "workshopId": "<workshop-uuid>",
+  "attendeeIds": [
+    "<attendee-uuid-1>",
+    "<attendee-uuid-2>"
+  ]
+}
+```
+
+Success response (201):
+```json
+{
+  "message": "Workshop booked successfully",
+  "data": {
+    "reservationId": "<reservation-uuid>",
+    "workshopId": "<workshop-uuid>",
+    "numberOfSeats": 2,
+    "pricePerSeat": "150",
+    "totalPrice": "300",
+    "status": "confirmed",
+    "availableSeatsRemaining": 48
   }
 }
 ```
 
 ---
 
-## 4) API Matrix (Implemented vs Needed)
+## Frontend implementation rules (must follow)
 
-Product checkout:
-- Implemented: POST /public/orders/summary
-- Implemented: GET /public/orders/shipping-address
-- Implemented: PATCH /public/orders/shipping-address
-- Implemented: POST /public/orders/checkout/stripe-session
-- Needed: POST /payments/stripe/webhook
-- Needed: GET /public/orders/checkout/success
+1. Use POST /payments/checkout-session for both product and workshop.
+2. Do not call webhook from frontend. Stripe calls webhook.
+3. After redirect back from Stripe, always poll GET /payments/session-status/:sessionId until final state.
+4. For workshop, do not call /workshops/reservations before payment status is paid.
+5. Use attendeeIds returned by order-summary response only.
 
-Workshop checkout:
-- Implemented: POST /workshops/checkout/order-summary
-- Implemented: GET /workshops/checkout/order-summary/:id
-- Implemented: POST /workshops/reservations
-- Needed: POST /workshops/checkout/payment-session
-- Needed: POST /payments/stripe/webhook (workshop branch)
-- Needed: GET /workshops/checkout/success
-
----
-
-## 5) Recommended State Transitions
-
-Product order:
-- pending_payment -> paid -> unfulfilled -> processing -> shipped -> received -> closed
-
-Workshop order/booking:
-- summary_pending -> payment_initiated -> paid -> reservation_confirmed
-
----
-
-## 6) What to implement next (priority)
-
-1. Add Stripe webhook endpoint with signature verification.
-2. Persist successful product payment into orders + order_items + timeline.
-3. Add public success endpoint for product checkout confirmation.
-4. Add workshop payment-session endpoint from workshop orderSummary.
-5. Finalize workshop reservation only after successful payment event.
-6. Add workshop checkout success endpoint returning final reservation + payment status.

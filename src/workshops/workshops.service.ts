@@ -14,6 +14,8 @@ import { CreateWorkshopDto } from './dto/create-workshop.dto';
 import { UpdateWorkshopDto } from './dto/update-workshop.dto';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { CheckoutOrderSummaryDto } from './dto/checkout-order-summary.dto';
+import { CreateWorkshopPaymentSessionDto } from './dto/create-workshop-payment-session.dto';
+import { VerifyWorkshopPaymentDto } from './dto/verify-workshop-payment.dto';
 import { PublicListWorkshopsQueryDto } from './dto/public-list-workshops.query.dto';
 import { Facility } from '../facilities/entities/facility.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
@@ -21,6 +23,7 @@ import { ListWorkshopsQueryDto } from './dto/list-workshops.query.dto';
 import { WorkshopStatus } from './entities/workshop.entity';
 import { OrderSummaryStatus } from './entities/workshop-order-summary.entity';
 import { ReservationStatus } from './entities/workshop-reservation.entity';
+import Stripe = require('stripe');
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -1088,6 +1091,204 @@ export class WorkshopsService {
     };
   }
 
+  async createPaymentSession(
+    userId: string,
+    dto: CreateWorkshopPaymentSessionDto,
+  ) {
+    const orderSummary = await this.orderSummariesRepo.findOne({
+      where: { id: dto.orderSummaryId, userId },
+      relations: ['workshop', 'attendees'],
+    });
+
+    if (!orderSummary) {
+      throw new NotFoundException('Order summary not found');
+    }
+
+    if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
+      throw new BadRequestException('Order summary already used for reservation');
+    }
+
+    if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
+      return {
+        message: 'Workshop payment already verified for this order summary',
+        data: {
+          orderSummaryId: orderSummary.id,
+          status: orderSummary.status,
+          paymentStatus: 'paid',
+        },
+      };
+    }
+
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecretKey) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+
+    const successUrl =
+      dto.successUrl ||
+      process.env.WORKSHOP_STRIPE_CHECKOUT_SUCCESS_URL ||
+      process.env.STRIPE_CHECKOUT_SUCCESS_URL;
+    const cancelUrl =
+      dto.cancelUrl ||
+      process.env.WORKSHOP_STRIPE_CHECKOUT_CANCEL_URL ||
+      process.env.STRIPE_CHECKOUT_CANCEL_URL;
+
+    if (!successUrl || !cancelUrl) {
+      throw new BadRequestException(
+        'successUrl and cancelUrl are required (request body or env)',
+      );
+    }
+
+    const workshop = orderSummary.workshop;
+    if (!workshop || workshop.status !== WorkshopStatus.PUBLISHED) {
+      throw new NotFoundException(
+        'Workshop not found or not available for booking',
+      );
+    }
+
+    const reservedSeatsResult = await this.reservationsRepo
+      .createQueryBuilder('r')
+      .select('SUM(r.numberOfSeats)', 'total')
+      .where('r.workshopId = :workshopId', { workshopId: workshop.id })
+      .andWhere('r.status != :cancelledStatus', {
+        cancelledStatus: ReservationStatus.CANCELLED,
+      })
+      .getRawOne();
+
+    const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
+    const availableSeats = workshop.capacity - reservedSeats;
+
+    if (availableSeats < orderSummary.numberOfSeats) {
+      throw new BadRequestException(
+        `Only ${availableSeats} seats available. You are trying to book ${orderSummary.numberOfSeats} seats.`,
+      );
+    }
+
+    const unitAmount = Math.round(Number(orderSummary.pricePerSeat) * 100);
+    if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+      throw new BadRequestException('Invalid order summary amount');
+    }
+
+    const stripe = Stripe(stripeSecretKey);
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          quantity: orderSummary.numberOfSeats,
+          price_data: {
+            currency: 'usd',
+            unit_amount: unitAmount,
+            product_data: {
+              name: `Workshop: ${workshop.title}`,
+              metadata: {
+                workshopId: workshop.id,
+                orderSummaryId: orderSummary.id,
+              },
+            },
+          },
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        flowType: 'workshop',
+        userId,
+        workshopId: workshop.id,
+        orderSummaryId: orderSummary.id,
+        attendees: String(orderSummary.numberOfSeats),
+      },
+    });
+
+    return {
+      message: 'Workshop checkout session created successfully',
+      data: {
+        sessionId: session.id,
+        checkoutUrl: session.url,
+        orderSummaryId: orderSummary.id,
+        workshop: {
+          id: workshop.id,
+          title: workshop.title,
+        },
+        numberOfAttendees: orderSummary.numberOfSeats,
+        totalPrice: orderSummary.totalPrice,
+        status: orderSummary.status,
+      },
+    };
+  }
+
+  async verifyPayment(userId: string, dto: VerifyWorkshopPaymentDto) {
+    const orderSummary = await this.orderSummariesRepo.findOne({
+      where: { id: dto.orderSummaryId, userId },
+      relations: ['workshop', 'attendees'],
+    });
+
+    if (!orderSummary) {
+      throw new NotFoundException('Order summary not found');
+    }
+
+    if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
+      throw new BadRequestException('Order summary already used for reservation');
+    }
+
+    if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
+      return {
+        message: 'Workshop payment already verified',
+        data: {
+          orderSummaryId: orderSummary.id,
+          status: orderSummary.status,
+          paymentStatus: 'paid',
+        },
+      };
+    }
+
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecretKey) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+
+    const stripe = Stripe(stripeSecretKey);
+    const session = await stripe.checkout.sessions.retrieve(dto.sessionId);
+
+    if (!session) {
+      throw new BadRequestException('Invalid Stripe checkout session');
+    }
+
+    if (session.metadata?.orderSummaryId !== orderSummary.id) {
+      throw new BadRequestException(
+        'Checkout session does not match order summary',
+      );
+    }
+
+    if (session.metadata?.userId !== userId) {
+      throw new BadRequestException('Checkout session does not belong to user');
+    }
+
+    if (session.payment_status !== 'paid') {
+      throw new BadRequestException(
+        `Payment not completed. Current payment_status: ${session.payment_status}`,
+      );
+    }
+
+    orderSummary.status = OrderSummaryStatus.COMPLETED;
+    const saved = await this.orderSummariesRepo.save(orderSummary);
+
+    return {
+      message: 'Workshop payment verified successfully',
+      data: {
+        orderSummaryId: saved.id,
+        workshop: {
+          id: saved.workshop.id,
+          title: saved.workshop.title,
+        },
+        numberOfAttendees: saved.numberOfSeats,
+        totalPrice: saved.totalPrice,
+        status: saved.status,
+        paymentStatus: session.payment_status,
+      },
+    };
+  }
+
   async createReservation(userId: string, dto: CreateReservationDto) {
     // Validate attendeeIds
     if (!dto.attendeeIds || dto.attendeeIds.length === 0) {
@@ -1101,12 +1302,12 @@ export class WorkshopsService {
       .where('att.id IN (:...attendeeIds)', { attendeeIds: dto.attendeeIds })
       .andWhere('os.userId = :userId', { userId })
       .andWhere('os.workshopId = :workshopId', { workshopId: dto.workshopId })
-      .andWhere('os.status = :status', { status: 'pending' })
+      .andWhere('os.status = :status', { status: OrderSummaryStatus.COMPLETED })
       .getMany();
 
     if (attendees.length !== dto.attendeeIds.length) {
       throw new BadRequestException(
-        'Invalid attendee IDs or attendees do not belong to your order summary',
+        'Invalid attendee IDs, payment not verified, or attendees do not belong to your paid order summary',
       );
     }
 
@@ -1180,10 +1381,10 @@ export class WorkshopsService {
       reservation as WorkshopReservation,
     );
 
-    // Mark order summary as completed
+    // Mark order summary as consumed so the same paid summary cannot create duplicate reservations.
     await this.orderSummariesRepo.update(
       { id: attendees[0].orderSummary.id },
-      { status: OrderSummaryStatus.COMPLETED },
+      { status: OrderSummaryStatus.EXPIRED },
     );
 
     return {
