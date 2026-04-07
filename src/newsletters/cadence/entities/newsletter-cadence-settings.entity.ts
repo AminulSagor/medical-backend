@@ -10,6 +10,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
   Unique,
+  VersionColumn,
 } from 'typeorm';
 
 @Entity('newsletter_cadence_settings')
@@ -26,6 +27,11 @@ export class NewsletterCadenceSetting {
   @Index()
   channelType: NewsletterChannelType;
 
+  // --- Global Settings ---
+  @Column({ type: 'varchar', length: 100, default: 'America/Chicago' })
+  timezone: string;
+
+  // --- Weekly Settings ---
   @Column({ type: 'boolean', default: true })
   weeklyEnabled: boolean;
 
@@ -38,11 +44,12 @@ export class NewsletterCadenceSetting {
     enumName: 'newsletter_week_day_enum',
     nullable: true,
   })
-  weeklyReleaseDay: WeekDay | null;
+  weeklyReleaseDay: WeekDay | null; // e.g., 'MONDAY'
 
   @Column({ type: 'time', nullable: true })
   weeklyReleaseTime: string | null; // HH:mm:ss
 
+  // --- Monthly Settings ---
   @Column({ type: 'boolean', default: true })
   monthlyEnabled: boolean;
 
@@ -55,11 +62,9 @@ export class NewsletterCadenceSetting {
   @Column({ type: 'time', nullable: true })
   monthlyReleaseTime: string | null; // HH:mm:ss
 
-  @Column({ type: 'varchar', length: 64, default: 'America/Chicago' })
-  timezone: string;
-
-  @Column({ type: 'int', default: 1 })
-  version: number;
+  // --- Tracking & Versioning ---
+  @VersionColumn()
+  version: number; // Automatically increments on save to track schedule staleness
 
   @Column({ type: 'uuid', nullable: true })
   updatedByAdminId: string | null;

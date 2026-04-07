@@ -51,13 +51,13 @@ export class CourseAnnouncementsController {
     return this.service.upsertDraft(req.user.id, workshopId);
   }
 
-  @Post('broadcasts')
-  createDraft(
-    @Req() req: AuthenticatedRequest,
-    @Body() dto: CreateCourseAnnouncementDto,
-  ): Promise<Record<string, unknown>> {
-    return this.service.createDraft(req.user.id, dto);
-  }
+  // @Post('broadcasts')
+  // createDraft(
+  //   @Req() req: AuthenticatedRequest,
+  //   @Body() dto: CreateCourseAnnouncementDto,
+  // ): Promise<Record<string, unknown>> {
+  //   return this.service.createDraft(req.user.id, dto);
+  // }
 
   @Get('broadcasts/:id')
   getDetail(
