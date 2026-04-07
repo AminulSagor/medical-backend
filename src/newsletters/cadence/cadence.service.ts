@@ -19,6 +19,7 @@ import { NewsletterBroadcastQueueOrder } from '../broadcasts/entities/newsletter
 import { buildCadenceSlots } from 'src/common/utils/newsletter-cadence-slots.util';
 import { PreviewCadenceRecalculationDto } from './dto/preview-cadence-recalculation.dto';
 import { ApplyCadenceRecalculationDto } from './dto/apply-cadence-recalculation.dto';
+import { DateTime } from 'luxon';
 
 @Injectable()
 export class CadenceService {
@@ -33,14 +34,19 @@ export class CadenceService {
   ) {}
 
   async getCurrent(): Promise<Record<string, unknown>> {
-    const cadence = await this.cadenceRepo.findOne({
+    let cadence = await this.cadenceRepo.findOne({
       where: { channelType: NewsletterChannelType.GENERAL },
     });
 
     if (!cadence) {
-      throw new NotFoundException(
-        'General newsletter cadence settings not found',
-      );
+      const defaultSettings = this.cadenceRepo.create({
+        channelType: NewsletterChannelType.GENERAL,
+        timezone: 'America/Chicago', // Your project's default timezone
+        weeklyEnabled: true,
+        monthlyEnabled: true,
+        // The other fields will default to null based on your entity definition
+      });
+      cadence = await this.cadenceRepo.save(defaultSettings);
     }
 
     return {
@@ -78,22 +84,24 @@ export class CadenceService {
 
     cadence.weeklyEnabled = dto.weeklyEnabled;
     cadence.weeklyCycleStartDate = dto.weeklyEnabled
-      ? dto.weeklyCycleStartDate
+      ? (dto.weeklyCycleStartDate ?? null)
       : null;
-    cadence.weeklyReleaseDay = dto.weeklyEnabled ? dto.weeklyReleaseDay : null;
+    cadence.weeklyReleaseDay = dto.weeklyEnabled
+      ? (dto.weeklyReleaseDay ?? null)
+      : null;
     cadence.weeklyReleaseTime = dto.weeklyEnabled
-      ? dto.weeklyReleaseTime
+      ? (dto.weeklyReleaseTime ?? null)
       : null;
 
     cadence.monthlyEnabled = dto.monthlyEnabled;
     cadence.monthlyCycleStartDate = dto.monthlyEnabled
-      ? dto.monthlyCycleStartDate
+      ? (dto.monthlyCycleStartDate ?? null)
       : null;
     cadence.monthlyDayOfMonth = dto.monthlyEnabled
-      ? dto.monthlyDayOfMonth
+      ? (dto.monthlyDayOfMonth ?? null)
       : null;
     cadence.monthlyReleaseTime = dto.monthlyEnabled
-      ? dto.monthlyReleaseTime
+      ? (dto.monthlyReleaseTime ?? null)
       : null;
 
     cadence.timezone = dto.timezone.trim();
@@ -113,6 +121,9 @@ export class CadenceService {
   async getAvailableSlots(
     query: GetAvailableCadenceSlotsQueryDto,
   ): Promise<Record<string, unknown>> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
     const cadence = await this.cadenceRepo.findOne({
       where: { channelType: NewsletterChannelType.GENERAL },
     });
@@ -123,6 +134,7 @@ export class CadenceService {
       );
     }
 
+    // Validation checks for enabled frequencies
     if (
       query.frequencyType === NewsletterFrequencyType.WEEKLY &&
       !cadence.weeklyEnabled
@@ -137,12 +149,26 @@ export class CadenceService {
       throw new UnprocessableEntityException('Monthly cadence is disabled');
     }
 
-    const candidateSlots = buildCadenceSlots({
+    // Determine range from year/month if provided
+    let fromDate = query.fromDate;
+    let toDate = query.toDate;
+
+    if (query.year && query.month && !fromDate && !toDate) {
+      const dt = DateTime.fromObject(
+        { year: query.year, month: query.month },
+        { zone: cadence.timezone },
+      );
+      fromDate = dt.startOf('month').toISODate()!;
+      toDate = dt.endOf('month').toISODate()!;
+    }
+
+    // Generate a larger pool of candidates to allow pagination
+    const allCandidateSlots = buildCadenceSlots({
       timezone: cadence.timezone,
       frequencyType: query.frequencyType,
-      fromDate: query.fromDate,
-      toDate: query.toDate,
-      count: 20,
+      fromDate,
+      toDate,
+      count: 100, // Generate up to 100 slots to support pagination
       weekly: {
         enabled: cadence.weeklyEnabled,
         releaseDay: cadence.weeklyReleaseDay,
@@ -155,12 +181,20 @@ export class CadenceService {
       },
     });
 
-    const slotIsoList = candidateSlots.map((s) => s.scheduledAtUtc);
+    // Apply manual pagination to the generated array
+    const total = allCandidateSlots.length;
+    const paginatedSlots = allCandidateSlots.slice(
+      (page - 1) * limit,
+      page * limit,
+    );
+
+    const slotIsoList = paginatedSlots.map((s) => s.scheduledAtUtc);
     let occupiedMap = new Map<
       string,
       { broadcastId: string; subjectLine: string }
     >();
 
+    // Check which of the paginated slots are already occupied
     if (slotIsoList.length) {
       const occupied = await this.broadcastRepo.find({
         where: {
@@ -181,13 +215,18 @@ export class CadenceService {
     }
 
     return {
-      frequencyType: query.frequencyType,
-      timezone: cadence.timezone,
-      slots: candidateSlots.map((slot) => ({
+      items: paginatedSlots.map((slot) => ({
         ...slot,
         isAvailable: !occupiedMap.has(slot.scheduledAtUtc),
         occupiedBy: occupiedMap.get(slot.scheduledAtUtc) ?? null,
       })),
+      meta: {
+        page,
+        limit,
+        total,
+      },
+      frequencyType: query.frequencyType,
+      timezone: cadence.timezone,
     };
   }
 
@@ -302,25 +341,25 @@ export class CadenceService {
 
     return this.dataSource.transaction(async (manager) => {
       cadence!.weeklyEnabled = dto.weeklyEnabled;
-      cadence!.weeklyCycleStartDate = dto.weeklyEnabled
-        ? dto.weeklyCycleStartDate
+      cadence.weeklyCycleStartDate = dto.weeklyEnabled
+        ? (dto.weeklyCycleStartDate ?? null)
         : null;
-      cadence!.weeklyReleaseDay = dto.weeklyEnabled
-        ? dto.weeklyReleaseDay
+      cadence.weeklyReleaseDay = dto.weeklyEnabled
+        ? (dto.weeklyReleaseDay ?? null)
         : null;
-      cadence!.weeklyReleaseTime = dto.weeklyEnabled
-        ? dto.weeklyReleaseTime
+      cadence.weeklyReleaseTime = dto.weeklyEnabled
+        ? (dto.weeklyReleaseTime ?? null)
         : null;
 
       cadence!.monthlyEnabled = dto.monthlyEnabled;
-      cadence!.monthlyCycleStartDate = dto.monthlyEnabled
-        ? dto.monthlyCycleStartDate
+      cadence.monthlyCycleStartDate = dto.monthlyEnabled
+        ? (dto.monthlyCycleStartDate ?? null)
         : null;
-      cadence!.monthlyDayOfMonth = dto.monthlyEnabled
-        ? dto.monthlyDayOfMonth
+      cadence.monthlyDayOfMonth = dto.monthlyEnabled
+        ? (dto.monthlyDayOfMonth ?? null)
         : null;
-      cadence!.monthlyReleaseTime = dto.monthlyEnabled
-        ? dto.monthlyReleaseTime
+      cadence.monthlyReleaseTime = dto.monthlyEnabled
+        ? (dto.monthlyReleaseTime ?? null)
         : null;
 
       cadence!.timezone = dto.timezone.trim();

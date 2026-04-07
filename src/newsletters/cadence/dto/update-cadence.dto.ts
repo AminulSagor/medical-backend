@@ -1,59 +1,56 @@
 import {
   IsBoolean,
   IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   Max,
-  MaxLength,
   Min,
-  ValidateIf,
 } from 'class-validator';
 import { WeekDay } from 'src/common/enums/newsletter-constants.enum';
 
-const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_24H_WITH_SECONDS_REGEX = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
-
 export class UpdateCadenceDto {
+  @IsNotEmpty()
+  @IsString()
+  timezone: string;
+
+  // --- Weekly ---
   @IsBoolean()
   weeklyEnabled: boolean;
 
-  @ValidateIf((o) => o.weeklyEnabled === true)
-  @Matches(DATE_ONLY_REGEX, {
-    message: 'weeklyCycleStartDate must be YYYY-MM-DD',
-  })
-  weeklyCycleStartDate: string;
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'Must be YYYY-MM-DD' })
+  weeklyCycleStartDate?: string;
 
-  @ValidateIf((o) => o.weeklyEnabled === true)
+  @IsOptional()
   @IsEnum(WeekDay)
-  weeklyReleaseDay: WeekDay;
+  weeklyReleaseDay?: WeekDay;
 
-  @ValidateIf((o) => o.weeklyEnabled === true)
-  @Matches(TIME_24H_WITH_SECONDS_REGEX, {
-    message: 'weeklyReleaseTime must be HH:mm:ss',
+  @IsOptional()
+  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/, {
+    message: 'Must be HH:mm or HH:mm:ss',
   })
-  weeklyReleaseTime: string;
+  weeklyReleaseTime?: string;
 
+  // --- Monthly ---
   @IsBoolean()
   monthlyEnabled: boolean;
 
-  @ValidateIf((o) => o.monthlyEnabled === true)
-  @Matches(DATE_ONLY_REGEX, {
-    message: 'monthlyCycleStartDate must be YYYY-MM-DD',
-  })
-  monthlyCycleStartDate: string;
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'Must be YYYY-MM-DD' })
+  monthlyCycleStartDate?: string;
 
-  @ValidateIf((o) => o.monthlyEnabled === true)
+  @IsOptional()
+  @IsInt()
   @Min(1)
   @Max(31)
-  monthlyDayOfMonth: number;
+  monthlyDayOfMonth?: number;
 
-  @ValidateIf((o) => o.monthlyEnabled === true)
-  @Matches(TIME_24H_WITH_SECONDS_REGEX, {
-    message: 'monthlyReleaseTime must be HH:mm:ss',
+  @IsOptional()
+  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/, {
+    message: 'Must be HH:mm or HH:mm:ss',
   })
-  monthlyReleaseTime: string;
-
-  @IsString()
-  @MaxLength(64)
-  timezone: string;
+  monthlyReleaseTime?: string;
 }

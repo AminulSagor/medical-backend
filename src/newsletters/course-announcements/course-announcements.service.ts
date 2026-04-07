@@ -106,18 +106,46 @@ export class CourseAnnouncementsService {
     query: ListCohortsQueryDto,
   ): Promise<Record<string, unknown>> {
     const page = query.page ?? 1;
-    const limit = query.limit ?? 9;
+    const limit = query.limit ?? 10;
+    const tab = query.tab || query.status || 'all';
 
     const qb = this.workshopRepo
       .createQueryBuilder('w')
       .leftJoinAndSelect('w.days', 'd')
       .orderBy('w.createdAt', 'DESC');
 
+    // 1. Filter by Course Name (Search)
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere('LOWER(w.title) LIKE :s', { s });
     }
 
+    // 2. Filter by Category
+    // NOTE: Your Workshop entity doesn't currently have a `categoryId` column.
+    // You will need to uncomment and adjust this once you add category to the entity.
+    if (query.category?.trim()) {
+      // qb.andWhere('w.categoryId = :category', { category: query.category });
+    }
+
+    // 3. Filter by Cohort Status at the Database level
+    const now = new Date();
+    if (tab === 'upcoming') {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
+        { now },
+      );
+    } else if (tab === 'completed') {
+      qb.andWhere(
+        'NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
+        { now },
+      );
+      // Ensure it actually has days so empty drafts don't show as completed
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id)',
+      );
+    }
+
+    // Execute query with accurate pagination limits
     const [items, total] = await qb
       .skip((page - 1) * limit)
       .take(limit)
@@ -125,6 +153,7 @@ export class CourseAnnouncementsService {
 
     const workshopIds = items.map((w) => w.id);
 
+    // Fetch enrollments to calculate seat capacities
     const counts = workshopIds.length
       ? await this.enrollmentRepo
           .createQueryBuilder('e')
@@ -138,45 +167,39 @@ export class CourseAnnouncementsService {
 
     const countMap = new Map(counts.map((r) => [r.workshopId, Number(r.cnt)]));
 
-    const now = new Date();
+    const rows = items.map((w) => {
+      const dayDates = (w.days ?? [])
+        .map((x: any) => new Date(x.date))
+        .filter((d: Date) => !Number.isNaN(d.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime());
 
-    const rows = items
-      .map((w) => {
-        const dayDates = (w.days ?? [])
-          .map((x: any) => new Date(x.date))
-          .filter((d: Date) => !Number.isNaN(d.getTime()))
-          .sort((a, b) => a.getTime() - b.getTime());
+      const startDate = dayDates[0] ?? null;
+      const endDate = dayDates.length ? dayDates[dayDates.length - 1] : null;
 
-        const startDate = dayDates[0] ?? null;
-        const endDate = dayDates.length ? dayDates[dayDates.length - 1] : null;
+      const enrolledCount = countMap.get(w.id) ?? 0;
+      const capacity = Number((w as any).capacity ?? 0);
 
-        const enrolledCount = countMap.get(w.id) ?? 0;
-        const capacity = Number((w as any).capacity ?? 0);
+      // Map dynamic status
+      const cohortStatus =
+        endDate && endDate.getTime() < now.getTime()
+          ? 'completed'
+          : startDate && startDate.getTime() >= now.getTime()
+            ? 'upcoming'
+            : 'upcoming'; // Default for no-days
 
-        const cohortStatus =
-          endDate && endDate.getTime() < now.getTime()
-            ? 'completed'
-            : startDate && startDate.getTime() >= now.getTime()
-              ? 'upcoming'
-              : 'upcoming';
+      const seatStatus =
+        capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
 
-        const seatStatus =
-          capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
-
-        return {
-          id: w.id,
-          title: (w as any).title,
-          startDate,
-          status: cohortStatus,
-          seatStatus,
-          enrolledCount,
-          capacity,
-        };
-      })
-      .filter((row) => {
-        if (!query.status || query.status === 'all') return true;
-        return row.status === query.status;
-      });
+      return {
+        id: w.id,
+        title: (w as any).title,
+        startDate,
+        status: cohortStatus,
+        seatStatus,
+        enrolledCount,
+        capacity,
+      };
+    });
 
     return {
       items: rows,
@@ -261,81 +284,81 @@ export class CourseAnnouncementsService {
     };
   }
 
-  async createDraft(
-    adminUserId: string,
-    dto: CreateCourseAnnouncementDto,
-  ): Promise<Record<string, unknown>> {
-    const workshop = await this.workshopRepo.findOne({
-      where: { id: dto.workshopId },
-    });
-    if (!workshop) throw new NotFoundException('Cohort not found');
+  // async createDraft(
+  //   adminUserId: string,
+  //   dto: CreateCourseAnnouncementDto,
+  // ): Promise<Record<string, unknown>> {
+  //   const workshop = await this.workshopRepo.findOne({
+  //     where: { id: dto.workshopId },
+  //   });
+  //   if (!workshop) throw new NotFoundException('Cohort not found');
 
-    if (
-      dto.recipientMode === CourseAnnouncementRecipientMode.SELECTED &&
-      !dto.recipientIds?.length
-    ) {
-      throw new BadRequestException(
-        'recipientIds is required when recipientMode is SELECTED',
-      );
-    }
+  //   if (
+  //     dto.recipientMode === CourseAnnouncementRecipientMode.SELECTED &&
+  //     !dto.recipientIds?.length
+  //   ) {
+  //     throw new BadRequestException(
+  //       'recipientIds is required when recipientMode is SELECTED',
+  //     );
+  //   }
 
-    const result = await this.dataSource.transaction(async (manager) => {
-      const b = manager.create(NewsletterBroadcast, {
-        channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT,
-        contentType: NewsletterContentType.CUSTOM_MESSAGE,
-        status: NewsletterBroadcastStatus.DRAFT,
-        subjectLine: dto.subjectLine.trim(),
-        preheaderText: null,
-        internalName: null,
-        estimatedRecipientsCount: 0,
-        sentRecipientsCount: 0,
-        openedRecipientsCount: 0,
-        openRatePercent: '0',
-        createdByAdminId: adminUserId,
-        updatedByAdminId: adminUserId,
-      });
+  //   const result = await this.dataSource.transaction(async (manager) => {
+  //     const b = manager.create(NewsletterBroadcast, {
+  //       channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT,
+  //       contentType: NewsletterContentType.CUSTOM_MESSAGE,
+  //       status: NewsletterBroadcastStatus.DRAFT,
+  //       subjectLine: dto.subjectLine.trim(),
+  //       preheaderText: null,
+  //       internalName: null,
+  //       estimatedRecipientsCount: 0,
+  //       sentRecipientsCount: 0,
+  //       openedRecipientsCount: 0,
+  //       openRatePercent: '0',
+  //       createdByAdminId: adminUserId,
+  //       updatedByAdminId: adminUserId,
+  //     });
 
-      const saved = await manager.save(NewsletterBroadcast, b);
+  //     const saved = await manager.save(NewsletterBroadcast, b);
 
-      await manager.save(
-        NewsletterBroadcastCustomContent,
-        manager.create(NewsletterBroadcastCustomContent, {
-          broadcastId: saved.id,
-          messageBodyHtml: dto.messageBodyHtml.trim(),
-          messageBodyText: dto.messageBodyText?.trim() || null,
-        }),
-      );
+  //     await manager.save(
+  //       NewsletterBroadcastCustomContent,
+  //       manager.create(NewsletterBroadcastCustomContent, {
+  //         broadcastId: saved.id,
+  //         messageBodyHtml: dto.messageBodyHtml.trim(),
+  //         messageBodyText: dto.messageBodyText?.trim() || null,
+  //       }),
+  //     );
 
-      await manager.save(
-        NewsletterCourseAnnouncement,
-        manager.create(NewsletterCourseAnnouncement, {
-          broadcastId: saved.id,
-          workshopId: dto.workshopId,
-          priority: dto.priority,
-          recipientMode: dto.recipientMode,
-          pushToStudentPanel: dto.pushToStudentPanel ?? false,
-        }),
-      );
+  //     await manager.save(
+  //       NewsletterCourseAnnouncement,
+  //       manager.create(NewsletterCourseAnnouncement, {
+  //         broadcastId: saved.id,
+  //         workshopId: dto.workshopId,
+  //         priority: dto.priority,
+  //         recipientMode: dto.recipientMode,
+  //         pushToStudentPanel: dto.pushToStudentPanel ?? false,
+  //       }),
+  //     );
 
-      const recipientsCount = await this.applyRecipients(
-        manager,
-        saved.id,
-        dto.workshopId,
-        dto.recipientMode,
-        dto.recipientIds ?? [],
-      );
-      saved.estimatedRecipientsCount = recipientsCount;
-      await manager.save(NewsletterBroadcast, saved);
+  //     const recipientsCount = await this.applyRecipients(
+  //       manager,
+  //       saved.id,
+  //       dto.workshopId,
+  //       dto.recipientMode,
+  //       dto.recipientIds ?? [],
+  //     );
+  //     saved.estimatedRecipientsCount = recipientsCount;
+  //     await manager.save(NewsletterBroadcast, saved);
 
-      return saved;
-    });
+  //     return saved;
+  //   });
 
-    return {
-      message: 'Course announcement draft created successfully',
-      id: result.id,
-      subjectLine: result.subjectLine,
-    };
-  }
+  //   return {
+  //     message: 'Course announcement draft created successfully',
+  //     id: result.id,
+  //     subjectLine: result.subjectLine,
+  //   };
+  // }
 
   async getDetail(broadcastId: string): Promise<Record<string, unknown>> {
     const b = await this.broadcastRepo.findOne({
