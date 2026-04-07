@@ -941,30 +941,75 @@ export class WorkshopsService {
     const subtotal = appliedPricePerSeat * numberOfSeats;
     const totalPrice = subtotal;
 
-    // Create order summary
-    const orderSummary = this.orderSummariesRepo.create({
-      workshopId: dto.workshopId,
-      userId,
-      numberOfSeats,
-      pricePerSeat: appliedPricePerSeat.toString(),
-      totalPrice: totalPrice.toString(),
-      discountApplied,
-      discountInfo: discountInfo ? JSON.stringify(discountInfo) : null,
-      status: OrderSummaryStatus.PENDING,
-      attendees: dto.attendees.map((attendee) => ({
+    // Upsert behavior: update existing pending summary for same user+workshop,
+    // otherwise create a fresh pending summary.
+    const existingPendingSummary = await this.orderSummariesRepo.findOne({
+      where: {
+        workshopId: dto.workshopId,
+        userId,
+        status: OrderSummaryStatus.PENDING,
+      },
+      relations: ['attendees'],
+      order: { updatedAt: 'DESC' },
+    });
+
+    let saved: WorkshopOrderSummary;
+    let upsertAction: 'created' | 'updated' = 'created';
+
+    if (existingPendingSummary) {
+      upsertAction = 'updated';
+
+      // Replace previous attendee list with the new payload.
+      if (existingPendingSummary.attendees?.length) {
+        await this.orderAttendeesRepo.delete({
+          orderSummaryId: existingPendingSummary.id,
+        });
+      }
+
+      existingPendingSummary.numberOfSeats = numberOfSeats;
+      existingPendingSummary.pricePerSeat = appliedPricePerSeat.toString();
+      existingPendingSummary.totalPrice = totalPrice.toString();
+      existingPendingSummary.discountApplied = discountApplied;
+      existingPendingSummary.discountInfo = discountInfo
+        ? JSON.stringify(discountInfo)
+        : undefined;
+      existingPendingSummary.status = OrderSummaryStatus.PENDING;
+      existingPendingSummary.attendees = dto.attendees.map((attendee) => ({
         fullName: attendee.fullName,
         professionalRole: attendee.professionalRole,
         npiNumber: attendee.npiNumber,
         email: attendee.email,
-      })),
-    } as DeepPartial<WorkshopOrderSummary>);
+      })) as any;
 
-    const saved = await this.orderSummariesRepo.save(
-      orderSummary as WorkshopOrderSummary,
-    );
+      saved = await this.orderSummariesRepo.save(existingPendingSummary);
+    } else {
+      const orderSummary = this.orderSummariesRepo.create({
+        workshopId: dto.workshopId,
+        userId,
+        numberOfSeats,
+        pricePerSeat: appliedPricePerSeat.toString(),
+        totalPrice: totalPrice.toString(),
+        discountApplied,
+        discountInfo: discountInfo ? JSON.stringify(discountInfo) : null,
+        status: OrderSummaryStatus.PENDING,
+        attendees: dto.attendees.map((attendee) => ({
+          fullName: attendee.fullName,
+          professionalRole: attendee.professionalRole,
+          npiNumber: attendee.npiNumber,
+          email: attendee.email,
+        })),
+      } as DeepPartial<WorkshopOrderSummary>);
+
+      saved = await this.orderSummariesRepo.save(
+        orderSummary as WorkshopOrderSummary,
+      );
+    }
 
     return {
-      message: 'Order summary created successfully',
+      message:
+        upsertAction === 'updated'
+          ? 'Order summary updated successfully'
+          : 'Order summary created successfully',
       data: {
         orderSummaryId: saved.id,
         workshop: {
