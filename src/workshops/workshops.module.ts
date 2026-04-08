@@ -11,6 +11,7 @@ import { WorkshopReservation } from './entities/workshop-reservation.entity';
 import { WorkshopAttendee } from './entities/workshop-attendee.entity';
 import { WorkshopOrderSummary } from './entities/workshop-order-summary.entity';
 import { WorkshopOrderAttendee } from './entities/workshop-order-attendee.entity';
+import { WorkshopEnrollment } from './entities/workshop-enrollment.entity';
 import { Facility } from '../facilities/entities/facility.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import { AuthModule } from '../auth/auth.module';

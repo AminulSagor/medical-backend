@@ -10,6 +10,7 @@ import { WorkshopReservation } from './entities/workshop-reservation.entity';
 import { WorkshopAttendee } from './entities/workshop-attendee.entity';
 import { WorkshopOrderSummary } from './entities/workshop-order-summary.entity';
 import { WorkshopOrderAttendee } from './entities/workshop-order-attendee.entity';
+import { WorkshopEnrollment } from './entities/workshop-enrollment.entity';
 import { CreateWorkshopDto } from './dto/create-workshop.dto';
 import { UpdateWorkshopDto } from './dto/update-workshop.dto';
 import { CreateReservationDto } from './dto/create-reservation.dto';
@@ -892,6 +893,121 @@ export class WorkshopsService {
         createdAt: workshop.createdAt,
         updatedAt: workshop.updatedAt,
       },
+    };
+  }
+
+  async getMyEnrolledWorkshops(userId: string) {
+    const enrollments = await this.enrollmentsRepo.find({
+      where: { userId, isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    const reservations = await this.reservationsRepo.find({
+      where: { userId, status: ReservationStatus.CONFIRMED },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (enrollments.length === 0 && reservations.length === 0) {
+      return {
+        message: 'Enrolled workshops fetched successfully',
+        data: [],
+      };
+    }
+
+    const enrollmentByWorkshop = new Map<string, WorkshopEnrollment>();
+    for (const enrollment of enrollments) {
+      if (!enrollmentByWorkshop.has(enrollment.workshopId)) {
+        enrollmentByWorkshop.set(enrollment.workshopId, enrollment);
+      }
+    }
+
+    const latestReservationByWorkshop = new Map<string, WorkshopReservation>();
+    for (const reservation of reservations) {
+      if (!latestReservationByWorkshop.has(reservation.workshopId)) {
+        latestReservationByWorkshop.set(reservation.workshopId, reservation);
+      }
+    }
+
+    const workshopMeta = new Map<
+      string,
+      {
+        enrolledAt: Date;
+        source: 'enrollment' | 'reservation';
+      }
+    >();
+
+    for (const enrollment of enrollmentByWorkshop.values()) {
+      workshopMeta.set(enrollment.workshopId, {
+        enrolledAt: enrollment.createdAt,
+        source: 'enrollment',
+      });
+    }
+
+    for (const reservation of latestReservationByWorkshop.values()) {
+      const existing = workshopMeta.get(reservation.workshopId);
+      if (!existing || reservation.createdAt > existing.enrolledAt) {
+        workshopMeta.set(reservation.workshopId, {
+          enrolledAt: reservation.createdAt,
+          source: 'reservation',
+        });
+      }
+    }
+
+    const workshopIds = [...workshopMeta.entries()]
+      .sort((a, b) => +b[1].enrolledAt - +a[1].enrolledAt)
+      .map(([workshopId]) => workshopId);
+
+    const workshops = await this.workshopsRepo.find({
+      where: workshopIds.map((id) => ({ id })),
+      relations: ['days'],
+    });
+
+    const workshopById = new Map(workshops.map((workshop) => [workshop.id, workshop]));
+
+    const data = workshopIds
+      .map((workshopId) => {
+        const meta = workshopMeta.get(workshopId);
+        const reservation = latestReservationByWorkshop.get(workshopId);
+        const workshop = workshopById.get(workshopId);
+
+        if (!meta || !workshop) {
+          return null;
+        }
+
+        const dayDates = (workshop.days ?? [])
+          .map((day) => new Date(day.date))
+          .filter((date) => !Number.isNaN(date.getTime()))
+          .sort((a, b) => +a - +b);
+
+        const startDate = dayDates.length > 0 ? dayDates[0] : null;
+        const endDate = dayDates.length > 0 ? dayDates[dayDates.length - 1] : null;
+
+        return {
+          workshopId: workshop.id,
+          title: workshop.title,
+          deliveryMode: workshop.deliveryMode,
+          workshopPhoto: workshop.coverImageUrl ?? null,
+          isEnrolled: true,
+          enrollmentSource: meta.source,
+          enrolledAt: meta.enrolledAt,
+          reservation: reservation
+            ? {
+                reservationId: reservation.id,
+                status: reservation.status,
+                numberOfSeats: reservation.numberOfSeats,
+                pricePerSeat: reservation.pricePerSeat,
+                totalPrice: reservation.totalPrice,
+              }
+            : null,
+          startDate,
+          endDate,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      message: 'Enrolled workshops fetched successfully',
+      data,
     };
   }
 
