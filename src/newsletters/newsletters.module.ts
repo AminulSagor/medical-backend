@@ -38,7 +38,10 @@ import { NewsletterDeliveryRecipient } from './delivery/entities/newsletter-deli
 import { NewsletterTransmissionEvent } from './delivery/entities/newsletter-transmission-event.entity';
 
 // Unsubscribe
-import { UnsubscribeController } from './unsubscribe/unsubscribe.controller';
+import {
+  PublicUnsubscribeController,
+  UnsubscribeController,
+} from './unsubscribe/unsubscribe.controller';
 import { UnsubscribeService } from './unsubscribe/unsubscribe.service';
 import { NewsletterUnsubscribeRequest } from './unsubscribe/entities/newsletter-unsubscribe-request.entity';
 
@@ -100,6 +103,7 @@ import { PublicSubscribersController } from './audience/public-subscribers.contr
     SubscribersController,
     // SegmentsController,
     UnsubscribeController,
+    PublicUnsubscribeController,
     DeliveryWebhooksController,
     PublicSubscribersController,
   ],

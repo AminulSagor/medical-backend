@@ -13,6 +13,7 @@ import { NewsletterDeliveryRecipient } from 'src/newsletters/delivery/entities/n
 import { NewsletterTransmissionEvent } from 'src/newsletters/delivery/entities/newsletter-transmission-event.entity';
 
 import { NewsletterSubscriber } from 'src/newsletters/audience/entities/newsletter-subscriber.entity';
+import { NewsletterUnsubscribeRequest } from '../unsubscribe/entities/newsletter-unsubscribe-request.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { NewsletterSubscriber } from 'src/newsletters/audience/entities/newslett
       NewsletterDeliveryRecipient,
       NewsletterTransmissionEvent,
       NewsletterSubscriber,
+      NewsletterUnsubscribeRequest,
     ]),
   ],
   controllers: [TransmissionsController],

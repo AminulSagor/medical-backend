@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, LessThan, Like, Repository } from 'typeorm';
 
 import { NewsletterBroadcast } from 'src/newsletters/broadcasts/entities/newsletter-broadcast.entity';
 import { NewsletterBroadcastArticleLink } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-article-link.entity';
@@ -21,12 +21,11 @@ import {
 import { ListTransmissionsQueryDto } from './dto/list-transmissions-query.dto';
 import { ArchiveTransmissionsDto } from './dto/archive-transmissions.dto';
 import { ListTransmissionRecipientsQueryDto } from './dto/list-transmission-recipients-query.dto';
+import { NewsletterUnsubscribeRequest } from '../unsubscribe/entities/newsletter-unsubscribe-request.entity';
 
 @Injectable()
 export class TransmissionsService {
   constructor(
-    private readonly dataSource: DataSource,
-
     @InjectRepository(NewsletterBroadcast)
     private readonly broadcastRepo: Repository<NewsletterBroadcast>,
 
@@ -45,8 +44,8 @@ export class TransmissionsService {
     @InjectRepository(NewsletterTransmissionEvent)
     private readonly eventRepo: Repository<NewsletterTransmissionEvent>,
 
-    @InjectRepository(NewsletterSubscriber)
-    private readonly subscriberRepo: Repository<NewsletterSubscriber>,
+    @InjectRepository(NewsletterUnsubscribeRequest)
+    private readonly unsubRepo: Repository<NewsletterUnsubscribeRequest>,
   ) {}
 
   async list(
@@ -54,6 +53,8 @@ export class TransmissionsService {
   ): Promise<Record<string, unknown>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const now = new Date();
+    const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
@@ -62,148 +63,118 @@ export class TransmissionsService {
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere(
-        `LOWER(b.subjectLine) LIKE :s OR LOWER(COALESCE(b.internalName,'')) LIKE :s`,
+        `(LOWER(b.subjectLine) LIKE :s OR LOWER(COALESCE(b.internalName,'')) LIKE :s)`,
         { s },
       );
     }
 
-    if (query.dateFrom) {
-      qb.andWhere('b.sentAt >= :from', { from: new Date(query.dateFrom) });
-    }
-    if (query.dateTo) {
-      qb.andWhere('b.sentAt <= :to', { to: new Date(query.dateTo) });
-    }
-
-    qb.orderBy('b.sentAt', query.sortOrder ?? 'DESC');
-    qb.skip((page - 1) * limit).take(limit);
+    qb.orderBy('b.sentAt', query.sortOrder ?? 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
 
     const [items, total] = await qb.getManyAndCount();
-    const ids = items.map((x) => x.id);
 
-    // engagement aggregates (open/click/bounce)
-    const agg = ids.length
-      ? await this.recipientRepo
-          .createQueryBuilder('r')
-          .select('r.broadcastId', 'broadcastId')
-          .addSelect('COUNT(*)', 'total')
-          .addSelect(
-            `SUM(CASE WHEN r.firstOpenedAt IS NOT NULL THEN 1 ELSE 0 END)`,
-            'opened',
-          )
-          .addSelect(
-            `SUM(CASE WHEN r.firstClickedAt IS NOT NULL THEN 1 ELSE 0 END)`,
-            'clicked',
-          )
-          .addSelect(
-            `SUM(CASE WHEN r.deliveryStatus = :bounced THEN 1 ELSE 0 END)`,
-            'bounced',
-          )
-          .where('r.broadcastId IN (:...ids)', { ids })
-          .setParameter('bounced', NewsletterDeliveryRecipientStatus.BOUNCED)
-          .groupBy('r.broadcastId')
-          .getRawMany<{
-            broadcastId: string;
-            total: string;
-            opened: string;
-            clicked: string;
-            bounced: string;
-          }>()
-      : [];
+    // 1. CALCULATE ACTUAL GLOBAL METRICS FOR CARDS
+    const globalStats = await this.broadcastRepo
+      .createQueryBuilder('b')
+      .select('COUNT(*)', 'totalSent')
+      .addSelect('AVG(CAST(b.openRatePercent AS NUMERIC))', 'avgOpenRate')
+      .where('b.status = :status', { status: NewsletterBroadcastStatus.SENT })
+      .getRawOne();
 
-    const aggMap = new Map(
-      agg.map((a) => [
-        a.broadcastId,
-        {
-          total: Number(a.total || 0),
-          opened: Number(a.opened || 0),
-          clicked: Number(a.clicked || 0),
-          bounced: Number(a.bounced || 0),
-        },
-      ]),
-    );
-
-    // top cards across current filtered set
-    const totals = [...aggMap.values()].reduce(
-      (acc, x) => {
-        acc.totalRecipients += x.total;
-        acc.opened += x.opened;
-        acc.bounced += x.bounced;
-        return acc;
+    const sentLastWeekCount = await this.broadcastRepo.count({
+      where: {
+        status: NewsletterBroadcastStatus.SENT,
+        sentAt: LessThan(lastWeek),
       },
-      { totalRecipients: 0, opened: 0, bounced: 0 },
-    );
+    });
 
-    const avgOpenRate =
-      totals.totalRecipients > 0
-        ? Number(((totals.opened / totals.totalRecipients) * 100).toFixed(0))
+    const totalSentCount = Number(globalStats.totalSent || 0);
+    const growthRate =
+      sentLastWeekCount > 0
+        ? Number(
+            (
+              ((totalSentCount - sentLastWeekCount) / sentLastWeekCount) *
+              100
+            ).toFixed(1),
+          )
         : 0;
 
-    const bounceRate =
-      totals.totalRecipients > 0
-        ? Number(((totals.bounced / totals.totalRecipients) * 100).toFixed(1))
+    // 2. CALCULATE ACTUAL GLOBAL BOUNCE RATE
+    const globalBounceStats = await this.recipientRepo
+      .createQueryBuilder('r')
+      .select('COUNT(*)', 'totalRecipients')
+      .addSelect(
+        `SUM(CASE WHEN r.deliveryStatus = :bounced THEN 1 ELSE 0 END)`,
+        'bouncedCount',
+      )
+      .setParameter('bounced', NewsletterDeliveryRecipientStatus.BOUNCED)
+      .getRawOne();
+
+    const totalRecipientsAllTime = Number(
+      globalBounceStats.totalRecipients || 0,
+    );
+    const globalBounceRate =
+      totalRecipientsAllTime > 0
+        ? Number(
+            (
+              (Number(globalBounceStats.bouncedCount) /
+                totalRecipientsAllTime) *
+              100
+            ).toFixed(2),
+          )
         : 0;
 
     return {
       cards: {
-        totalSent: total,
-        avgOpenRatePercent: avgOpenRate,
-        bounceRatePercent: bounceRate,
+        totalSent: {
+          value: totalSentCount,
+          growthRatePercent: growthRate,
+        },
+        avgOpenRatePercent: Number(
+          Number(globalStats.avgOpenRate || 0).toFixed(1),
+        ),
+        bounceRatePercent: globalBounceRate,
       },
-      items: items.map((b) => {
-        const a = aggMap.get(b.id) ?? {
-          total: 0,
-          opened: 0,
-          clicked: 0,
-          bounced: 0,
-        };
+      items: await Promise.all(
+        items.map(async (b) => {
+          // Calculate unique click rate for this specific broadcast
+          const clickStats = await this.recipientRepo
+            .createQueryBuilder('r')
+            .select('COUNT(*)', 'total')
+            .addSelect(
+              'SUM(CASE WHEN r.firstClickedAt IS NOT NULL THEN 1 ELSE 0 END)',
+              'clicked',
+            )
+            .where('r.broadcastId = :id', { id: b.id })
+            .getRawOne();
 
-        const openRate = a.total
-          ? Number(((a.opened / a.total) * 100).toFixed(0))
-          : 0;
-        const clickRate = a.total
-          ? Number(((a.clicked / a.total) * 100).toFixed(0))
-          : 0;
+          const bTotal = Number(clickStats.total || 0);
+          const bClicked = Number(clickStats.clicked || 0);
+          const clickRate =
+            bTotal > 0 ? Number(((bClicked / bTotal) * 100).toFixed(1)) : 0;
 
-        const audienceLabel =
-          b.channelType === NewsletterChannelType.GENERAL
-            ? 'All Subscribers'
-            : 'Target cohorts';
-
-        const typeBadge =
-          b.channelType === NewsletterChannelType.COURSE_ANNOUNCEMENT
-            ? 'CLASS UPDATE'
-            : 'NEWSLETTER';
-
-        return {
-          id: b.id,
-          status: { code: b.status, label: 'Sent' },
-          type: { label: typeBadge },
-          subject: b.subjectLine,
-          targetAudience: audienceLabel,
-          rates: { openRatePercent: openRate, clickRatePercent: clickRate },
-          sentAt: b.sentAt,
-          actions: { viewSentContent: true, viewReport: true },
-        };
-      }),
+          return {
+            id: b.id,
+            status: { code: b.status, label: 'Sent' },
+            type: {
+              label:
+                b.channelType === NewsletterChannelType.COURSE_ANNOUNCEMENT
+                  ? 'CLASS UPDATE'
+                  : 'NEWSLETTER',
+            },
+            subject: b.subjectLine,
+            targetAudience: 'All Subscribers',
+            rates: {
+              openRatePercent: Number(b.openRatePercent || 0),
+              clickRatePercent: clickRate,
+            },
+            sentAt: b.sentAt,
+            actions: { viewSentContent: true, viewReport: true },
+          };
+        }),
+      ),
       meta: { page, limit, total },
-    };
-  }
-
-  async archive(
-    adminUserId: string,
-    dto: ArchiveTransmissionsDto,
-  ): Promise<Record<string, unknown>> {
-    // simple archive = set internalName prefix or a future 'archivedAt' column
-    // MVP: keep clean minimal response
-    await this.broadcastRepo.update(
-      { id: In(dto.broadcastIds), status: NewsletterBroadcastStatus.SENT },
-      { updatedByAdminId: adminUserId },
-    );
-
-    return {
-      message: 'Transmissions archived successfully',
-      id: dto.broadcastIds[0],
-      archivedCount: dto.broadcastIds.length,
     };
   }
 
@@ -213,7 +184,8 @@ export class TransmissionsService {
     });
     if (!b) throw new NotFoundException('Transmission not found');
 
-    const totals = await this.recipientRepo
+    // 1. CALCULATE ACTUAL RECIPIENT ENGAGEMENT
+    const stats = await this.recipientRepo
       .createQueryBuilder('r')
       .select('COUNT(*)', 'total')
       .addSelect(
@@ -228,25 +200,13 @@ export class TransmissionsService {
         `SUM(CASE WHEN r.firstClickedAt IS NOT NULL THEN 1 ELSE 0 END)`,
         'clicked',
       )
-      .addSelect(
-        `SUM(CASE WHEN r.deliveryStatus = :bounced THEN 1 ELSE 0 END)`,
-        'bounced',
-      )
       .where('r.broadcastId = :id', { id: broadcastId })
-      .setParameter('bounced', NewsletterDeliveryRecipientStatus.BOUNCED)
-      .getRawOne<{
-        total: string;
-        delivered: string;
-        opened: string;
-        clicked: string;
-        bounced: string;
-      }>();
+      .getRawOne();
 
-    const total = Number(totals?.total || 0);
-    const delivered = Number(totals?.delivered || 0);
-    const opened = Number(totals?.opened || 0);
-    const clicked = Number(totals?.clicked || 0);
-    const bounced = Number(totals?.bounced || 0);
+    const total = Number(stats.total || 0);
+    const delivered = Number(stats.delivered || 0);
+    const opened = Number(stats.opened || 0);
+    const clicked = Number(stats.clicked || 0);
 
     const deliveryRate = total
       ? Number(((delivered / total) * 100).toFixed(1))
@@ -254,145 +214,133 @@ export class TransmissionsService {
     const openRate = total ? Number(((opened / total) * 100).toFixed(1)) : 0;
     const clickRate = total ? Number(((clicked / total) * 100).toFixed(1)) : 0;
 
-    // engagement over first 24h (bucket by firstOpenedAt)
-    const openedRows = await this.recipientRepo.find({
-      where: { broadcastId, firstOpenedAt: In([null]) as any }, // placeholder to avoid TS issues; we’ll do QB below
-      take: 0,
+    // 2. CALCULATE ACTUAL ATTRITION (UNSUBSCRIBES LINKED TO THIS BROADCAST)
+    // Assumes unsubscription source or notes contains the broadcast ID
+    const attritionCount = await this.unsubRepo.count({
+      where: [
+        { notes: Like(`%broadcastId:${broadcastId}%`) },
+        { source: Like(`%${broadcastId}%`) },
+      ],
     });
+    const attritionPercent =
+      total > 0 ? Number(((attritionCount / total) * 100).toFixed(2)) : 0;
 
-    const rawOpenTimes = await this.recipientRepo
+    // 3. CALCULATE OPEN RATE GROWTH VS HISTORICAL AVERAGE
+    const historicalAvg = await this.broadcastRepo
+      .createQueryBuilder('b')
+      .select('AVG(CAST(b.openRatePercent AS NUMERIC))', 'avg')
+      .where('b.status = :status AND b.id != :id', {
+        status: NewsletterBroadcastStatus.SENT,
+        id: broadcastId,
+      })
+      .getRawOne();
+
+    const avgVal = Number(historicalAvg.avg || 0);
+    const openRateGrowth =
+      avgVal > 0 ? Number((openRate - avgVal).toFixed(1)) : 0;
+
+    // 4. GENERATE ACTUAL ENGAGEMENT BUCKETS (24 HOUR TIMELINE)
+    const openData = await this.recipientRepo
       .createQueryBuilder('r')
       .select(['r.firstOpenedAt', 'r.sentAt'])
-      .where('r.broadcastId = :id', { id: broadcastId })
-      .andWhere('r.firstOpenedAt IS NOT NULL')
+      .where('r.broadcastId = :id AND r.firstOpenedAt IS NOT NULL', {
+        id: broadcastId,
+      })
       .getMany();
 
-    const buckets = Array.from({ length: 24 }, () => 0);
-    for (const r of rawOpenTimes) {
-      if (!r.firstOpenedAt || !r.sentAt) continue;
-      const diffHours = Math.floor(
-        (r.firstOpenedAt.getTime() - r.sentAt.getTime()) / 3600000,
-      );
-      if (diffHours >= 0 && diffHours < 24) buckets[diffHours] += 1;
-    }
-
-    // top links (requires click events to carry URL; MVP parses payloadText if it’s JSON)
-    const clickEvents = await this.eventRepo.find({
-      where: { broadcastId, eventType: 'CLICK' as any },
-      take: 5000,
-      order: { occurredAt: 'ASC' },
-    });
-
-    const linkCounts = new Map<string, number>();
-    for (const ev of clickEvents) {
-      const raw = ev.payloadText || '';
-      let url = '';
-      try {
-        const parsed = JSON.parse(raw);
-        url = String(parsed?.url || parsed?.link || '');
-      } catch {
-        // ignore
+    const buckets = Array(24).fill(0);
+    openData.forEach((r) => {
+      if (r.firstOpenedAt && r.sentAt) {
+        const diffHours = Math.floor(
+          (r.firstOpenedAt.getTime() - r.sentAt.getTime()) / 3600000,
+        );
+        if (diffHours >= 0 && diffHours < 24) buckets[diffHours]++;
       }
-      if (!url) continue;
-      linkCounts.set(url, (linkCounts.get(url) ?? 0) + 1);
-    }
-
-    const topLinks = [...linkCounts.entries()]
-      .sort((a, b2) => b2[1] - a[1])
-      .slice(0, 5)
-      .map(([url, clicks]) => ({ url, clicks }));
+    });
 
     return {
       cards: {
         deliveryRatePercent: deliveryRate,
-        openRatePercent: openRate,
-        clickRatePercent: clickRate,
-        attritionPercent: 0.0, // requires unsubscribe linkage (future)
+        openRate: {
+          value: openRate,
+          growthRatePercent: openRateGrowth, // Actual comparison vs average
+        },
+        clickThroughRatePercent: clickRate,
+        attritionPercent: attritionPercent,
       },
-      engagementOverTime: {
-        unit: 'hour',
-        buckets,
-      },
-      topPerformingLinks: topLinks,
-      actions: {
-        viewSentContent: true,
-      },
+      engagementOverTime: { unit: 'hour', buckets },
+      topPerformingLinks: await this.getTopLinks(broadcastId),
+      recipientLog: await this.listRecipients(broadcastId, {
+        page: 1,
+        limit: 10,
+      }),
     };
+  }
+
+  private async getTopLinks(broadcastId: string) {
+    // 5. CALCULATE ACTUAL TOP LINKS BY CLICK VOLUME
+    const clickEvents = await this.eventRepo.find({
+      where: { broadcastId, eventType: 'CLICK' as any },
+    });
+
+    const counts = new Map<string, number>();
+    clickEvents.forEach((e) => {
+      if (e.payloadText) {
+        try {
+          const payload = JSON.parse(e.payloadText);
+          const url = payload.url || payload.link;
+          if (url) counts.set(url, (counts.get(url) || 0) + 1);
+        } catch {}
+      }
+    });
+
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([url, clicks]) => ({ url, clicks }));
   }
 
   async listRecipients(
     broadcastId: string,
     query: ListTransmissionRecipientsQueryDto,
-  ): Promise<Record<string, unknown>> {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 25;
-    const tab = query.tab ?? 'all';
-
+  ) {
     const qb = this.recipientRepo
       .createQueryBuilder('r')
       .leftJoin(NewsletterSubscriber, 's', 's.id = r.subscriberId')
+      .select([
+        'r.id',
+        'r.emailSnapshot',
+        'r.deliveryStatus',
+        'r.firstOpenedAt',
+        'r.firstClickedAt',
+        'r.sentAt',
+        's.fullName',
+      ])
       .where('r.broadcastId = :id', { id: broadcastId });
 
-    if (tab === 'opened') qb.andWhere('r.firstOpenedAt IS NOT NULL');
-    if (tab === 'clicked') qb.andWhere('r.firstClickedAt IS NOT NULL');
-    if (tab === 'bounced')
-      qb.andWhere('r.deliveryStatus = :b', {
-        b: NewsletterDeliveryRecipientStatus.BOUNCED,
-      });
+    const page = query.page || 1;
+    const limit = query.limit || 10;
 
-    if (query.search?.trim()) {
-      const s = `%${query.search.trim().toLowerCase()}%`;
-      qb.andWhere(
-        "(LOWER(r.emailSnapshot) LIKE :s OR LOWER(COALESCE(s.fullName, '')) LIKE :s)",
-        { s },
-      );
-    }
-
-    qb.orderBy('COALESCE(r.lastEventAt, r.sentAt)', 'DESC');
-    qb.skip((page - 1) * limit).take(limit);
-
-    const [rows, total] = await qb.getManyAndCount();
+    const [items, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
 
     return {
-      tab,
-      items: rows.map((r: any) => {
-        const status =
-          r.deliveryStatus === NewsletterDeliveryRecipientStatus.BOUNCED
-            ? 'BOUNCED'
-            : r.firstClickedAt
-              ? 'CLICKED'
-              : r.firstOpenedAt
-                ? 'OPENED'
-                : r.sentAt
-                  ? 'SENT'
-                  : '—';
-
-        const timestamp =
-          r.firstClickedAt ||
-          r.firstOpenedAt ||
-          r.deliveredAt ||
-          r.sentAt ||
-          null;
-
-        return {
-          id: r.id,
-          recipient: {
-            name: r.subscriberId ? (r.s_fullName ?? null) : null,
-            email: r.emailSnapshot,
-          },
-          status,
-          device: null, // add if you store device in events later
-          timestamp,
-        };
-      }),
-      meta: { page, limit, total },
+      items: items.map((r) => ({
+        recipient: {
+          name: (r as any).s?.fullName || null,
+          email: r.emailSnapshot,
+        },
+        status: r.deliveryStatus,
+        timestamp: r.firstClickedAt || r.firstOpenedAt || r.sentAt,
+      })),
+      meta: { total, page, limit },
     };
   }
 
   async getSentContent(broadcastId: string): Promise<Record<string, unknown>> {
-    const b = await this.broadcastRepo.findOne({
-      where: { id: broadcastId },
-    });
+    const b = await this.broadcastRepo.findOne({ where: { id: broadcastId } });
     if (!b) throw new NotFoundException('Broadcast not found');
 
     const [articleLink, customContent, attachments] = await Promise.all([
@@ -407,10 +355,8 @@ export class TransmissionsService {
     return {
       subjectLine: b.subjectLine,
       sentAt: b.sentAt,
-      fromLabel: 'Texas Airway Institute <education@tai.edu>',
       content: {
         html: customContent?.messageBodyHtml ?? null,
-        text: customContent?.messageBodyText ?? null,
         article: articleLink
           ? {
               title: articleLink.sourceTitleSnapshot,
@@ -420,13 +366,21 @@ export class TransmissionsService {
             }
           : null,
       },
-      attachments: attachments.map((a) => ({
-        id: a.id,
-        filename: a.fileName,
-        mimeType: a.mimeType,
-        sizeBytes: Number(a.fileSizeBytes),
-        storageKey: a.fileKey,
-      })),
+      attachments: attachments.map((a) => ({ id: a.id, filename: a.fileName })),
+    };
+  }
+
+  async archive(
+    adminUserId: string,
+    dto: ArchiveTransmissionsDto,
+  ): Promise<Record<string, unknown>> {
+    await this.broadcastRepo.update(
+      { id: In(dto.broadcastIds), status: NewsletterBroadcastStatus.SENT },
+      { updatedByAdminId: adminUserId },
+    );
+    return {
+      message: 'Transmissions archived successfully',
+      archivedCount: dto.broadcastIds.length,
     };
   }
 }

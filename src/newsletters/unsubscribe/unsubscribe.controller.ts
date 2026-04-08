@@ -71,11 +71,12 @@ import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from 'src/auth/decorators/roles.decorator';
 
-@Controller('unsubscribe')
+// ADMIN ENDPOINTS
+@Controller('admin/newsletters/general/unsubscribe-requests')
 export class UnsubscribeController {
   constructor(private readonly unsubscribeService: UnsubscribeService) {}
 
-  @Get('requests')
+  @Get() // Full path: GET /admin/newsletters/general/unsubscribe-requests
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   list(
@@ -84,14 +85,14 @@ export class UnsubscribeController {
     return this.unsubscribeService.list(query);
   }
 
-  @Get('requests/:id')
+  @Get(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   getDetail(@Param('id') id: string): Promise<Record<string, unknown>> {
     return this.unsubscribeService.getDetail(id);
   }
 
-  @Post('requests/:id/confirm')
+  @Post(':id/confirm')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   confirm(
@@ -102,7 +103,7 @@ export class UnsubscribeController {
     return this.unsubscribeService.confirm(req.user.id, id, dto);
   }
 
-  @Post('requests/:id/dismiss')
+  @Post(':id/dismiss')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   dismiss(
@@ -113,7 +114,17 @@ export class UnsubscribeController {
     return this.unsubscribeService.dismiss(req.user.id, id, dto);
   }
 
-  @Post('requests/bulk-process')
+  @Post(':id/restore')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  restore(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ): Promise<Record<string, unknown>> {
+    return this.unsubscribeService.restore(req.user.id, id);
+  }
+
+  @Post('bulk-process')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   bulkProcess(
@@ -123,14 +134,23 @@ export class UnsubscribeController {
     return this.unsubscribeService.bulkProcess(req.user.id, dto);
   }
 
-  @Get('export')
+  @Post('mark-all-processed')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  markAllProcessed(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<Record<string, unknown>> {
+    return this.unsubscribeService.markAllProcessed(req.user.id);
+  }
+
+  @Get('actions/export')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   exportList(): Promise<Record<string, unknown>> {
     return this.unsubscribeService.exportUnsubscribed();
   }
 
-  @Post('sync-blocklist')
+  @Post('actions/sync-blocklist')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   syncBlocklist(
@@ -138,8 +158,14 @@ export class UnsubscribeController {
   ): Promise<Record<string, unknown>> {
     return this.unsubscribeService.syncBlocklist(req.user.id);
   }
+}
 
-  @Get('general/unsubscribe')
+// PUBLIC ENDPOINT
+@Controller('public/newsletters/general')
+export class PublicUnsubscribeController {
+  constructor(private readonly unsubscribeService: UnsubscribeService) {}
+
+  @Get('unsubscribe') // Full path: GET /public/newsletters/general/unsubscribe
   publicUnsubscribe(
     @Query() query: PublicUnsubscribeQueryDto,
   ): Promise<Record<string, unknown>> {
