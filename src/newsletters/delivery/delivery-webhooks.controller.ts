@@ -8,8 +8,8 @@ export class DeliveryWebhooksController {
   ) {}
 
   @Post('events')
-  ingestEvents(
-    @Body() payload: unknown,
+  async ingestEvents(
+    @Body() payload: any,
     @Headers('x-provider-signature') signature?: string,
     @Headers('x-provider') provider?: string,
   ): Promise<Record<string, unknown>> {

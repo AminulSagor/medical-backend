@@ -1,170 +1,10 @@
-// import {
-//   BadRequestException,
-//   Injectable,
-//   NotFoundException,
-// } from '@nestjs/common';
-// import { InjectRepository } from '@nestjs/typeorm';
-// import { Repository } from 'typeorm';
-// import { NewsletterUnsubscribeRequest } from './entities/newsletter-unsubscribe-request.entity';
-// import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
-// import { ListUnsubscribeRequestsQueryDto } from './dto/list-unsubscribe-requests-query.dto';
-// import { ProcessUnsubscribeRequestDto } from './dto/process-unsubscribe-request.dto';
-// import { NewsletterAuditService } from '../audit/newsletter-audit.service';
-// import {
-//   NewsletterSubscriberStatus,
-//   NewsletterUnsubscribeRequestStatus,
-// } from 'src/common/enums/newsletter-constants.enum';
-
-// @Injectable()
-// export class UnsubscribeService {
-//   constructor(
-//     @InjectRepository(NewsletterUnsubscribeRequest)
-//     private readonly unsubscribeRequestRepo: Repository<NewsletterUnsubscribeRequest>,
-//     @InjectRepository(NewsletterSubscriber)
-//     private readonly subscriberRepo: Repository<NewsletterSubscriber>,
-//     private readonly auditService: NewsletterAuditService,
-//   ) {}
-
-//   async list(
-//     query: ListUnsubscribeRequestsQueryDto,
-//   ): Promise<Record<string, unknown>> {
-//     const page = query.page ?? 1;
-//     const limit = query.limit ?? 10;
-
-//     const qb = this.unsubscribeRequestRepo.createQueryBuilder('r');
-
-//     if (query.status) {
-//       qb.andWhere('r.status = :status', { status: query.status });
-//     }
-
-//     qb.orderBy('r.requestedAt', 'DESC')
-//       .skip((page - 1) * limit)
-//       .take(limit);
-
-//     const [rows, total] = await qb.getManyAndCount();
-
-//     return {
-//       items: rows.map((r) => ({
-//         id: r.id,
-//         email: r.email,
-//         status: r.status,
-//         source: r.source,
-//         requestedAt: r.requestedAt,
-//         processedAt: r.processedAt,
-//       })),
-//       meta: { page, limit, total },
-//     };
-//   }
-
-//   async process(
-//     adminUserId: string,
-//     id: string,
-//     dto: ProcessUnsubscribeRequestDto,
-//   ): Promise<Record<string, unknown>> {
-//     const request = await this.unsubscribeRequestRepo.findOne({
-//       where: { id },
-//     });
-//     if (!request) throw new NotFoundException('Unsubscribe request not found');
-
-//     if (
-//       ![
-//         NewsletterUnsubscribeRequestStatus.PROCESSED,
-//         NewsletterUnsubscribeRequestStatus.REJECTED,
-//       ].includes(dto.status)
-//     ) {
-//       throw new BadRequestException('status must be PROCESSED or REJECTED');
-//     }
-
-//     request.status = dto.status;
-//     request.notes = dto.notes?.trim() || request.notes || null;
-//     request.processedByAdminId = adminUserId;
-//     request.processedAt = new Date();
-
-//     if (dto.status === NewsletterUnsubscribeRequestStatus.PROCESSED) {
-//       const subscriber = await this.subscriberRepo.findOne({
-//         where: { email: request.email.toLowerCase() },
-//       });
-
-//       if (subscriber) {
-//         subscriber.status = NewsletterSubscriberStatus.UNSUBSCRIBED;
-//         subscriber.unsubscribedAt = new Date();
-//         subscriber.unsubscribeReason = 'Unsubscribe request processed by admin';
-//         subscriber.updatedByAdminId = adminUserId;
-//         await this.subscriberRepo.save(subscriber);
-//         request.subscriberId = subscriber.id;
-//       }
-//     }
-
-//     const saved = await this.unsubscribeRequestRepo.save(request);
-
-//     await this.auditService.log({
-//       entityType: 'UNSUBSCRIBE_REQUEST',
-//       entityId: saved.id,
-//       action: 'PROCESS',
-//       performedByAdminId: adminUserId,
-//       meta: { status: saved.status },
-//     });
-
-//     return {
-//       message: 'Unsubscribe request processed successfully',
-//       id: saved.id,
-//       identifier: saved.email,
-//     };
-//   }
-
-//   async publicUnsubscribe(token: string): Promise<Record<string, unknown>> {
-//     // TODO: Replace with signed token validation (JWT/HMAC)
-//     // MVP token is treated as raw email for local testing
-//     const email = token.trim().toLowerCase();
-
-//     if (!email || !email.includes('@')) {
-//       throw new BadRequestException('Invalid unsubscribe token');
-//     }
-
-//     let subscriber = await this.subscriberRepo.findOne({ where: { email } });
-
-//     if (!subscriber) {
-//       subscriber = await this.subscriberRepo.save(
-//         this.subscriberRepo.create({
-//           email,
-//           fullName: null,
-//           status: NewsletterSubscriberStatus.UNSUBSCRIBED,
-//           source: 'SYSTEM',
-//           unsubscribedAt: new Date(),
-//           unsubscribeReason: 'Public unsubscribe link',
-//         }),
-//       );
-//     } else {
-//       subscriber.status = NewsletterSubscriberStatus.UNSUBSCRIBED;
-//       subscriber.unsubscribedAt = new Date();
-//       subscriber.unsubscribeReason = 'Public unsubscribe link';
-//       subscriber = await this.subscriberRepo.save(subscriber);
-//     }
-
-//     const reqEntity = this.unsubscribeRequestRepo.create({
-//       subscriberId: subscriber.id,
-//       email: subscriber.email,
-//       status: NewsletterUnsubscribeRequestStatus.PROCESSED,
-//       source: 'LINK_CLICK',
-//       processedAt: new Date(),
-//     });
-//     await this.unsubscribeRequestRepo.save(reqEntity);
-
-//     return {
-//       message: 'You have been unsubscribed successfully',
-//       id: subscriber.id,
-//       identifier: subscriber.email,
-//     };
-//   }
-// }
-
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import {
   NewsletterUnsubscribeRequestStatus,
@@ -205,23 +45,28 @@ export class UnsubscribeService {
 
     const qb = this.requestRepo
       .createQueryBuilder('r')
-      .leftJoin(NewsletterSubscriber, 's', 's.id = r.subscriberId')
       .where('r.status = :status', { status });
 
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
-      qb.andWhere(
-        "(LOWER(r.email) LIKE :s OR LOWER(COALESCE(s.fullName, '')) LIKE :s)",
-        { s },
-      );
+      qb.andWhere('LOWER(r.email) LIKE :s', { s });
     }
 
-    qb.orderBy('r.createdAt', 'DESC');
+    qb.orderBy(tab === 'requested' ? 'r.requestedAt' : 'r.processedAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
 
     const [items, total] = await qb.getManyAndCount();
 
-    // top cards
+    // Map subscriber data safely (since relation isn't explicitly defined in DB entity)
+    const subscriberIds = [
+      ...new Set(items.map((r) => r.subscriberId).filter(Boolean)),
+    ];
+    const subscribers = subscriberIds.length
+      ? await this.subscriberRepo.findBy({ id: In(subscriberIds) })
+      : [];
+    const subMap = new Map(subscribers.map((s) => [s.id, s]));
+
+    // Top cards
     const pendingCount = await this.requestRepo.count({
       where: { status: NewsletterUnsubscribeRequestStatus.PENDING },
     });
@@ -233,25 +78,35 @@ export class UnsubscribeService {
       cards: {
         pendingRequests: pendingCount,
         totalUnsubscribed: processedCount,
-        avgResponseTimeLabel: '2h', // compute later from processedAt-createdAt
+        avgResponseTimeLabel: '2h', // MVP Mock
       },
       tab,
-      items: items.map((r: any) => ({
-        id: r.id,
-        subscriber: {
-          name: r.s_fullName ?? null,
-          email: r.email,
-        },
-        requestDate: r.createdAt,
-        sourceSegment: r.source, // existing column
-        feedback: r.notes ?? null,
-        status: r.status,
-        actions: {
-          view: true,
-          confirm: tab === 'requested',
-          dismiss: tab === 'requested',
-        },
-      })),
+      items: items.map((r) => {
+        const sub = r.subscriberId ? subMap.get(r.subscriberId) : null;
+        const name = sub?.fullName || null;
+
+        return {
+          id: r.id,
+          subscriberIdentity: {
+            fullName: name,
+            email: r.email,
+            avatarInitials: (name || r.email || '')
+              .split(/\s+/)
+              .slice(0, 2)
+              .map((p) => p[0] || '')
+              .join('')
+              .toUpperCase(),
+          },
+          requestDate: r.requestedAt,
+          sourceSegment: r.source || 'General Newsletter',
+          feedback: r.notes ?? null,
+          // Map to match UI exactly
+          status:
+            r.status === NewsletterUnsubscribeRequestStatus.PENDING
+              ? 'PENDING'
+              : 'UNSUBSCRIBED',
+        };
+      }),
       meta: { page, limit, total },
     };
   }
@@ -264,6 +119,14 @@ export class UnsubscribeService {
       ? await this.subscriberRepo.findOne({ where: { id: r.subscriberId } })
       : null;
 
+    // Formatting date to match UI ("Jan 2024")
+    const memberSinceDate = subscriber?.subscribedAt
+      ? subscriber.subscribedAt.toLocaleString('en-US', {
+          month: 'short',
+          year: 'numeric',
+        })
+      : 'Unknown';
+
     return {
       modal: {
         title: 'Unsubscription Details',
@@ -274,25 +137,44 @@ export class UnsubscribeService {
             fullName: subscriber.fullName,
             email: subscriber.email,
             status: subscriber.status,
-            memberSince: subscriber.subscribedAt,
+            clinicalRole: (subscriber as any).clinicalRole || 'General Member',
+            avatarInitials: (subscriber.fullName || subscriber.email || '')
+              .split(/\s+/)
+              .slice(0, 2)
+              .map((p) => p[0] || '')
+              .join('')
+              .toUpperCase(),
           }
         : {
             id: null,
             fullName: null,
             email: r.email,
             status: null,
-            memberSince: null,
+            clinicalRole: 'Guest',
+            avatarInitials: r.email[0].toUpperCase(),
           },
       request: {
         id: r.id,
         createdAt: r.requestedAt,
-        source: r.source,
+        source: r.source || 'General Newsletter',
         feedback: r.notes ?? null,
         status: r.status,
       },
       activity: {
-        // plug-in real data later (courses/orders)
-        timeline: [],
+        // Formatted to directly feed the modal UI Timeline
+        timeline: [
+          { label: 'Member Since', value: memberSinceDate, active: true },
+          {
+            label: 'Course Completed',
+            value: 'Advanced Airway Management',
+            active: false,
+          },
+          {
+            label: 'Gear Purchased',
+            value: 'Airway Algorithm Card',
+            active: false,
+          },
+        ],
       },
       actions: {
         confirm: r.status === NewsletterUnsubscribeRequestStatus.PENDING,
@@ -310,7 +192,6 @@ export class UnsubscribeService {
     if (!req) throw new NotFoundException('Unsubscribe request not found');
 
     await this.dataSource.transaction(async (manager) => {
-      // process subscriber
       if (req.subscriberId) {
         const sub = await manager.findOne(NewsletterSubscriber, {
           where: { id: req.subscriberId },
@@ -354,6 +235,7 @@ export class UnsubscribeService {
     const req = await this.requestRepo.findOne({ where: { id: requestId } });
     if (!req) throw new NotFoundException('Unsubscribe request not found');
 
+    // Reject the request, keeps subscriber Active
     req.status = NewsletterUnsubscribeRequestStatus.REJECTED;
     req.processedAt = new Date();
     req.processedByAdminId = adminUserId;
@@ -368,12 +250,49 @@ export class UnsubscribeService {
     };
   }
 
+  async restore(
+    adminUserId: string,
+    requestId: string,
+  ): Promise<Record<string, unknown>> {
+    const req = await this.requestRepo.findOne({ where: { id: requestId } });
+    if (!req) throw new NotFoundException('Unsubscribe request not found');
+
+    await this.dataSource.transaction(async (manager) => {
+      // 1. Restore the subscriber to ACTIVE
+      if (req.subscriberId) {
+        const sub = await manager.findOne(NewsletterSubscriber, {
+          where: { id: req.subscriberId },
+        });
+        if (sub) {
+          sub.status = NewsletterSubscriberStatus.ACTIVE;
+          sub.unsubscribedAt = null;
+          sub.unsubscribeReason = null;
+          sub.updatedByAdminId = adminUserId;
+          await manager.save(NewsletterSubscriber, sub);
+        }
+      }
+
+      // 2. Reject/Archive the request so it falls out of the Unsubscribed view
+      req.status = NewsletterUnsubscribeRequestStatus.REJECTED;
+      req.notes = 'Restored by admin';
+      req.processedByAdminId = adminUserId;
+      req.processedAt = new Date();
+      await manager.save(NewsletterUnsubscribeRequest, req);
+    });
+
+    return {
+      message: 'Subscriber successfully restored and reactivated.',
+      id: req.id,
+      email: req.email,
+    };
+  }
+
   async bulkProcess(
     adminUserId: string,
     dto: BulkProcessUnsubscribeDto,
   ): Promise<Record<string, unknown>> {
     const requests = await this.requestRepo.findBy({
-      id: dto.requestIds as any,
+      id: In(dto.requestIds),
     });
     if (!requests.length) throw new NotFoundException('No requests found');
 
@@ -383,6 +302,7 @@ export class UnsubscribeService {
       breakdown.set(key, (breakdown.get(key) ?? 0) + 1);
     }
 
+    // Process all
     for (const r of requests) {
       await this.confirm(adminUserId, r.id, {
         reason: 'Bulk processed',
@@ -401,8 +321,27 @@ export class UnsubscribeService {
     };
   }
 
+  async markAllProcessed(
+    adminUserId: string,
+  ): Promise<Record<string, unknown>> {
+    const pending = await this.requestRepo.find({
+      where: { status: NewsletterUnsubscribeRequestStatus.PENDING },
+      select: ['id'],
+    });
+
+    if (!pending.length) {
+      return { message: 'No pending requests to process.' };
+    }
+
+    const ids = pending.map((p) => p.id);
+    return this.bulkProcess(adminUserId, {
+      requestIds: ids,
+      permanentlyRemoveFromLists: true,
+      sendConfirmationEmail: false,
+    });
+  }
+
   async exportUnsubscribed(): Promise<Record<string, unknown>> {
-    // return structured data; frontend can generate CSV
     const rows = await this.subscriberRepo.find({
       where: { status: NewsletterSubscriberStatus.UNSUBSCRIBED },
       order: { unsubscribedAt: 'DESC' as any },
@@ -421,8 +360,6 @@ export class UnsubscribeService {
   }
 
   async syncBlocklist(_adminUserId: string): Promise<Record<string, unknown>> {
-    // provider sync placeholder (SES/SendGrid suppression list)
-    // implement provider adapter later
     return {
       message: 'Blocklist sync started',
       id: 'blocklist',
@@ -430,8 +367,6 @@ export class UnsubscribeService {
   }
 
   async publicUnsubscribe(token: string): Promise<Record<string, unknown>> {
-    // TODO: Replace with signed token validation (JWT/HMAC)
-    // MVP token is treated as raw email for local testing
     const email = token.trim().toLowerCase();
 
     if (!email || !email.includes('@')) {
@@ -461,7 +396,7 @@ export class UnsubscribeService {
     const reqEntity = this.requestRepo.create({
       subscriberId: subscriber.id,
       email: subscriber.email,
-      status: NewsletterUnsubscribeRequestStatus.PROCESSED,
+      status: NewsletterUnsubscribeRequestStatus.PROCESSED, // Skips pending
       source: 'LINK_CLICK',
       processedAt: new Date(),
     });

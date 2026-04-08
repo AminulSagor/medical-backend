@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, LessThan, Repository } from 'typeorm';
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
 import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
 import { NewsletterUnsubscribeRequest } from '../unsubscribe/entities/newsletter-unsubscribe-request.entity';
@@ -8,6 +8,7 @@ import { GetRecentTransmissionsQueryDto } from './dto/get-recent-transmissions-q
 import {
   NewsletterBroadcastStatus,
   NewsletterChannelType,
+  NewsletterSubscriberStatus,
   NewsletterUnsubscribeRequestStatus,
 } from 'src/common/enums/newsletter-constants.enum';
 
@@ -23,15 +24,16 @@ export class DashboardService {
   ) {}
 
   async getDashboard(): Promise<Record<string, unknown>> {
+    const now = new Date();
+    const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
     const [
       totalSent,
-      generalBlasts,
-      totalSubscribers,
-      pendingUnsubscribeRequests,
-      queuedCount,
-      weeklyQueuedCount,
-      monthlyQueuedCount,
-      sentRows,
+      currentActiveSubs,
+      prevActiveSubs,
+      pendingUnsubRequests,
+      courseAnnouncementsCount,
+      queuedSummary,
     ] = await Promise.all([
       this.broadcastRepo.count({
         where: {
@@ -39,85 +41,49 @@ export class DashboardService {
           status: NewsletterBroadcastStatus.SENT,
         },
       }),
-      this.broadcastRepo.count({
+      this.subscriberRepo.count({
+        where: { status: NewsletterSubscriberStatus.ACTIVE },
+      }),
+      this.subscriberRepo.count({
         where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: In([
-            NewsletterBroadcastStatus.SENT,
-            NewsletterBroadcastStatus.SCHEDULED,
-          ]),
+          status: NewsletterSubscriberStatus.ACTIVE,
+          createdAt: LessThan(lastWeek),
         },
       }),
-      this.subscriberRepo.count(),
       this.unsubscribeRequestRepo.count({
         where: { status: NewsletterUnsubscribeRequestStatus.PENDING },
       }),
       this.broadcastRepo.count({
-        where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: In([
-            NewsletterBroadcastStatus.READY,
-            NewsletterBroadcastStatus.SCHEDULED,
-          ]),
-        },
+        where: { channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT },
       }),
-      this.broadcastRepo.count({
-        where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: In([
-            NewsletterBroadcastStatus.READY,
-            NewsletterBroadcastStatus.SCHEDULED,
-          ]),
-          frequencyType: 'WEEKLY' as any,
-        },
-      }),
-      this.broadcastRepo.count({
-        where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: In([
-            NewsletterBroadcastStatus.READY,
-            NewsletterBroadcastStatus.SCHEDULED,
-          ]),
-          frequencyType: 'MONTHLY' as any,
-        },
-      }),
-      this.broadcastRepo.find({
-        where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: NewsletterBroadcastStatus.SENT,
-        },
-        select: ['openRatePercent'],
-        take: 20,
-        order: { sentAt: 'DESC' },
-      }),
+      this.getQueuedSummary(),
     ]);
 
-    const avgOpenRate =
-      sentRows.length > 0
+    const growthRate =
+      prevActiveSubs > 0
         ? Number(
             (
-              sentRows.reduce(
-                (sum, r) => sum + Number(r.openRatePercent || 0),
-                0,
-              ) / sentRows.length
-            ).toFixed(2),
+              ((currentActiveSubs - prevActiveSubs) / prevActiveSubs) *
+              100
+            ).toFixed(1),
           )
         : 0;
 
     return {
       metrics: {
         totalSent,
-        generalBlasts,
-        openRatePercent: avgOpenRate,
-        totalSubscribers,
-        pendingUnsubscribeRequests,
+        audienceReach: {
+          total: currentActiveSubs,
+          growthRatePercent: growthRate,
+          isPositive: growthRate >= 0,
+        },
+        courseUpdates: courseAnnouncementsCount,
+        unsubscriptionRequests: {
+          count: pendingUnsubRequests,
+          statusLabel: 'Pending action',
+        },
       },
-      queueSummary: {
-        queuedCount,
-        weeklyQueuedCount,
-        monthlyQueuedCount,
-        nextCoverageDays: queuedCount * 7, // MVP placeholder
-      },
+      queueSummary: queuedSummary,
     };
   }
 
@@ -129,16 +95,21 @@ export class DashboardService {
 
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
-      .where('b.channelType = :channelType', {
-        channelType: NewsletterChannelType.GENERAL,
-      })
-      .andWhere('b.status IN (:...statuses)', {
+      // Remove the channelType filter to show both General and Course updates
+      .where('b.status IN (:...statuses)', {
         statuses: [
           NewsletterBroadcastStatus.SENT,
           NewsletterBroadcastStatus.CANCELLED,
           NewsletterBroadcastStatus.FAILED,
         ],
       });
+    // .andWhere('b.status IN (:...statuses)', {
+    //   statuses: [
+    //     NewsletterBroadcastStatus.SENT,
+    //     NewsletterBroadcastStatus.CANCELLED,
+    //     NewsletterBroadcastStatus.FAILED,
+    //   ],
+    // });
 
     if (query.status) {
       qb.andWhere('b.status = :status', { status: query.status });
@@ -156,11 +127,32 @@ export class DashboardService {
         status: b.status,
         contentType: b.contentType,
         subjectLine: b.subjectLine,
-        audienceLabel: 'General Subscribers',
+        audienceLabel: 'All Subscribers',
         openRatePercent: Number(b.openRatePercent || 0),
         sentAt: b.sentAt,
       })),
       meta: { page, limit, total },
+    };
+  }
+
+  private async getQueuedSummary() {
+    const queued = await this.broadcastRepo.find({
+      where: {
+        channelType: NewsletterChannelType.GENERAL,
+        status: In([
+          NewsletterBroadcastStatus.READY,
+          NewsletterBroadcastStatus.SCHEDULED,
+        ]),
+      },
+      select: ['frequencyType'],
+    });
+
+    return {
+      queuedCount: queued.length,
+      weeklyQueuedCount: queued.filter((b) => b.frequencyType === 'WEEKLY')
+        .length,
+      monthlyQueuedCount: queued.filter((b) => b.frequencyType === 'MONTHLY')
+        .length,
     };
   }
 }
