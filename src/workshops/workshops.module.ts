@@ -34,6 +34,7 @@ import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
       WorkshopOrderAttendee,
       WorkshopRefund,
       WorkshopRefundItem,
+      WorkshopEnrollment,
       Facility,
       Faculty,
     ]),
