@@ -81,6 +81,8 @@ export class WorkshopsService {
     private refundsRepo: Repository<WorkshopRefund>,
     @InjectRepository(WorkshopRefundItem)
     private refundItemsRepo: Repository<WorkshopRefundItem>,
+    @InjectRepository(WorkshopEnrollment)
+    private enrollmentsRepo: Repository<WorkshopEnrollment>,
     @InjectRepository(Facility) private facilitiesRepo: Repository<Facility>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
   ) {}
@@ -962,7 +964,9 @@ export class WorkshopsService {
       relations: ['days'],
     });
 
-    const workshopById = new Map(workshops.map((workshop) => [workshop.id, workshop]));
+    const workshopById = new Map(
+      workshops.map((workshop) => [workshop.id, workshop]),
+    );
 
     const data = workshopIds
       .map((workshopId) => {
@@ -980,7 +984,8 @@ export class WorkshopsService {
           .sort((a, b) => +a - +b);
 
         const startDate = dayDates.length > 0 ? dayDates[0] : null;
-        const endDate = dayDates.length > 0 ? dayDates[dayDates.length - 1] : null;
+        const endDate =
+          dayDates.length > 0 ? dayDates[dayDates.length - 1] : null;
 
         return {
           workshopId: workshop.id,
