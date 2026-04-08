@@ -6,12 +6,10 @@ import { NewsletterBroadcast } from 'src/newsletters/broadcasts/entities/newslet
 import { NewsletterBroadcastArticleLink } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-article-link.entity';
 import { NewsletterBroadcastCustomContent } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-custom-content.entity';
 import { NewsletterBroadcastAttachment } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-attachment.entity';
-import { NewsletterBroadcastSegment } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-segment.entity';
 
 import { NewsletterDeliveryRecipient } from 'src/newsletters/delivery/entities/newsletter-delivery-recipient.entity';
 import { NewsletterTransmissionEvent } from 'src/newsletters/delivery/entities/newsletter-transmission-event.entity';
 
-import { NewsletterAudienceSegment } from 'src/newsletters/audience/entities/newsletter-audience-segment.entity';
 import { NewsletterSubscriber } from 'src/newsletters/audience/entities/newsletter-subscriber.entity';
 
 import {
@@ -40,12 +38,6 @@ export class TransmissionsService {
 
     @InjectRepository(NewsletterBroadcastAttachment)
     private readonly attachmentRepo: Repository<NewsletterBroadcastAttachment>,
-
-    @InjectRepository(NewsletterBroadcastSegment)
-    private readonly broadcastSegmentRepo: Repository<NewsletterBroadcastSegment>,
-
-    @InjectRepository(NewsletterAudienceSegment)
-    private readonly segmentRepo: Repository<NewsletterAudienceSegment>,
 
     @InjectRepository(NewsletterDeliveryRecipient)
     private readonly recipientRepo: Repository<NewsletterDeliveryRecipient>,
@@ -87,25 +79,6 @@ export class TransmissionsService {
 
     const [items, total] = await qb.getManyAndCount();
     const ids = items.map((x) => x.id);
-
-    // audience labels
-    const segRows = ids.length
-      ? await this.broadcastSegmentRepo.find({
-          where: { broadcastId: In(ids) },
-        })
-      : [];
-    const segIds = [...new Set(segRows.map((r) => r.segmentId))];
-    const segs = segIds.length
-      ? await this.segmentRepo.findBy({ id: In(segIds) })
-      : [];
-    const segMap = new Map(segs.map((s) => [s.id, s.name]));
-    const segByBroadcast = new Map<string, string[]>();
-    for (const r of segRows) {
-      const arr = segByBroadcast.get(r.broadcastId) ?? [];
-      const name = segMap.get(r.segmentId);
-      if (name) arr.push(name);
-      segByBroadcast.set(r.broadcastId, arr);
-    }
 
     // engagement aggregates (open/click/bounce)
     const agg = ids.length
@@ -177,7 +150,6 @@ export class TransmissionsService {
         bounceRatePercent: bounceRate,
       },
       items: items.map((b) => {
-        const segNames = segByBroadcast.get(b.id) ?? [];
         const a = aggMap.get(b.id) ?? {
           total: 0,
           opened: 0,
@@ -195,9 +167,7 @@ export class TransmissionsService {
         const audienceLabel =
           b.channelType === NewsletterChannelType.GENERAL
             ? 'All Subscribers'
-            : segNames.length
-              ? segNames[0]
-              : 'Target cohorts';
+            : 'Target cohorts';
 
         const typeBadge =
           b.channelType === NewsletterChannelType.COURSE_ANNOUNCEMENT

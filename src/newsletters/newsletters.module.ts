@@ -21,17 +21,12 @@ import { NewsletterBroadcastCustomContentToken } from './broadcasts/entities/new
 import { NewsletterBroadcastCustomEditorSnapshot } from './broadcasts/entities/newsletter-broadcast-custom-editor-snapshot.entity';
 import { NewsletterBroadcastArticleLink } from './broadcasts/entities/newsletter-broadcast-article-link.entity';
 import { NewsletterBroadcastAttachment } from './broadcasts/entities/newsletter-broadcast-attachment.entity';
-import { NewsletterBroadcastSegment } from './broadcasts/entities/newsletter-broadcast-segment.entity';
 
 // Audience
 import { SubscribersController } from './audience/subscribers.controller';
 import { SubscribersService } from './audience/subscribers.service';
-import { SegmentsController } from './audience/segments.controller';
-import { SegmentsService } from './audience/segments.service';
 import { AudienceResolverService } from './audience/audience-resolver.service';
 import { NewsletterSubscriber } from './audience/entities/newsletter-subscriber.entity';
-import { NewsletterAudienceSegment } from './audience/entities/newsletter-audience-segment.entity';
-import { NewsletterSubscriberSegmentMembership } from './audience/entities/newsletter-subscriber-segment-membership.entity';
 
 // Delivery
 import { DeliveryService } from './delivery/delivery.service';
@@ -59,6 +54,7 @@ import { BlogArticleSourceService } from './broadcasts/blog-article-source.servi
 import { BlogPost } from 'src/blog/entities/blog-post.entity';
 import { CourseAnnouncementsModule } from './course-announcements/course-announcements.module';
 import { TransmissionsModule } from './transmissions/transmissions.module';
+import { PublicSubscribersController } from './audience/public-subscribers.controller';
 
 @Module({
   imports: [
@@ -73,13 +69,12 @@ import { TransmissionsModule } from './transmissions/transmissions.module';
       NewsletterBroadcastCustomEditorSnapshot,
       NewsletterBroadcastArticleLink,
       NewsletterBroadcastAttachment,
-      NewsletterBroadcastSegment,
       NewsletterBroadcastQueueOrder,
 
       // audience
       NewsletterSubscriber,
-      NewsletterAudienceSegment,
-      NewsletterSubscriberSegmentMembership,
+      // NewsletterAudienceSegment,
+      // NewsletterSubscriberSegmentMembership,
       NewsletterSubscriberNote,
 
       // delivery
@@ -103,9 +98,10 @@ import { TransmissionsModule } from './transmissions/transmissions.module';
     CadenceController,
     BroadcastsController,
     SubscribersController,
-    SegmentsController,
+    // SegmentsController,
     UnsubscribeController,
     DeliveryWebhooksController,
+    PublicSubscribersController,
   ],
   providers: [
     DashboardService,
@@ -117,7 +113,7 @@ import { TransmissionsModule } from './transmissions/transmissions.module';
     BroadcastPreviewService,
 
     SubscribersService,
-    SegmentsService,
+    // SegmentsService,
     AudienceResolverService,
 
     DeliveryService,

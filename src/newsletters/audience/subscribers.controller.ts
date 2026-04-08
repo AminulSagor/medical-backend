@@ -29,19 +29,16 @@ import { ListSubscribersAdvancedQueryDto } from './dto/list-subscribers-advanced
 export class SubscribersController {
   constructor(private readonly subscribersService: SubscribersService) {}
 
-  @Get()
-  list(
-    @Query() query: ListSubscribersQueryDto,
-  ): Promise<Record<string, unknown>> {
-    return this.subscribersService.list(query);
+  @Get('metrics')
+  getMetrics(): Promise<Record<string, unknown>> {
+    return this.subscribersService.getMetrics();
   }
 
-  @Post()
-  create(
-    @Req() req: AuthenticatedRequest,
-    @Body() dto: CreateSubscriberDto,
+  @Get()
+  list(
+    @Query() query: ListSubscribersAdvancedQueryDto,
   ): Promise<Record<string, unknown>> {
-    return this.subscribersService.create(req.user.id, dto);
+    return this.subscribersService.list(query);
   }
 
   @Patch(':id')
@@ -51,13 +48,6 @@ export class SubscribersController {
     @Body() dto: UpdateSubscriberDto,
   ): Promise<Record<string, unknown>> {
     return this.subscribersService.update(req.user.id, id, dto);
-  }
-
-  @Get('advanced')
-  listAdvanced(
-    @Query() query: ListSubscribersAdvancedQueryDto,
-  ): Promise<Record<string, unknown>> {
-    return this.subscribersService.listAdvanced(query);
   }
 
   @Get('filter-options')
