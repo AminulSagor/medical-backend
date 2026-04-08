@@ -18,7 +18,6 @@ import {
 import { NewsletterBroadcastCustomContent } from './newsletter-broadcast-custom-content.entity';
 import { NewsletterBroadcastArticleLink } from './newsletter-broadcast-article-link.entity';
 import { NewsletterBroadcastAttachment } from './newsletter-broadcast-attachment.entity';
-import { NewsletterBroadcastSegment } from './newsletter-broadcast-segment.entity';
 
 @Entity('newsletter_broadcasts')
 export class NewsletterBroadcast {
@@ -145,6 +144,6 @@ export class NewsletterBroadcast {
   @OneToMany(() => NewsletterBroadcastAttachment, (a) => a.broadcast)
   attachments?: NewsletterBroadcastAttachment[];
 
-  @OneToMany(() => NewsletterBroadcastSegment, (bs) => bs.broadcast)
-  broadcastSegments?: NewsletterBroadcastSegment[];
+  // @OneToMany(() => NewsletterBroadcastSegment, (bs) => bs.broadcast)
+  // broadcastSegments?: NewsletterBroadcastSegment[];
 }

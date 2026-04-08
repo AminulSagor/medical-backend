@@ -14,9 +14,7 @@ import { NewsletterBroadcastCustomContentToken } from './entities/newsletter-bro
 import { NewsletterBroadcastCustomEditorSnapshot } from './entities/newsletter-broadcast-custom-editor-snapshot.entity';
 import { NewsletterBroadcastArticleLink } from './entities/newsletter-broadcast-article-link.entity';
 import { NewsletterBroadcastAttachment } from './entities/newsletter-broadcast-attachment.entity';
-import { NewsletterBroadcastSegment } from './entities/newsletter-broadcast-segment.entity';
 
-import { NewsletterAudienceSegment } from '../audience/entities/newsletter-audience-segment.entity';
 import { NewsletterCadenceSetting } from '../cadence/entities/newsletter-cadence-settings.entity';
 
 import { CreateBroadcastDto } from './dto/create-broadcast.dto';
@@ -81,10 +79,10 @@ export class BroadcastsService {
     private readonly articleLinkRepo: Repository<NewsletterBroadcastArticleLink>,
     @InjectRepository(NewsletterBroadcastAttachment)
     private readonly attachmentRepo: Repository<NewsletterBroadcastAttachment>,
-    @InjectRepository(NewsletterBroadcastSegment)
-    private readonly broadcastSegmentRepo: Repository<NewsletterBroadcastSegment>,
-    @InjectRepository(NewsletterAudienceSegment)
-    private readonly segmentRepo: Repository<NewsletterAudienceSegment>,
+    // @InjectRepository(NewsletterBroadcastSegment)
+    // private readonly broadcastSegmentRepo: Repository<NewsletterBroadcastSegment>,
+    // @InjectRepository(NewsletterAudienceSegment)
+    // private readonly segmentRepo: Repository<NewsletterAudienceSegment>,
     @InjectRepository(NewsletterCadenceSetting)
     private readonly cadenceRepo: Repository<NewsletterCadenceSetting>,
     @InjectRepository(NewsletterBroadcastQueueOrder)
@@ -101,11 +99,6 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     this.validateCreatePayload(dto);
 
-    // FIX: Provide a fallback empty array if segmentIds is undefined
-    const segments = await this.loadAndValidateGeneralSegments(
-      dto.segmentIds ?? [],
-    );
-
     try {
       const saved = await this.dataSource.transaction(async (manager) => {
         const broadcast = manager.create(NewsletterBroadcast, {
@@ -115,7 +108,7 @@ export class BroadcastsService {
           subjectLine: dto.subjectLine.trim(),
           preheaderText: dto.preheaderText?.trim() || null,
           status: NewsletterBroadcastStatus.DRAFT,
-          audienceMode: dto.audienceMode,
+          audienceMode: NewsletterAudienceMode.ALL_SUBSCRIBERS, // <-- Fix here
           estimatedRecipientsCount: 0,
           sentRecipientsCount: 0,
           openedRecipientsCount: 0,
@@ -217,26 +210,9 @@ export class BroadcastsService {
           );
         }
 
-        // Only save segment relations if segments actually exist
-        if (segments.length > 0) {
-          await manager.save(
-            NewsletterBroadcastSegment,
-            segments.map((seg) =>
-              manager.create(NewsletterBroadcastSegment, {
-                broadcastId: savedBroadcast.id,
-                segmentId: seg.id,
-              }),
-            ),
-          );
-        }
-
-        // For ALL_SUBSCRIBERS, this will likely resolve to 0 initially or use a different estimation method in the resolver.
-        const estimatedRecipientsCount =
-          await this.audienceResolverService.estimateRecipientsBySegmentIds(
-            segments.map((s) => s.id),
-          );
-
-        savedBroadcast.estimatedRecipientsCount = estimatedRecipientsCount;
+        // Direct count of everyone
+        savedBroadcast.estimatedRecipientsCount =
+          await this.audienceResolverService.estimateAllSubscribers();
         await manager.save(NewsletterBroadcast, savedBroadcast);
 
         return savedBroadcast;
@@ -384,12 +360,8 @@ export class BroadcastsService {
   async getDetail(id: string): Promise<BroadcastDetail> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id, channelType: NewsletterChannelType.GENERAL },
-      relations: [
-        'customContent',
-        'articleLink',
-        'attachments',
-        'broadcastSegments',
-      ],
+      // Removed 'broadcastSegments' relation
+      relations: ['customContent', 'articleLink', 'attachments'],
     });
 
     if (!broadcast) {
@@ -405,13 +377,6 @@ export class BroadcastsService {
       where: { broadcastId: broadcast.id },
     });
 
-    const segmentIds = (broadcast.broadcastSegments ?? []).map(
-      (x) => x.segmentId,
-    );
-    const segments = segmentIds.length
-      ? await this.segmentRepo.findBy({ id: In(segmentIds) })
-      : [];
-
     return {
       id: broadcast.id,
       contentType: broadcast.contentType,
@@ -425,8 +390,8 @@ export class BroadcastsService {
       cadenceAnchorLabel: broadcast.cadenceAnchorLabel,
       estimatedRecipientsCount: broadcast.estimatedRecipientsCount,
       audience: {
-        mode: broadcast.audienceMode,
-        segments: segments.map((s) => ({ id: s.id, name: s.name })),
+        mode: NewsletterAudienceMode.ALL_SUBSCRIBERS, // <-- Fix here
+        segments: [],
       },
       customContent: broadcast.customContent
         ? {
@@ -499,7 +464,7 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id, channelType: NewsletterChannelType.GENERAL },
-      relations: ['customContent', 'articleLink'],
+      relations: ['customContent', 'articleLink'], // Removed broadcastSegments
     });
 
     if (!broadcast) {
@@ -524,38 +489,11 @@ export class BroadcastsService {
       broadcast.internalName = dto.internalName?.trim() || null;
     }
 
-    if (dto.audienceMode !== undefined) {
-      broadcast.audienceMode = dto.audienceMode;
-    }
+    // Force ALL_SUBSCRIBERS regardless of what was passed
+    broadcast.audienceMode = NewsletterAudienceMode.ALL_SUBSCRIBERS; // <-- Fix here
 
     try {
       await this.dataSource.transaction(async (manager) => {
-        // ---- segments ----
-        if (dto.segmentIds) {
-          const segments = await this.loadAndValidateGeneralSegments(
-            dto.segmentIds,
-          );
-
-          await manager.delete(NewsletterBroadcastSegment, {
-            broadcastId: broadcast.id,
-          });
-
-          await manager.save(
-            NewsletterBroadcastSegment,
-            segments.map((s) =>
-              manager.create(NewsletterBroadcastSegment, {
-                broadcastId: broadcast.id,
-                segmentId: s.id,
-              }),
-            ),
-          );
-
-          broadcast.estimatedRecipientsCount =
-            await this.audienceResolverService.estimateRecipientsBySegmentIds(
-              segments.map((s) => s.id),
-            );
-        }
-
         // ---- content type specific ----
         if (broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE) {
           if (dto.articleLink) {
@@ -1072,7 +1010,7 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
-      relations: ['customContent', 'articleLink', 'broadcastSegments'],
+      relations: ['customContent', 'articleLink'], // Removed broadcastSegments
     });
 
     if (!broadcast)
@@ -1093,17 +1031,6 @@ export class BroadcastsService {
     if (!broadcast.subjectLine?.trim()) {
       throw new UnprocessableEntityException(
         'subjectLine is required before scheduling',
-      );
-    }
-
-    // NOTE: Make sure your enum is actually named NewsletterAudienceMode.SEGMENTS or SEGMENTS
-    // depending on what is in your newsletter-constants.enum.ts
-    if (
-      broadcast.audienceMode === NewsletterAudienceMode.SEGMENTS &&
-      !broadcast.broadcastSegments?.length
-    ) {
-      throw new UnprocessableEntityException(
-        'At least one audience segment is required before scheduling',
       );
     }
 
@@ -1143,27 +1070,9 @@ export class BroadcastsService {
       throw new ConflictException('Selected cadence slot is already booked');
     }
 
-    // 4. Estimate Recipients
-    if (broadcast.audienceMode === NewsletterAudienceMode.SEGMENTS) {
-      // FIX 1: Provide fallback empty array to satisfy TypeScript strict null checks
-      const segmentIds = (broadcast.broadcastSegments ?? []).map(
-        (x) => x.segmentId,
-      );
-      broadcast.estimatedRecipientsCount =
-        await this.audienceResolverService.estimateRecipientsBySegmentIds(
-          segmentIds,
-        );
-    } else {
-      // FIX 2: Cast to 'any' to bypass TS interface restrictions for a dynamic runtime check
-      const resolverAny = this.audienceResolverService as any;
-      if (typeof resolverAny.estimateAllSubscribers === 'function') {
-        broadcast.estimatedRecipientsCount =
-          await resolverAny.estimateAllSubscribers();
-      } else {
-        broadcast.estimatedRecipientsCount =
-          await this.audienceResolverService.estimateRecipientsBySegmentIds([]);
-      }
-    }
+    // 4. Estimate Recipients (Just grab everyone!)
+    broadcast.estimatedRecipientsCount =
+      await this.audienceResolverService.estimateAllSubscribers();
 
     // 5. Finalize the Execution
     broadcast.cadenceVersionAtScheduling = cadence!.version;
@@ -1172,7 +1081,6 @@ export class BroadcastsService {
 
     const saved = await this.broadcastRepo.save(broadcast);
 
-    // FIX 3: Use the non-null assertion operator (!) since we validated frequencyType exists in Step 1
     await this.ensureQueueOrderExists(
       adminUserId,
       saved.id,
@@ -1201,7 +1109,6 @@ export class BroadcastsService {
         summary: {
           title: saved.subjectLine,
           recipientsCount: saved.estimatedRecipientsCount,
-          // Note: ensure this.formatDateTimeLabel requires parameters that match exactly
           scheduledAtDisplay: this.formatDateTimeLabel(
             saved.scheduledAt!,
             saved.timezone!,
@@ -1488,8 +1395,8 @@ export class BroadcastsService {
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.articleLink', 'al')
-      .leftJoinAndSelect('b.broadcastSegments', 'bs')
       .leftJoinAndSelect('b.attachments', 'att')
+      // Removed .leftJoinAndSelect('b.broadcastSegments', 'bs')
       .where('b.channelType = :channelType', {
         channelType: NewsletterChannelType.GENERAL,
       });
@@ -1561,7 +1468,7 @@ export class BroadcastsService {
 
     const [items, total] = await qb.getManyAndCount();
 
-    // Map rows (Uses existing relation mapping logic)
+    // Map rows
     const broadcastIds = items.map((x) => x.id);
     const queueOrders = broadcastIds.length
       ? await this.queueOrderRepo.find({
@@ -1572,23 +1479,7 @@ export class BroadcastsService {
       queueOrders.map((q) => [q.broadcastId, q.sequenceIndex]),
     );
 
-    const allSegmentIds = [
-      ...new Set(
-        items.flatMap((i: any) =>
-          (i.broadcastSegments ?? []).map((x: any) => x.segmentId),
-        ),
-      ),
-    ];
-    const segments = allSegmentIds.length
-      ? await this.segmentRepo.findBy({ id: In(allSegmentIds) })
-      : [];
-    const segmentMap = new Map(segments.map((s) => [s.id, s]));
-
     const rows = items.map((b: any) => {
-      const linkedSegments = (b.broadcastSegments ?? [])
-        .map((bs: any) => segmentMap.get(bs.segmentId))
-        .filter(Boolean);
-
       const typeLabel =
         b.contentType === NewsletterContentType.ARTICLE_LINK
           ? b.articleLink?.sourceType === 'SPECIAL_REPORT'
@@ -1629,16 +1520,10 @@ export class BroadcastsService {
         subjectLine: b.subjectLine,
         author: authorName ? { displayName: authorName } : null,
         target: {
-          audienceMode: b.audienceMode,
-          displayLabel: this.getAudienceLabel(
-            b.audienceMode,
-            linkedSegments.map((s: any) => s.name),
-          ),
-          segmentCount: linkedSegments.length,
-          segments: linkedSegments.map((s: any) => ({
-            id: s.id,
-            name: s.name,
-          })),
+          audienceMode: NewsletterAudienceMode.ALL_SUBSCRIBERS,
+          displayLabel: 'All Subscribers',
+          segmentCount: 0,
+          segments: [],
         },
         estRead: estReadMinutes ? `${estReadMinutes} min` : null,
         estReadMinutes,
@@ -2050,20 +1935,10 @@ export class BroadcastsService {
       .limit(100)
       .getRawMany<{ authorName: string }>();
 
-    const segments = await this.segmentRepo.find({
-      where: {
-        channelType: NewsletterChannelType.GENERAL,
-        isActive: true,
-      } as any,
-      select: ['id', 'name'],
-      order: { name: 'ASC' },
-      take: 100,
-    });
-
     return {
       contentTypes: Object.values(NewsletterContentType),
       authors: authors.map((a) => a.authorName),
-      audienceSegments: segments.map((s) => ({ id: s.id, name: s.name })),
+      audienceSegments: [], // Cleared out, UI will receive empty array
       quickDateRanges: ['LAST_7_DAYS', 'LAST_30_DAYS', 'CUSTOM'],
     };
   }
@@ -2109,29 +1984,29 @@ export class BroadcastsService {
     }
   }
 
-  private async loadAndValidateGeneralSegments(
-    segmentIds: string[],
-  ): Promise<NewsletterAudienceSegment[]> {
-    const uniqueIds = [...new Set(segmentIds)];
-    const segments = await this.segmentRepo.findBy({ id: In(uniqueIds) });
+  // private async loadAndValidateGeneralSegments(
+  //   segmentIds: string[],
+  // ): Promise<NewsletterAudienceSegment[]> {
+  //   const uniqueIds = [...new Set(segmentIds)];
+  //   const segments = await this.segmentRepo.findBy({ id: In(uniqueIds) });
 
-    if (segments.length !== uniqueIds.length) {
-      throw new NotFoundException(
-        'One or more audience segments were not found',
-      );
-    }
+  //   if (segments.length !== uniqueIds.length) {
+  //     throw new NotFoundException(
+  //       'One or more audience segments were not found',
+  //     );
+  //   }
 
-    const invalid = segments.find(
-      (s) => s.channelType !== NewsletterChannelType.GENERAL || !s.isActive,
-    );
-    if (invalid) {
-      throw new BadRequestException(
-        'All selected segments must be active GENERAL newsletter segments',
-      );
-    }
+  //   const invalid = segments.find(
+  //     (s) => s.channelType !== NewsletterChannelType.GENERAL || !s.isActive,
+  //   );
+  //   if (invalid) {
+  //     throw new BadRequestException(
+  //       'All selected segments must be active GENERAL newsletter segments',
+  //     );
+  //   }
 
-    return segments;
-  }
+  //   return segments;
+  // }
 
   private ensureEditable(broadcast: NewsletterBroadcast): void {
     const allowed = [

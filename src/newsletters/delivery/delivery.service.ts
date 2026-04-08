@@ -5,7 +5,6 @@ import { In, Repository } from 'typeorm';
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
 import { NewsletterDeliveryJob } from './entities/newsletter-delivery-job.entity';
 import { NewsletterDeliveryRecipient } from './entities/newsletter-delivery-recipient.entity';
-import { NewsletterBroadcastSegment } from '../broadcasts/entities/newsletter-broadcast-segment.entity';
 import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
 
 import { ProviderAdapterService } from './provider-adapter.service';
@@ -23,8 +22,8 @@ export class DeliveryService {
     private readonly deliveryJobRepo: Repository<NewsletterDeliveryJob>,
     @InjectRepository(NewsletterDeliveryRecipient)
     private readonly deliveryRecipientRepo: Repository<NewsletterDeliveryRecipient>,
-    @InjectRepository(NewsletterBroadcastSegment)
-    private readonly broadcastSegmentRepo: Repository<NewsletterBroadcastSegment>,
+    // @InjectRepository(NewsletterBroadcastSegment)
+    // private readonly broadcastSegmentRepo: Repository<NewsletterBroadcastSegment>,
     @InjectRepository(NewsletterSubscriber)
     private readonly subscriberRepo: Repository<NewsletterSubscriber>,
     private readonly providerAdapter: ProviderAdapterService,
@@ -98,25 +97,10 @@ export class DeliveryService {
       return;
     }
 
-    const segmentLinks = await this.broadcastSegmentRepo.find({
-      where: { broadcastId: broadcast.id },
-      select: ['segmentId'],
-    });
-
-    const segmentIds = [...new Set(segmentLinks.map((s) => s.segmentId))];
-    if (!segmentIds.length) {
-      job.jobStatus = NewsletterDeliveryJobStatus.FAILED;
-      job.errorSummary = 'No segments assigned';
-      job.completedAt = new Date();
-      await this.deliveryJobRepo.save(job);
-      return;
-    }
-
-    // Resolve recipients via segment memberships (simple join query in service layer would be cleaner)
-    // For MVP shortcut, rely on broadcast.estimatedRecipientsCount and skip actual send if not implemented.
+    // Rely purely on the overall broadcast estimation since we are targeting ALL_SUBSCRIBERS
     job.totalRecipients = broadcast.estimatedRecipientsCount ?? 0;
 
-    // TODO: Build real HTML via BroadcastPreviewService and resolve actual subscribers from memberships
+    // TODO: Build real HTML via BroadcastPreviewService and resolve actual subscribers from AudienceResolverService
     const sendResult = await this.providerAdapter.sendBatch({
       subject: broadcast.subjectLine,
       html: '<html><body>TODO</body></html>',

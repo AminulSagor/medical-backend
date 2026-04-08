@@ -30,6 +30,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.1.1",
     "@nestjs/typeorm": "^11.0.0",
+    "@stripe/stripe-js": "^9.1.0",
     "bcrypt": "^6.0.0",
     "bwip-js": "^4.9.0",
     "class-transformer": "^0.5.1",
