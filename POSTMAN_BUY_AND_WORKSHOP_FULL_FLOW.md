@@ -13,6 +13,11 @@ Backend style: NestJS + JWT + Stripe checkout
 In this backend, "course purchase" is implemented as workshop checkout + reservation flow.
 Use workshop endpoints for course/workshop buying.
 
+Production recommendation for product checkout:
+- Use `POST /payments/product/order-summary` to create a persisted `orderSummaryId`.
+- Then call `POST /payments/checkout-session` with `domainType=product` and that `orderSummaryId`.
+- `POST /public/orders/summary` remains useful as a public preview calculator.
+
 ## 1) Prerequisites
 
 ## 1.1 Server and DB
@@ -355,7 +360,60 @@ Success (`200`):
 }
 ```
 
-## 5.4 Create checkout session (product)
+## 5.4 Create persisted product order summary (production)
+
+- Method: `POST`
+- URL: `{{baseUrl}}/payments/product/order-summary`
+- Auth: Bearer required
+- Body:
+
+```json
+{
+  "items": [
+    {
+      "productId": "{{productId}}",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+Success (`201`):
+
+```json
+{
+  "message": "Product order summary created successfully",
+  "data": {
+    "orderSummaryId": "e0a05eb0-31a5-4f0f-8963-64fef8c66980",
+    "status": "pending",
+    "expiresAt": "2026-04-09T12:00:00.000Z",
+    "items": [
+      {
+        "productId": "25535f1a-916e-4694-a0f8-41cc4cb95a8e",
+        "name": "Fiberoptic Intubation Kit",
+        "sku": "KIT-001",
+        "photo": "https://cdn.example.com/p1.jpg",
+        "quantity": 2,
+        "unitPrice": "99.00",
+        "lineTotal": "198.00"
+      }
+    ],
+    "subtotal": "198.00",
+    "estimatedShipping": "15.00",
+    "estimatedTax": "19.80",
+    "orderTotal": "232.80"
+  }
+}
+```
+
+Postman Tests script:
+
+```javascript
+const body = pm.response.json();
+pm.environment.set("orderSummaryId", body.data.orderSummaryId);
+```
+
+## 5.5 Create checkout session (product) using orderSummaryId
 
 - Method: `POST`
 - URL: `{{baseUrl}}/payments/checkout-session`
@@ -365,12 +423,7 @@ Success (`200`):
 ```json
 {
   "domainType": "product",
-  "items": [
-    {
-      "productId": "{{productId}}",
-      "quantity": 2
-    }
-  ],
+  "orderSummaryId": "{{orderSummaryId}}",
   "successUrl": "http://localhost:5173/checkout/success?session_id={CHECKOUT_SESSION_ID}",
   "cancelUrl": "http://localhost:5173/checkout/cancel"
 }
@@ -386,6 +439,7 @@ Success (`201`):
     "domainType": "product",
     "sessionId": "cs_test_a1b2",
     "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_a1b2",
+    "orderSummaryId": "e0a05eb0-31a5-4f0f-8963-64fef8c66980",
     "shippingAddress": {
       "fullName": "Flow Student",
       "addressLine1": "100 Main Street",
@@ -424,13 +478,23 @@ Common error (`400`):
 }
 ```
 
-## 5.5 Complete payment on Stripe page
+Common error (`400`) if summary is expired:
+
+```json
+{
+  "statusCode": 400,
+  "path": "/payments/checkout-session",
+  "message": "Order summary expired, create a new one"
+}
+```
+
+## 5.6 Complete payment on Stripe page
 
 Open `checkoutUrl` from previous response in your browser and pay with Stripe test card.
 
 After payment, webhook must reach backend.
 
-## 5.6 Check payment status
+## 5.7 Check payment status
 
 - Method: `GET`
 - URL: `{{baseUrl}}/payments/session-status/{{sessionId}}`
@@ -444,7 +508,7 @@ Pending example (`200`):
   "data": {
     "paymentId": "22898739-8388-4c0b-a3c7-d84588d0c26f",
     "domainType": "product",
-    "domainRefId": "product_checkout",
+    "domainRefId": "e0a05eb0-31a5-4f0f-8963-64fef8c66980",
     "status": "pending",
     "providerSessionId": "cs_test_a1b2",
     "finalizedRefId": null
@@ -460,7 +524,7 @@ Paid example (`200`):
   "data": {
     "paymentId": "22898739-8388-4c0b-a3c7-d84588d0c26f",
     "domainType": "product",
-    "domainRefId": "product_checkout",
+    "domainRefId": "e0a05eb0-31a5-4f0f-8963-64fef8c66980",
     "status": "paid",
     "providerSessionId": "cs_test_a1b2",
     "finalizedRefId": "3e42c95e-fccf-4f76-81ac-c3fa4f2dbf18",
@@ -480,7 +544,7 @@ if (body?.data?.finalizedRefId) {
 }
 ```
 
-## 5.7 Verify student recent order endpoint
+## 5.8 Verify student recent order endpoint
 
 - Method: `GET`
 - URL: `{{baseUrl}}/public/orders/student/recent-product-order`
@@ -878,18 +942,19 @@ Then call `/workshops/reservations`.
 4. Login (save token)
 5. List products (save `productId`)
 6. List workshops (save `workshopId`)
-7. Product summary
+7. Product summary preview (optional)
 8. Shipping GET
 9. Shipping PATCH
-10. Product checkout session (save `sessionId`)
-11. Pay on Stripe checkout page
-12. Session status until `paid`
-13. Student recent product order
-14. Workshop order summary (save `orderSummaryId`, attendee ids)
-15. Workshop checkout session (save `sessionId`)
-16. Pay on Stripe checkout page
-17. Session status until `paid`
-18. Workshop reservation
-19. Student enrolled workshops
+10. Product order summary create (save `orderSummaryId`)
+11. Product checkout session by `orderSummaryId` (save `sessionId`)
+12. Pay on Stripe checkout page
+13. Session status until `paid`
+14. Student recent product order
+15. Workshop order summary (save `orderSummaryId`, attendee ids)
+16. Workshop checkout session (save `sessionId`)
+17. Pay on Stripe checkout page
+18. Session status until `paid`
+19. Workshop reservation
+20. Student enrolled workshops
 
 You now have a complete Postman API flow for both product buying and course/workshop reservation.
