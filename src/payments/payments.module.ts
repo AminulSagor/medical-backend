@@ -8,6 +8,7 @@ import { WorkshopOrderSummary } from '../workshops/entities/workshop-order-summa
 import { Workshop } from '../workshops/entities/workshop.entity';
 import { WorkshopReservation } from '../workshops/entities/workshop-reservation.entity';
 import { PaymentTransaction } from './entities/payment-transaction.entity';
+import { ProductOrderSummary } from './entities/product-order-summary.entity';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 
@@ -15,6 +16,7 @@ import { PaymentsService } from './payments.service';
   imports: [
     TypeOrmModule.forFeature([
       PaymentTransaction,
+      ProductOrderSummary,
       Product,
       User,
       Order,

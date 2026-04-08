@@ -27,6 +27,10 @@ Validated endpoints in live run:
 Important:
 - Frontend must NOT call the webhook endpoint.
 - Stripe calls webhook endpoint after payment events.
+- Production-grade product checkout should use persisted summary flow:
+  1) `POST /payments/product/order-summary` (auth)
+  2) `POST /payments/checkout-session` with `domainType=product` and `orderSummaryId`
+  3) `GET /payments/session-status/:sessionId`
 
 ---
 

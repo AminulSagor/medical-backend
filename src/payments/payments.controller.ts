@@ -12,12 +12,31 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { AuthenticatedRequest } from '../common/interfaces/authenticated-request.interface';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
+import { CreateProductOrderSummaryDto } from './dto/create-product-order-summary.dto';
 import { SessionStatusParamsDto } from './dto/session-status.params.dto';
 import { PaymentsService } from 'src/payments/payments.service';
 
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
+
+  @Post('product/order-summary')
+  @UseGuards(AuthGuard('jwt'))
+  createProductOrderSummary(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: CreateProductOrderSummaryDto,
+  ) {
+    return this.paymentsService.createProductOrderSummary(req.user.id, dto);
+  }
+
+  @Get('product/order-summary/:id')
+  @UseGuards(AuthGuard('jwt'))
+  getProductOrderSummary(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.paymentsService.getProductOrderSummary(req.user.id, id);
+  }
 
   @Post('checkout-session')
   @UseGuards(AuthGuard('jwt'))

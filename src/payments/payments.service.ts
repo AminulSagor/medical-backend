@@ -31,11 +31,17 @@ import {
   CheckoutShippingAddressDto,
   CreateCheckoutSessionDto,
 } from './dto/create-checkout-session.dto';
+import { CreateProductOrderSummaryDto } from './dto/create-product-order-summary.dto';
 import {
   ReservationStatus,
   WorkshopReservation,
 } from '../workshops/entities/workshop-reservation.entity';
 import { WorkshopStatus } from '../workshops/entities/workshop.entity';
+import {
+  ProductOrderSummary,
+  ProductOrderSummaryItem,
+  ProductOrderSummaryStatus,
+} from './entities/product-order-summary.entity';
 
 type ProductCalculatedItem = {
   productId: string;
@@ -55,6 +61,24 @@ type ProductCalculatedSummary = {
   orderTotal: number;
 };
 
+type ProductSummaryPayloadItem = {
+  productId: string;
+  name: string;
+  sku: string | null;
+  photo: string | null;
+  quantity: number;
+  unitPrice: string;
+  lineTotal: string;
+};
+
+type ProductSummaryPayload = {
+  items: ProductSummaryPayloadItem[];
+  subtotal: string;
+  estimatedShipping: string;
+  estimatedTax: string;
+  orderTotal: string;
+};
+
 @Injectable()
 export class PaymentsService {
   private static readonly DEFAULT_TAX_RATE = 0.1;
@@ -64,6 +88,8 @@ export class PaymentsService {
   constructor(
     @InjectRepository(PaymentTransaction)
     private readonly paymentsRepo: Repository<PaymentTransaction>,
+    @InjectRepository(ProductOrderSummary)
+    private readonly productOrderSummariesRepo: Repository<ProductOrderSummary>,
     @InjectRepository(Product)
     private readonly productsRepo: Repository<Product>,
     @InjectRepository(User)
@@ -281,7 +307,9 @@ export class PaymentsService {
     };
   }
 
-  private toProductSummaryPayload(summary: ProductCalculatedSummary) {
+  private toProductSummaryPayload(
+    summary: ProductCalculatedSummary,
+  ): ProductSummaryPayload {
     return {
       items: summary.items.map((item) => ({
         productId: item.productId,
@@ -296,6 +324,134 @@ export class PaymentsService {
       estimatedShipping: this.formatAmount(summary.estimatedShipping),
       estimatedTax: this.formatAmount(summary.estimatedTax),
       orderTotal: this.formatAmount(summary.orderTotal),
+    };
+  }
+
+  private toCalculatedSummaryFromSaved(
+    summary: ProductOrderSummary,
+  ): ProductCalculatedSummary {
+    return {
+      items: (summary.items ?? []).map((item) => ({
+        productId: item.productId,
+        name: item.name,
+        sku: item.sku,
+        photo: item.photo,
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.unitPrice),
+        lineTotal: Number(item.lineTotal),
+      })),
+      subtotal: Number(summary.subtotal),
+      estimatedShipping: Number(summary.shippingAmount),
+      estimatedTax: Number(summary.taxAmount),
+      orderTotal: Number(summary.totalAmount),
+    };
+  }
+
+  private getProductSummaryExpiryMinutes(): number {
+    const configured = Number(process.env.PRODUCT_ORDER_SUMMARY_EXPIRES_MINUTES ?? 30);
+    return Number.isFinite(configured) && configured > 0 ? configured : 30;
+  }
+
+  private async createSavedProductOrderSummary(
+    userId: string,
+    summary: ProductCalculatedSummary,
+  ): Promise<ProductOrderSummary> {
+    const payload = this.toProductSummaryPayload(summary);
+    const expiresAt = new Date(
+      Date.now() + this.getProductSummaryExpiryMinutes() * 60 * 1000,
+    );
+
+    const entity = this.productOrderSummariesRepo.create({
+      userId,
+      currency: 'usd',
+      items: payload.items as ProductOrderSummaryItem[],
+      subtotal: payload.subtotal,
+      shippingAmount: payload.estimatedShipping,
+      taxAmount: payload.estimatedTax,
+      totalAmount: payload.orderTotal,
+      status: ProductOrderSummaryStatus.PENDING,
+      expiresAt,
+    });
+
+    return this.productOrderSummariesRepo.save(entity);
+  }
+
+  private async getOwnedProductOrderSummary(
+    userId: string,
+    orderSummaryId: string,
+  ): Promise<ProductOrderSummary> {
+    const summary = await this.productOrderSummariesRepo.findOne({
+      where: { id: orderSummaryId, userId },
+    });
+
+    if (!summary) {
+      throw new NotFoundException('Order summary not found');
+    }
+
+    return summary;
+  }
+
+  private async ensurePendingAndNotExpired(
+    summary: ProductOrderSummary,
+  ): Promise<ProductOrderSummary> {
+    if (summary.status === ProductOrderSummaryStatus.COMPLETED) {
+      return summary;
+    }
+
+    if (summary.status === ProductOrderSummaryStatus.EXPIRED) {
+      throw new BadRequestException('Order summary expired, create a new one');
+    }
+
+    if (summary.expiresAt && summary.expiresAt.getTime() < Date.now()) {
+      summary.status = ProductOrderSummaryStatus.EXPIRED;
+      await this.productOrderSummariesRepo.save(summary);
+      throw new BadRequestException('Order summary expired, create a new one');
+    }
+
+    return summary;
+  }
+
+  async createProductOrderSummary(
+    userId: string,
+    dto: CreateProductOrderSummaryDto,
+  ) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const summary = await this.buildProductSummary(dto.items as CheckoutSessionItemDto[]);
+    const saved = await this.createSavedProductOrderSummary(userId, summary);
+
+    return {
+      message: 'Product order summary created successfully',
+      data: {
+        orderSummaryId: saved.id,
+        status: saved.status,
+        expiresAt: saved.expiresAt,
+        ...this.toProductSummaryPayload(summary),
+      },
+    };
+  }
+
+  async getProductOrderSummary(userId: string, orderSummaryId: string) {
+    const summary = await this.getOwnedProductOrderSummary(userId, orderSummaryId);
+
+    if (summary.status === ProductOrderSummaryStatus.PENDING) {
+      await this.ensurePendingAndNotExpired(summary);
+    }
+
+    const calculated = this.toCalculatedSummaryFromSaved(summary);
+
+    return {
+      message: 'Product order summary fetched successfully',
+      data: {
+        orderSummaryId: summary.id,
+        status: summary.status,
+        expiresAt: summary.expiresAt,
+        completedAt: summary.completedAt ?? null,
+        ...this.toProductSummaryPayload(calculated),
+      },
     };
   }
 
@@ -338,13 +494,38 @@ export class PaymentsService {
     user: User,
     dto: CreateCheckoutSessionDto,
   ) {
-    if (!dto.items || dto.items.length === 0) {
-      throw new BadRequestException(
-        'items are required for product checkout sessions',
-      );
-    }
+    let productSummary: ProductOrderSummary;
+    let summary: ProductCalculatedSummary;
 
-    const summary = await this.buildProductSummary(dto.items);
+    if (dto.orderSummaryId) {
+      productSummary = await this.getOwnedProductOrderSummary(
+        user.id,
+        dto.orderSummaryId,
+      );
+
+      if (productSummary.status === ProductOrderSummaryStatus.COMPLETED) {
+        return {
+          message: 'Product payment already completed for this order summary',
+          data: {
+            orderSummaryId: productSummary.id,
+            status: productSummary.status,
+            paymentStatus: 'paid',
+          },
+        };
+      }
+
+      productSummary = await this.ensurePendingAndNotExpired(productSummary);
+      summary = this.toCalculatedSummaryFromSaved(productSummary);
+    } else {
+      if (!dto.items || dto.items.length === 0) {
+        throw new BadRequestException(
+          'Either orderSummaryId or items is required for product checkout sessions',
+        );
+      }
+
+      summary = await this.buildProductSummary(dto.items);
+      productSummary = await this.createSavedProductOrderSummary(user.id, summary);
+    }
 
     const incomingShipping = dto.shippingAddress
       ? this.normalizeShippingAddress(dto.shippingAddress)
@@ -359,16 +540,42 @@ export class PaymentsService {
     const { stripeSecretKey, successUrl, cancelUrl } = this.getStripeConfig(dto);
     const stripe = Stripe(stripeSecretKey);
 
+    const existingPending = await this.paymentsRepo.findOne({
+      where: {
+        userId: user.id,
+        domainType: PaymentDomainType.PRODUCT,
+        domainRefId: productSummary.id,
+        status: PaymentTransactionStatus.PENDING,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (existingPending?.providerSessionId) {
+      return {
+        message: 'Checkout session already exists for this order summary',
+        data: {
+          paymentId: existingPending.id,
+          domainType: PaymentDomainType.PRODUCT,
+          sessionId: existingPending.providerSessionId,
+          checkoutUrl: existingPending.metadata?.checkoutUrl ?? null,
+          orderSummaryId: productSummary.id,
+          shippingAddress,
+          orderSummary: this.toProductSummaryPayload(summary),
+        },
+      };
+    }
+
     const payment = this.paymentsRepo.create({
       userId: user.id,
       domainType: PaymentDomainType.PRODUCT,
-      domainRefId: 'product_checkout',
+      domainRefId: productSummary.id,
       provider: PaymentProvider.STRIPE,
       amount: this.formatAmount(summary.orderTotal),
       currency: 'usd',
       status: PaymentTransactionStatus.CREATED,
-      idempotencyKey: `${user.id}:product:${Date.now()}`,
+      idempotencyKey: `${user.id}:product:${productSummary.id}:${Date.now()}`,
       metadata: {
+        orderSummaryId: productSummary.id,
         orderSummary: this.toProductSummaryPayload(summary),
         items: this.toProductSummaryPayload(summary).items,
         shippingAddress,
@@ -437,6 +644,7 @@ export class PaymentsService {
         paymentId: savedPayment.id,
         domainType: PaymentDomainType.PRODUCT,
         userId: user.id,
+        orderSummaryId: productSummary.id,
       },
     });
 
@@ -461,6 +669,7 @@ export class PaymentsService {
         domainType: PaymentDomainType.PRODUCT,
         sessionId: session.id,
         checkoutUrl: session.url,
+        orderSummaryId: productSummary.id,
         shippingAddress,
         orderSummary: this.toProductSummaryPayload(summary),
       },
@@ -728,6 +937,21 @@ export class PaymentsService {
     payment.status = PaymentTransactionStatus.EXPIRED;
     payment.providerSessionId = session.id;
     await this.paymentsRepo.save(payment);
+
+    if (payment.domainType === PaymentDomainType.PRODUCT) {
+      const orderSummaryId = payment.metadata?.orderSummaryId ?? payment.domainRefId;
+
+      if (orderSummaryId && orderSummaryId !== 'product_checkout') {
+        await this.productOrderSummariesRepo.update(
+          {
+            id: orderSummaryId,
+            userId: payment.userId,
+            status: ProductOrderSummaryStatus.PENDING,
+          },
+          { status: ProductOrderSummaryStatus.EXPIRED },
+        );
+      }
+    }
   }
 
   private async generateOrderNumber(): Promise<string> {
@@ -811,6 +1035,20 @@ export class PaymentsService {
     } as any);
 
     const savedOrder = await this.ordersRepo.save(order as any);
+
+    const orderSummaryId = metadata.orderSummaryId ?? payment.domainRefId;
+    if (orderSummaryId && orderSummaryId !== 'product_checkout') {
+      const summary = await this.productOrderSummariesRepo.findOne({
+        where: { id: orderSummaryId, userId: payment.userId },
+      });
+
+      if (summary && summary.status !== ProductOrderSummaryStatus.COMPLETED) {
+        summary.status = ProductOrderSummaryStatus.COMPLETED;
+        summary.completedAt = new Date();
+        await this.productOrderSummariesRepo.save(summary);
+      }
+    }
+
     return (savedOrder as any).id;
   }
 
