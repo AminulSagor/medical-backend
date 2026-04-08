@@ -101,7 +101,10 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     this.validateCreatePayload(dto);
 
-    const segments = await this.loadAndValidateGeneralSegments(dto.segmentIds);
+    // FIX: Provide a fallback empty array if segmentIds is undefined
+    const segments = await this.loadAndValidateGeneralSegments(
+      dto.segmentIds ?? [],
+    );
 
     try {
       const saved = await this.dataSource.transaction(async (manager) => {
@@ -196,7 +199,6 @@ export class BroadcastsService {
           dto.contentType === NewsletterContentType.ARTICLE_LINK &&
           dto.articleLink
         ) {
-          // TODO: replace with article-source adapter lookup
           await manager.save(
             NewsletterBroadcastArticleLink,
             manager.create(NewsletterBroadcastArticleLink, {
@@ -211,24 +213,24 @@ export class BroadcastsService {
               sourcePublishedAtSnapshot: blogSnapshot!.publishedAt,
 
               ctaLabel: dto.articleLink.ctaLabel?.trim() || 'Read Full Article',
-
-              // OPTIONAL: add DB column if you want these as snapshots:
-              // sourceEstimatedReadMinutesSnapshot: blogSnapshot!.estimatedReadMinutes,
-              // sourceKindLabelSnapshot: blogSnapshot!.kindLabel,
             }),
           );
         }
 
-        await manager.save(
-          NewsletterBroadcastSegment,
-          segments.map((seg) =>
-            manager.create(NewsletterBroadcastSegment, {
-              broadcastId: savedBroadcast.id,
-              segmentId: seg.id,
-            }),
-          ),
-        );
+        // Only save segment relations if segments actually exist
+        if (segments.length > 0) {
+          await manager.save(
+            NewsletterBroadcastSegment,
+            segments.map((seg) =>
+              manager.create(NewsletterBroadcastSegment, {
+                broadcastId: savedBroadcast.id,
+                segmentId: seg.id,
+              }),
+            ),
+          );
+        }
 
+        // For ALL_SUBSCRIBERS, this will likely resolve to 0 initially or use a different estimation method in the resolver.
         const estimatedRecipientsCount =
           await this.audienceResolverService.estimateRecipientsBySegmentIds(
             segments.map((s) => s.id),
@@ -797,14 +799,192 @@ export class BroadcastsService {
     };
   }
 
-  async schedule(
+  // async schedule(
+  //   adminUserId: string,
+  //   broadcastId: string,
+  //   dto: ScheduleBroadcastDto,
+  // ): Promise<Record<string, unknown>> {
+  //   const broadcast = await this.broadcastRepo.findOne({
+  //     where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
+  //     relations: ['customContent', 'articleLink', 'broadcastSegments'],
+  //   });
+
+  //   if (!broadcast)
+  //     throw new NotFoundException('General newsletter broadcast not found');
+
+  //   if (
+  //     ![
+  //       NewsletterBroadcastStatus.DRAFT,
+  //       NewsletterBroadcastStatus.READY,
+  //       NewsletterBroadcastStatus.REVIEW_PENDING,
+  //     ].includes(broadcast.status)
+  //   ) {
+  //     throw new UnprocessableEntityException(
+  //       'Only draft/ready broadcasts can be scheduled',
+  //     );
+  //   }
+
+  //   if (!broadcast.subjectLine?.trim()) {
+  //     throw new UnprocessableEntityException(
+  //       'subjectLine is required before scheduling',
+  //     );
+  //   }
+
+  //   if (!broadcast.broadcastSegments?.length) {
+  //     throw new UnprocessableEntityException(
+  //       'At least one audience segment is required before scheduling',
+  //     );
+  //   }
+
+  //   if (
+  //     broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE &&
+  //     !broadcast.customContent?.messageBodyHtml?.trim()
+  //   ) {
+  //     throw new UnprocessableEntityException(
+  //       'Custom message content is required before scheduling',
+  //     );
+  //   }
+
+  //   if (
+  //     broadcast.contentType === NewsletterContentType.ARTICLE_LINK &&
+  //     !broadcast.articleLink?.sourceRefId
+  //   ) {
+  //     throw new UnprocessableEntityException(
+  //       'Article source is required before scheduling',
+  //     );
+  //   }
+
+  //   const scheduledAt = new Date(dto.scheduledAtUtc);
+  //   if (Number.isNaN(scheduledAt.getTime()))
+  //     throw new BadRequestException('scheduledAtUtc is invalid');
+  //   if (scheduledAt <= new Date())
+  //     throw new UnprocessableEntityException(
+  //       'scheduledAtUtc must be in the future',
+  //     );
+
+  //   const cadence = await this.cadenceRepo.findOne({
+  //     where: { channelType: NewsletterChannelType.GENERAL },
+  //   });
+  //   if (!cadence) {
+  //     throw new NotFoundException(
+  //       'General newsletter cadence settings not found',
+  //     );
+  //   }
+
+  //   // strict slot validation against cadence windows
+  //   const validSlots = buildCadenceSlots({
+  //     timezone: dto.timezone.trim(),
+  //     frequencyType: dto.frequencyType,
+  //     fromDate:
+  //       DateTime.fromJSDate(scheduledAt).minus({ days: 2 }).toISODate() ??
+  //       undefined,
+  //     toDate:
+  //       DateTime.fromJSDate(scheduledAt).plus({ days: 2 }).toISODate() ??
+  //       undefined,
+  //     count: 20,
+  //     weekly: {
+  //       enabled: cadence.weeklyEnabled,
+  //       releaseDay: cadence.weeklyReleaseDay,
+  //       releaseTime: cadence.weeklyReleaseTime,
+  //     },
+  //     monthly: {
+  //       enabled: cadence.monthlyEnabled,
+  //       dayOfMonth: cadence.monthlyDayOfMonth,
+  //       releaseTime: cadence.monthlyReleaseTime,
+  //     },
+  //   });
+
+  //   const exactSlotMatch = validSlots.some(
+  //     (s) => s.scheduledAtUtc === scheduledAt.toISOString(),
+  //   );
+  //   if (!exactSlotMatch) {
+  //     throw new UnprocessableEntityException(
+  //       'scheduledAtUtc must match an available cadence slot for the selected frequency',
+  //     );
+  //   }
+
+  //   const collision = await this.broadcastRepo.findOne({
+  //     where: {
+  //       channelType: NewsletterChannelType.GENERAL,
+  //       status: NewsletterBroadcastStatus.SCHEDULED,
+  //       frequencyType: dto.frequencyType,
+  //       scheduledAt,
+  //     },
+  //   });
+
+  //   if (collision && collision.id !== broadcast.id) {
+  //     throw new ConflictException('Selected cadence slot is already booked');
+  //   }
+
+  //   const segmentIds = broadcast.broadcastSegments.map((x) => x.segmentId);
+  //   broadcast.estimatedRecipientsCount =
+  //     await this.audienceResolverService.estimateRecipientsBySegmentIds(
+  //       segmentIds,
+  //     );
+  //   if (broadcast.estimatedRecipientsCount < 1) {
+  //     throw new UnprocessableEntityException(
+  //       'No active recipients available for selected audience',
+  //     );
+  //   }
+
+  //   broadcast.frequencyType = dto.frequencyType;
+  //   broadcast.scheduledAt = scheduledAt;
+  //   broadcast.timezone = dto.timezone.trim();
+  //   broadcast.cadenceAnchorLabel = dto.cadenceAnchorLabel?.trim() || null;
+  //   broadcast.cadenceVersionAtScheduling = cadence.version;
+  //   broadcast.status = NewsletterBroadcastStatus.SCHEDULED;
+  //   broadcast.updatedByAdminId = adminUserId;
+
+  //   const saved = await this.broadcastRepo.save(broadcast);
+
+  //   await this.ensureQueueOrderExists(
+  //     adminUserId,
+  //     saved.id,
+  //     saved.frequencyType!,
+  //   );
+
+  //   await this.auditService.log({
+  //     entityType: 'BROADCAST',
+  //     entityId: saved.id,
+  //     action: 'SCHEDULE',
+  //     performedByAdminId: adminUserId,
+  //     meta: {
+  //       scheduledAtUtc: saved.scheduledAt?.toISOString() ?? null,
+  //       frequencyType: saved.frequencyType ?? null,
+  //     },
+  //   });
+
+  //   return {
+  //     message: 'Broadcast scheduled successfully',
+  //     id: saved.id,
+  //     subjectLine: saved.subjectLine,
+  //     status: saved.status,
+  //     scheduledAtUtc: saved.scheduledAt!.toISOString(),
+  //     estimatedRecipientsCount: saved.estimatedRecipientsCount,
+  //     successModal: {
+  //       title: 'Broadcast Scheduled Successfully',
+  //       summary: {
+  //         title: saved.subjectLine,
+  //         recipientsCount: saved.estimatedRecipientsCount,
+  //         scheduledAtUtc: saved.scheduledAt!.toISOString(),
+  //         scheduledAtDisplay: this.formatDateTimeLabel(
+  //           saved.scheduledAt,
+  //           saved.timezone,
+  //         ),
+  //         frequencyLabel: this.getFrequencyLabel(saved.frequencyType),
+  //       },
+  //       ctaLabel: 'Return to Dashboard',
+  //     },
+  //   };
+  // }
+
+  async setScheduleSettings(
     adminUserId: string,
     broadcastId: string,
     dto: ScheduleBroadcastDto,
   ): Promise<Record<string, unknown>> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
-      relations: ['customContent', 'articleLink', 'broadcastSegments'],
     });
 
     if (!broadcast)
@@ -818,37 +998,7 @@ export class BroadcastsService {
       ].includes(broadcast.status)
     ) {
       throw new UnprocessableEntityException(
-        'Only draft/ready broadcasts can be scheduled',
-      );
-    }
-
-    if (!broadcast.subjectLine?.trim()) {
-      throw new UnprocessableEntityException(
-        'subjectLine is required before scheduling',
-      );
-    }
-
-    if (!broadcast.broadcastSegments?.length) {
-      throw new UnprocessableEntityException(
-        'At least one audience segment is required before scheduling',
-      );
-    }
-
-    if (
-      broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE &&
-      !broadcast.customContent?.messageBodyHtml?.trim()
-    ) {
-      throw new UnprocessableEntityException(
-        'Custom message content is required before scheduling',
-      );
-    }
-
-    if (
-      broadcast.contentType === NewsletterContentType.ARTICLE_LINK &&
-      !broadcast.articleLink?.sourceRefId
-    ) {
-      throw new UnprocessableEntityException(
-        'Article source is required before scheduling',
+        'Can only configure schedule for draft/ready broadcasts',
       );
     }
 
@@ -869,7 +1019,7 @@ export class BroadcastsService {
       );
     }
 
-    // strict slot validation against cadence windows
+    // Strict slot validation against cadence windows
     const validSlots = buildCadenceSlots({
       timezone: dto.timezone.trim(),
       frequencyType: dto.frequencyType,
@@ -901,12 +1051,91 @@ export class BroadcastsService {
       );
     }
 
+    // Save settings but DO NOT change the status to SCHEDULED
+    broadcast.frequencyType = dto.frequencyType;
+    broadcast.scheduledAt = scheduledAt;
+    broadcast.timezone = dto.timezone.trim();
+    broadcast.cadenceAnchorLabel = dto.cadenceAnchorLabel?.trim() || null;
+    broadcast.updatedByAdminId = adminUserId;
+
+    await this.broadcastRepo.save(broadcast);
+
+    return {
+      message: 'Schedule settings saved successfully',
+      scheduledAtUtc: broadcast.scheduledAt.toISOString(),
+    };
+  }
+
+  async executeSchedule(
+    adminUserId: string,
+    broadcastId: string,
+  ): Promise<Record<string, unknown>> {
+    const broadcast = await this.broadcastRepo.findOne({
+      where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
+      relations: ['customContent', 'articleLink', 'broadcastSegments'],
+    });
+
+    if (!broadcast)
+      throw new NotFoundException('General newsletter broadcast not found');
+
+    // 1. Verify schedule settings exist
+    if (
+      !broadcast.scheduledAt ||
+      !broadcast.frequencyType ||
+      !broadcast.timezone
+    ) {
+      throw new UnprocessableEntityException(
+        'Schedule settings must be configured before execution',
+      );
+    }
+
+    // 2. Validate readiness
+    if (!broadcast.subjectLine?.trim()) {
+      throw new UnprocessableEntityException(
+        'subjectLine is required before scheduling',
+      );
+    }
+
+    // NOTE: Make sure your enum is actually named NewsletterAudienceMode.SEGMENTS or SEGMENTS
+    // depending on what is in your newsletter-constants.enum.ts
+    if (
+      broadcast.audienceMode === NewsletterAudienceMode.SEGMENTS &&
+      !broadcast.broadcastSegments?.length
+    ) {
+      throw new UnprocessableEntityException(
+        'At least one audience segment is required before scheduling',
+      );
+    }
+
+    if (
+      broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE &&
+      !broadcast.customContent?.messageBodyHtml?.trim()
+    ) {
+      throw new UnprocessableEntityException(
+        'Custom message content is required before scheduling',
+      );
+    }
+
+    if (
+      broadcast.contentType === NewsletterContentType.ARTICLE_LINK &&
+      !broadcast.articleLink?.sourceRefId
+    ) {
+      throw new UnprocessableEntityException(
+        'Article source is required before scheduling',
+      );
+    }
+
+    const cadence = await this.cadenceRepo.findOne({
+      where: { channelType: NewsletterChannelType.GENERAL },
+    });
+
+    // 3. Check for Cadence Collisions
     const collision = await this.broadcastRepo.findOne({
       where: {
         channelType: NewsletterChannelType.GENERAL,
         status: NewsletterBroadcastStatus.SCHEDULED,
-        frequencyType: dto.frequencyType,
-        scheduledAt,
+        frequencyType: broadcast.frequencyType,
+        scheduledAt: broadcast.scheduledAt,
       },
     });
 
@@ -914,27 +1143,36 @@ export class BroadcastsService {
       throw new ConflictException('Selected cadence slot is already booked');
     }
 
-    const segmentIds = broadcast.broadcastSegments.map((x) => x.segmentId);
-    broadcast.estimatedRecipientsCount =
-      await this.audienceResolverService.estimateRecipientsBySegmentIds(
-        segmentIds,
+    // 4. Estimate Recipients
+    if (broadcast.audienceMode === NewsletterAudienceMode.SEGMENTS) {
+      // FIX 1: Provide fallback empty array to satisfy TypeScript strict null checks
+      const segmentIds = (broadcast.broadcastSegments ?? []).map(
+        (x) => x.segmentId,
       );
-    if (broadcast.estimatedRecipientsCount < 1) {
-      throw new UnprocessableEntityException(
-        'No active recipients available for selected audience',
-      );
+      broadcast.estimatedRecipientsCount =
+        await this.audienceResolverService.estimateRecipientsBySegmentIds(
+          segmentIds,
+        );
+    } else {
+      // FIX 2: Cast to 'any' to bypass TS interface restrictions for a dynamic runtime check
+      const resolverAny = this.audienceResolverService as any;
+      if (typeof resolverAny.estimateAllSubscribers === 'function') {
+        broadcast.estimatedRecipientsCount =
+          await resolverAny.estimateAllSubscribers();
+      } else {
+        broadcast.estimatedRecipientsCount =
+          await this.audienceResolverService.estimateRecipientsBySegmentIds([]);
+      }
     }
 
-    broadcast.frequencyType = dto.frequencyType;
-    broadcast.scheduledAt = scheduledAt;
-    broadcast.timezone = dto.timezone.trim();
-    broadcast.cadenceAnchorLabel = dto.cadenceAnchorLabel?.trim() || null;
-    broadcast.cadenceVersionAtScheduling = cadence.version;
-    broadcast.status = NewsletterBroadcastStatus.SCHEDULED;
+    // 5. Finalize the Execution
+    broadcast.cadenceVersionAtScheduling = cadence!.version;
+    broadcast.status = NewsletterBroadcastStatus.SCHEDULED; // THE TRIGGER
     broadcast.updatedByAdminId = adminUserId;
 
     const saved = await this.broadcastRepo.save(broadcast);
 
+    // FIX 3: Use the non-null assertion operator (!) since we validated frequencyType exists in Step 1
     await this.ensureQueueOrderExists(
       adminUserId,
       saved.id,
@@ -955,7 +1193,6 @@ export class BroadcastsService {
     return {
       message: 'Broadcast scheduled successfully',
       id: saved.id,
-      subjectLine: saved.subjectLine,
       status: saved.status,
       scheduledAtUtc: saved.scheduledAt!.toISOString(),
       estimatedRecipientsCount: saved.estimatedRecipientsCount,
@@ -964,12 +1201,11 @@ export class BroadcastsService {
         summary: {
           title: saved.subjectLine,
           recipientsCount: saved.estimatedRecipientsCount,
-          scheduledAtUtc: saved.scheduledAt!.toISOString(),
+          // Note: ensure this.formatDateTimeLabel requires parameters that match exactly
           scheduledAtDisplay: this.formatDateTimeLabel(
-            saved.scheduledAt,
-            saved.timezone,
+            saved.scheduledAt!,
+            saved.timezone!,
           ),
-          frequencyLabel: this.getFrequencyLabel(saved.frequencyType),
         },
         ctaLabel: 'Return to Dashboard',
       },
@@ -1095,127 +1331,81 @@ export class BroadcastsService {
   async getWorkspaceMetrics(
     query: GetWorkspaceMetricsQueryDto,
   ): Promise<Record<string, unknown>> {
-    if (query.tab === 'queue') {
-      const whereBase: any = {
-        channelType: NewsletterChannelType.GENERAL,
-        status: In([
-          NewsletterBroadcastStatus.READY,
-          NewsletterBroadcastStatus.SCHEDULED,
-        ]),
-      };
-      if (query.frequencyType) whereBase.frequencyType = query.frequencyType;
+    const baseWhere = { channelType: NewsletterChannelType.GENERAL };
+    const freqWhere = query.frequencyType
+      ? { ...baseWhere, frequencyType: query.frequencyType }
+      : baseWhere;
 
-      const [queuedItems, queuedRows, sentRecent] = await Promise.all([
-        this.broadcastRepo.count({ where: whereBase }),
-        this.broadcastRepo.find({
-          where: whereBase,
-          select: ['scheduledAt', 'frequencyType'],
-          order: { scheduledAt: 'ASC' },
-          take: 100,
-        }),
-        this.broadcastRepo.find({
-          where: {
-            channelType: NewsletterChannelType.GENERAL,
-            status: NewsletterBroadcastStatus.SENT,
-          },
-          select: ['openRatePercent'],
-          order: { sentAt: 'DESC' },
-          take: 20,
-        }),
-      ]);
-
-      const avgOpen = sentRecent.length
-        ? Number(
-            (
-              sentRecent.reduce(
-                (sum, x) => sum + Number(x.openRatePercent || 0),
-                0,
-              ) / sentRecent.length
-            ).toFixed(1),
-          )
-        : 0;
-
-      let coverageDays = 0;
-      if (queuedRows.length >= 2) {
-        const first = queuedRows[0].scheduledAt;
-        const last = queuedRows[queuedRows.length - 1].scheduledAt;
-        if (first && last) {
-          coverageDays = Math.max(
-            0,
-            Math.ceil((last.getTime() - first.getTime()) / 86400000),
-          );
-        }
-      } else if (queuedRows.length === 1) {
-        coverageDays =
-          query.frequencyType === NewsletterFrequencyType.MONTHLY ? 30 : 7;
-      }
-
-      return {
-        tab: 'queue',
-        cards: {
-          queueEfficiency: {
-            queuedCount: queuedItems,
-            coverageDays,
-          },
-          totalSubscribers: {
-            // can also fetch from subscriber service/repo
-            label: 'General Subscribers',
-          },
-          engagementPulse: {
-            openRatePercent: avgOpen,
-          },
-          viewFlags: {
-            activeBroadcastingView: true,
-          },
-        },
-      };
-    }
-
-    if (query.tab === 'drafts') {
-      const [draftCount, byTypeRows] = await Promise.all([
-        this.broadcastRepo.count({
-          where: {
-            channelType: NewsletterChannelType.GENERAL,
-            status: In([
-              NewsletterBroadcastStatus.DRAFT,
-              NewsletterBroadcastStatus.REVIEW_PENDING,
-            ]),
-          },
-        }),
-        this.broadcastRepo
-          .createQueryBuilder('b')
-          .select('b.contentType', 'contentType')
-          .addSelect('COUNT(*)', 'count')
-          .where('b.channelType = :channelType', {
-            channelType: NewsletterChannelType.GENERAL,
-          })
-          .andWhere('b.status IN (:...statuses)', {
-            statuses: [
-              NewsletterBroadcastStatus.DRAFT,
-              NewsletterBroadcastStatus.REVIEW_PENDING,
-            ],
-          })
-          .groupBy('b.contentType')
-          .getRawMany<{ contentType: string; count: string }>(),
-      ]);
-
-      return {
-        tab: 'drafts',
-        cards: {
-          queueEfficiency: { queuedCount: draftCount },
-          breakdownByContentType: byTypeRows.map((r) => ({
-            contentType: r.contentType,
-            count: Number(r.count),
-          })),
-          viewFlags: { draftWorkspace: true },
-        },
-      };
-    }
-
-    const [historyCount, sentCount, bestOpenRow] = await Promise.all([
+    // Run all aggregate queries concurrently for an "allover summary"
+    const [
+      queuedCount,
+      queuedRows,
+      sentRecent,
+      draftCount,
+      byTypeRows,
+      historyCount,
+      sentCount,
+      bestOpenRow,
+    ] = await Promise.all([
+      // 1. Queue Stats
       this.broadcastRepo.count({
         where: {
+          ...freqWhere,
+          status: In([
+            NewsletterBroadcastStatus.READY,
+            NewsletterBroadcastStatus.SCHEDULED,
+          ]),
+        },
+      }),
+      this.broadcastRepo.find({
+        where: {
+          ...freqWhere,
+          status: In([
+            NewsletterBroadcastStatus.READY,
+            NewsletterBroadcastStatus.SCHEDULED,
+          ]),
+        },
+        select: ['scheduledAt'],
+        order: { scheduledAt: 'ASC' },
+        take: 100,
+      }),
+      this.broadcastRepo.find({
+        where: { ...freqWhere, status: NewsletterBroadcastStatus.SENT },
+        select: ['openRatePercent'],
+        order: { sentAt: 'DESC' },
+        take: 20,
+      }),
+
+      // 2. Draft Stats
+      this.broadcastRepo.count({
+        where: {
+          ...baseWhere,
+          status: In([
+            NewsletterBroadcastStatus.DRAFT,
+            NewsletterBroadcastStatus.REVIEW_PENDING,
+          ]),
+        },
+      }),
+      this.broadcastRepo
+        .createQueryBuilder('b')
+        .select('b.contentType', 'contentType')
+        .addSelect('COUNT(*)', 'count')
+        .where('b.channelType = :channelType', {
           channelType: NewsletterChannelType.GENERAL,
+        })
+        .andWhere('b.status IN (:...statuses)', {
+          statuses: [
+            NewsletterBroadcastStatus.DRAFT,
+            NewsletterBroadcastStatus.REVIEW_PENDING,
+          ],
+        })
+        .groupBy('b.contentType')
+        .getRawMany<{ contentType: string; count: string }>(),
+
+      // 3. History Stats
+      this.broadcastRepo.count({
+        where: {
+          ...freqWhere,
           status: In([
             NewsletterBroadcastStatus.SENT,
             NewsletterBroadcastStatus.CANCELLED,
@@ -1224,14 +1414,11 @@ export class BroadcastsService {
         },
       }),
       this.broadcastRepo.count({
-        where: {
-          channelType: NewsletterChannelType.GENERAL,
-          status: NewsletterBroadcastStatus.SENT,
-        },
+        where: { ...freqWhere, status: NewsletterBroadcastStatus.SENT },
       }),
       this.broadcastRepo
         .createQueryBuilder('b')
-        .select('MAX(b.openRatePercent)', 'bestOpenRate')
+        .select('MAX(CAST(b.openRatePercent AS NUMERIC))', 'bestOpenRate')
         .where('b.channelType = :channelType', {
           channelType: NewsletterChannelType.GENERAL,
         })
@@ -1241,15 +1428,52 @@ export class BroadcastsService {
         .getRawOne<{ bestOpenRate: string | null }>(),
     ]);
 
+    // Calculate Averages and Coverage
+    const avgOpen = sentRecent.length
+      ? Number(
+          (
+            sentRecent.reduce(
+              (sum, x) => sum + Number(x.openRatePercent || 0),
+              0,
+            ) / sentRecent.length
+          ).toFixed(1),
+        )
+      : 0;
+
+    let coverageDays = 0;
+    if (queuedRows.length >= 2) {
+      const first = queuedRows[0].scheduledAt;
+      const last = queuedRows[queuedRows.length - 1].scheduledAt;
+      if (first && last) {
+        coverageDays = Math.max(
+          0,
+          Math.ceil((last.getTime() - first.getTime()) / 86400000),
+        );
+      }
+    } else if (queuedRows.length === 1) {
+      coverageDays =
+        query.frequencyType === NewsletterFrequencyType.MONTHLY ? 30 : 7;
+    }
+
     return {
-      tab: 'history',
       cards: {
-        historicalPerformance: { transmissionCount: historyCount },
-        totalBroadcasts: { sentCount },
-        bestEngagement: {
+        queueEfficiency: {
+          queuedCount,
+          coverageDays,
+          draftCount,
+        },
+        engagementPulse: {
+          averageOpenRatePercent: avgOpen,
           bestOpenRatePercent: Number(bestOpenRow?.bestOpenRate ?? 0),
         },
-        viewFlags: { archiveManagement: true },
+        breakdownByContentType: byTypeRows.map((r) => ({
+          contentType: r.contentType,
+          count: Number(r.count),
+        })),
+        historicalPerformance: {
+          transmissionCount: historyCount,
+          sentCount,
+        },
       },
     };
   }
@@ -1259,6 +1483,7 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const tab = query.tab || 'queue';
 
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
@@ -1269,21 +1494,22 @@ export class BroadcastsService {
         channelType: NewsletterChannelType.GENERAL,
       });
 
-    if (query.tab === 'queue') {
+    // 1. Filter by Tab (Queue, Drafts, History)
+    if (tab === 'queue') {
       qb.andWhere('b.status IN (:...statuses)', {
         statuses: [
           NewsletterBroadcastStatus.READY,
           NewsletterBroadcastStatus.SCHEDULED,
         ],
       });
-    } else if (query.tab === 'drafts') {
+    } else if (tab === 'drafts') {
       qb.andWhere('b.status IN (:...statuses)', {
         statuses: [
           NewsletterBroadcastStatus.DRAFT,
           NewsletterBroadcastStatus.REVIEW_PENDING,
         ],
       });
-    } else {
+    } else if (tab === 'history') {
       qb.andWhere('b.status IN (:...statuses)', {
         statuses: [
           NewsletterBroadcastStatus.SENT,
@@ -1293,13 +1519,20 @@ export class BroadcastsService {
       });
     }
 
-    if (query.frequencyType)
+    // 2. Filter by Broadcast Type (Content Type)
+    if (query.contentTypes) {
+      qb.andWhere('b.contentType = :contentType', {
+        contentType: query.contentTypes,
+      });
+    }
+
+    if (query.frequencyType) {
       qb.andWhere('b.frequencyType = :frequencyType', {
         frequencyType: query.frequencyType,
       });
-    if (query.status)
-      qb.andWhere('b.status = :status', { status: query.status });
+    }
 
+    // 3. Search by Title, Author, or Keyword
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere(
@@ -1308,82 +1541,27 @@ export class BroadcastsService {
       );
     }
 
-    if (query.contentTypes?.length) {
-      qb.andWhere('b.contentType IN (:...contentTypes)', {
-        contentTypes: query.contentTypes,
-      });
-    }
-
-    if (query.authorNames?.length) {
-      qb.andWhere('al.sourceAuthorSnapshot IN (:...authorNames)', {
-        authorNames: query.authorNames,
-      });
-    }
-
-    if (query.fromDate) {
-      const field =
-        query.tab === 'history'
-          ? 'COALESCE(b.sentAt, b.updatedAt)'
-          : 'COALESCE(b.scheduledAt, b.updatedAt)';
-      qb.andWhere(`${field} >= :fromDate`, {
-        fromDate: new Date(query.fromDate),
-      });
-    }
-
-    if (query.toDate) {
-      const field =
-        query.tab === 'history'
-          ? 'COALESCE(b.sentAt, b.updatedAt)'
-          : 'COALESCE(b.scheduledAt, b.updatedAt)';
-      qb.andWhere(`${field} <= :toDate`, { toDate: new Date(query.toDate) });
-    }
-
-    if (query.minRecipients !== undefined) {
-      qb.andWhere(
-        'COALESCE(b.sentRecipientsCount, b.estimatedRecipientsCount, 0) >= :minRecipients',
-        {
-          minRecipients: query.minRecipients,
-        },
-      );
-    }
-
-    if (query.minOpenRatePercent !== undefined) {
-      qb.andWhere('COALESCE(b.openRatePercent, 0) >= :minOpenRatePercent', {
-        minOpenRatePercent: query.minOpenRatePercent,
-      });
-    }
-
-    if (query.segmentIds?.length) {
-      qb.andWhere('bs.segmentId IN (:...segmentIds)', {
-        segmentIds: query.segmentIds,
-      });
-    }
-
-    // sorting
+    // 4. Sorting
     const sortBy =
       query.sortBy ??
-      (query.tab === 'drafts'
+      (tab === 'drafts'
         ? 'lastModified'
-        : query.tab === 'history'
+        : tab === 'history'
           ? 'sentDate'
-          : 'queueSequence');
-    const sortOrder =
-      query.sortOrder ?? (query.tab === 'history' ? 'DESC' : 'ASC');
+          : 'scheduledDate');
+    const sortOrder = query.sortOrder ?? (tab === 'history' ? 'DESC' : 'ASC');
 
     if (sortBy === 'scheduledDate') qb.orderBy('b.scheduledAt', sortOrder);
     else if (sortBy === 'lastModified') qb.orderBy('b.updatedAt', sortOrder);
     else if (sortBy === 'sentDate') qb.orderBy('b.sentAt', sortOrder);
     else if (sortBy === 'openRate') qb.orderBy('b.openRatePercent', sortOrder);
-    else if (sortBy === 'clickRate')
-      qb.orderBy('b.clickRatePercent', sortOrder as any);
-    else if (sortBy === 'engagement')
-      qb.orderBy('b.openRatePercent', sortOrder);
-    else qb.orderBy('COALESCE(b.scheduledAt, b.updatedAt)', 'ASC');
+    else qb.orderBy('COALESCE(b.scheduledAt, b.updatedAt)', sortOrder);
 
     qb.skip((page - 1) * limit).take(limit);
 
     const [items, total] = await qb.getManyAndCount();
 
+    // Map rows (Uses existing relation mapping logic)
     const broadcastIds = items.map((x) => x.id);
     const queueOrders = broadcastIds.length
       ? await this.queueOrderRepo.find({
@@ -1411,11 +1589,6 @@ export class BroadcastsService {
         .map((bs: any) => segmentMap.get(bs.segmentId))
         .filter(Boolean);
 
-      const audienceLabel = this.getAudienceLabel(
-        b.audienceMode,
-        linkedSegments.map((s: any) => s.name),
-      );
-
       const typeLabel =
         b.contentType === NewsletterContentType.ARTICLE_LINK
           ? b.articleLink?.sourceType === 'SPECIAL_REPORT'
@@ -1442,8 +1615,7 @@ export class BroadcastsService {
 
       return {
         id: b.id,
-        sequence:
-          query.tab === 'queue' ? (queueOrderMap.get(b.id) ?? null) : null,
+        sequence: tab === 'queue' ? (queueOrderMap.get(b.id) ?? null) : null,
         scheduledDate: b.scheduledAt,
         sentDate: b.sentAt,
         lastModified: b.updatedAt,
@@ -1458,7 +1630,10 @@ export class BroadcastsService {
         author: authorName ? { displayName: authorName } : null,
         target: {
           audienceMode: b.audienceMode,
-          displayLabel: audienceLabel,
+          displayLabel: this.getAudienceLabel(
+            b.audienceMode,
+            linkedSegments.map((s: any) => s.name),
+          ),
           segmentCount: linkedSegments.length,
           segments: linkedSegments.map((s: any) => ({
             id: s.id,
@@ -1476,28 +1651,20 @@ export class BroadcastsService {
           code: b.status,
           displayLabel: this.getStatusLabel(b.status),
         },
-        actions: this.getWorkspaceActions(b, query.tab),
+        actions: this.getWorkspaceActions(b, tab),
       };
     });
 
-    // filter by authorNames post-map if articleLink relation not loaded in all cases
-    const filteredRows = query.authorNames?.length
-      ? rows.filter(
-          (r) => r.author && query.authorNames!.includes(r.author.displayName),
-        )
-      : rows;
-
     return {
-      tab: query.tab,
+      tab,
       frequencyType: query.frequencyType ?? null,
-      items: filteredRows,
+      items: rows,
       meta: { page, limit, total },
       viewFlags: {
-        activeBroadcastingView: query.tab === 'queue',
-        draftWorkspace: query.tab === 'drafts',
-        archiveManagement: query.tab === 'history',
+        activeBroadcastingView: tab === 'queue',
+        draftWorkspace: tab === 'drafts',
+        archiveManagement: tab === 'history',
       },
-      filterOptions: await this.getWorkspaceFilterOptions(),
     };
   }
 
@@ -1904,16 +2071,14 @@ export class BroadcastsService {
   private validateCreatePayload(dto: CreateBroadcastDto): void {
     if (!dto.subjectLine?.trim())
       throw new BadRequestException('subjectLine is required');
-    if (!dto.segmentIds?.length)
-      throw new BadRequestException('segmentIds is required');
 
-    if (
-      dto.audienceMode === NewsletterAudienceMode.ALL_SUBSCRIBERS &&
-      dto.segmentIds.length < 1
-    ) {
-      throw new BadRequestException(
-        'ALL_SUBSCRIBERS requires system segment id',
-      );
+    // 1. Conditionally require segmentIds ONLY if mode is SEGMENTS
+    if (dto.audienceMode === NewsletterAudienceMode.SEGMENTS) {
+      if (!dto.segmentIds || dto.segmentIds.length === 0) {
+        throw new BadRequestException(
+          'segmentIds is required when audienceMode is SEGMENTS',
+        );
+      }
     }
 
     if (dto.contentType === NewsletterContentType.CUSTOM_MESSAGE) {

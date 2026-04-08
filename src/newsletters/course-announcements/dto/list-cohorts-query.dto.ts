@@ -12,12 +12,6 @@ export class ListCohortsQueryDto {
   @IsIn(['all', 'upcoming', 'completed', 'cancelled'])
   tab?: 'all' | 'upcoming' | 'completed' | 'cancelled';
 
-  // Support for 'status' (if UI sends it instead)
-  @IsOptional()
-  @Transform(({ value }) => value?.toLowerCase())
-  @IsIn(['all', 'upcoming', 'completed', 'cancelled'])
-  status?: 'all' | 'upcoming' | 'completed' | 'cancelled';
-
   @IsOptional()
   @IsString()
   category?: string;

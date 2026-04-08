@@ -103,13 +103,32 @@ export class BroadcastsController {
     );
   }
 
-  @Post(':id/schedule')
-  schedule(
+  // @Post(':id/schedule')
+  // schedule(
+  //   @Req() req: AuthenticatedRequest,
+  //   @Param('id', new ParseUUIDPipe()) id: string,
+  //   @Body() dto: ScheduleBroadcastDto,
+  // ): Promise<Record<string, unknown>> {
+  //   return this.broadcastsService.schedule(req.user.id, id, dto);
+  // }
+
+  // API to set and save the schedule configuration
+  @Patch(':id/schedule-settings')
+  setScheduleSettings(
     @Req() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ScheduleBroadcastDto,
   ): Promise<Record<string, unknown>> {
-    return this.broadcastsService.schedule(req.user.id, id, dto);
+    return this.broadcastsService.setScheduleSettings(req.user.id, id, dto);
+  }
+
+  // API to execute the final scheduling process
+  @Post(':id/schedule')
+  executeSchedule(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.executeSchedule(req.user.id, id);
   }
 
   @Post(':id/cancel')
