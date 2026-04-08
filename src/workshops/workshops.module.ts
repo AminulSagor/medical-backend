@@ -15,6 +15,8 @@ import { Facility } from '../facilities/entities/facility.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
+import { WorkshopRefund } from './entities/workshop-refund.entity';
+import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { UsersModule } from '../users/users.module';
       WorkshopAttendee,
       WorkshopOrderSummary,
       WorkshopOrderAttendee,
+      WorkshopRefund,
+      WorkshopRefundItem,
       Facility,
       Faculty,
     ]),
