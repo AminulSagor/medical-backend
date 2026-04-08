@@ -11,6 +11,7 @@ import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import {
   FulfillmentStatus,
+  OrderType,
   PaymentStatus,
   TimelineEventType,
 } from 'src/common/enums/order.enums';
@@ -255,12 +256,74 @@ export class OrdersService {
     };
   }
 
+  private toStudentShippingStatus(status: FulfillmentStatus): string {
+    switch (status) {
+      case FulfillmentStatus.SHIPPED:
+        return 'shipped';
+      case FulfillmentStatus.RECEIVED:
+      case FulfillmentStatus.CLOSED:
+        return 'delivered';
+      case FulfillmentStatus.PROCESSING:
+      case FulfillmentStatus.UNFULFILLED:
+      default:
+        return 'processing';
+    }
+  }
+
   async getPublicOrderSummary(dto: PublicOrderSummaryRequestDto) {
     const summary = await this.buildPublicOrderSummary(dto.items);
 
     return {
       message: 'Order summary calculated successfully',
       data: this.toPublicSummaryResponse(summary),
+    };
+  }
+
+  async getMyRecentProductOrder(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const order = await this.ordersRepo.findOne({
+      where: {
+        customerEmail: user.medicalEmail,
+        type: OrderType.PRODUCT,
+      },
+      order: { createdAt: 'DESC' },
+      relations: ['items'],
+    });
+
+    if (!order) {
+      return {
+        message: 'No recent product order found',
+        data: null,
+      };
+    }
+
+    const firstItem = order.items?.[0];
+
+    return {
+      message: 'Recent product order fetched successfully',
+      data: {
+        orderId: order.orderNumber,
+        orderedAt: order.createdAt,
+        orderedAtFullDate: order.createdAt.toISOString(),
+        price: order.grandTotal,
+        shippingStatus: this.toStudentShippingStatus(order.fulfillmentStatus),
+        fulfillmentStatus: order.fulfillmentStatus,
+        paymentStatus: order.paymentStatus,
+        productName: firstItem?.productName ?? null,
+        productImage: firstItem?.image ?? null,
+        products: (order.items ?? []).map((item) => ({
+          productId: item.productId ?? null,
+          productName: item.productName,
+          productImage: item.image ?? null,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.total,
+        })),
+      },
     };
   }
 

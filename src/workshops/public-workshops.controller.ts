@@ -11,6 +11,13 @@ import { VerifyWorkshopPaymentDto } from "./dto/verify-workshop-payment.dto";
 export class PublicWorkshopsController {
     constructor(private readonly service: WorkshopsService) { }
 
+    @Get("student/enrolled-workshops")
+    @UseGuards(AuthGuard("jwt"))
+    getMyEnrolledWorkshops(@Request() req: any) {
+        const userId = req.user.id;
+        return this.service.getMyEnrolledWorkshops(userId);
+    }
+
     @Get()
     listPublic(@Query() query: PublicListWorkshopsQueryDto) {
         return this.service.listPublic(query);

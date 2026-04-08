@@ -10,6 +10,12 @@ import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 export class PublicOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
+  @Get('student/recent-product-order')
+  @UseGuards(AuthGuard('jwt'))
+  getMyRecentProductOrder(@Req() req: AuthenticatedRequest) {
+    return this.ordersService.getMyRecentProductOrder(req.user.id);
+  }
+
   @Post('summary')
   getOrderSummary(@Body() dto: PublicOrderSummaryRequestDto) {
     return this.ordersService.getPublicOrderSummary(dto);
