@@ -3,6 +3,7 @@ import {
   ArrayUnique,
   IsArray,
   IsEnum,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -55,31 +56,28 @@ export class CreateBroadcastArticleLinkDto {
 }
 
 export class CreateBroadcastDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  internalName?: string;
-
   @IsEnum(NewsletterContentType)
   contentType: NewsletterContentType;
 
+  @IsOptional()
   @IsString()
-  @MaxLength(200)
+  internalName?: string;
+
+  @IsNotEmpty()
+  @IsString()
   subjectLine: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(150)
   preheaderText?: string;
 
   @IsEnum(NewsletterAudienceMode)
   audienceMode: NewsletterAudienceMode;
 
-  @IsArray()
-  @ArrayUnique()
-  @ArrayMaxSize(100)
-  @IsUUID('4', { each: true })
-  segmentIds: string[];
+  // Make this strictly optional if ALL_SUBSCRIBERS
+  @ValidateIf((o) => o.audienceMode === NewsletterAudienceMode.SEGMENTS)
+  @IsUUID('all', { each: true })
+  segmentIds?: string[];
 
   @ValidateIf((o) => o.contentType === NewsletterContentType.CUSTOM_MESSAGE)
   @ValidateNested()

@@ -14,7 +14,10 @@ import { NewsletterBroadcastAttachment } from '../broadcasts/entities/newsletter
 
 import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
 
-import { Workshop } from '../../workshops/entities/workshop.entity';
+import {
+  Workshop,
+  WorkshopStatus,
+} from '../../workshops/entities/workshop.entity';
 import { WorkshopEnrollment } from '../../workshops/entities/workshop-enrollment.entity';
 import { User } from '../../users/entities/user.entity';
 
@@ -107,7 +110,7 @@ export class CourseAnnouncementsService {
   ): Promise<Record<string, unknown>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const tab = query.tab || query.status || 'all';
+    const tab = query.tab || 'all';
 
     const qb = this.workshopRepo
       .createQueryBuilder('w')
@@ -120,29 +123,34 @@ export class CourseAnnouncementsService {
       qb.andWhere('LOWER(w.title) LIKE :s', { s });
     }
 
-    // 2. Filter by Category
-    // NOTE: Your Workshop entity doesn't currently have a `categoryId` column.
-    // You will need to uncomment and adjust this once you add category to the entity.
+    // 2. Filter by Category (Uncomment when categoryId is added to entity)
     if (query.category?.trim()) {
       // qb.andWhere('w.categoryId = :category', { category: query.category });
     }
 
     // 3. Filter by Cohort Status at the Database level
     const now = new Date();
+
     if (tab === 'upcoming') {
+      // FIX: Upcoming includes courses with future dates OR courses with NO dates yet (TBD)
+      // Removed the strict PUBLISHED check so your Drafts will show up here too.
       qb.andWhere(
-        'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
+        '(EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now) OR NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id))',
         { now },
       );
     } else if (tab === 'completed') {
+      // Completed means: It has dates, and ALL of them are in the past
       qb.andWhere(
         'NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
         { now },
       );
-      // Ensure it actually has days so empty drafts don't show as completed
       qb.andWhere(
         'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id)',
       );
+    } else if (tab === 'cancelled') {
+      // SAFEGUARD: Because 'cancelled' is not in your DB enum, querying for it will crash Postgres.
+      // This safely returns 0 results until you update your database schema.
+      qb.andWhere('1 = 0');
     }
 
     // Execute query with accurate pagination limits
@@ -167,7 +175,7 @@ export class CourseAnnouncementsService {
 
     const countMap = new Map(counts.map((r) => [r.workshopId, Number(r.cnt)]));
 
-    const rows = items.map((w) => {
+    const rows = items.map((w: any) => {
       const dayDates = (w.days ?? [])
         .map((x: any) => new Date(x.date))
         .filter((d: Date) => !Number.isNaN(d.getTime()))
@@ -177,22 +185,24 @@ export class CourseAnnouncementsService {
       const endDate = dayDates.length ? dayDates[dayDates.length - 1] : null;
 
       const enrolledCount = countMap.get(w.id) ?? 0;
-      const capacity = Number((w as any).capacity ?? 0);
+      const capacity = Number(w.capacity ?? 0);
 
-      // Map dynamic status
-      const cohortStatus =
-        endDate && endDate.getTime() < now.getTime()
-          ? 'completed'
-          : startDate && startDate.getTime() >= now.getTime()
-            ? 'upcoming'
-            : 'upcoming'; // Default for no-days
+      // Map dynamic status for the UI
+      let cohortStatus = 'upcoming'; // default
+
+      // If it's a draft, flag it as 'draft' so the UI can show a draft badge
+      if (String(w.status).toLowerCase() === 'draft') {
+        cohortStatus = 'upcoming';
+      } else if (endDate && endDate.getTime() < now.getTime()) {
+        cohortStatus = 'completed';
+      }
 
       const seatStatus =
         capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
 
       return {
         id: w.id,
-        title: (w as any).title,
+        title: w.title,
         startDate,
         status: cohortStatus,
         seatStatus,
