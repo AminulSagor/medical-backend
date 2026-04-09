@@ -22,6 +22,8 @@ import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ContactUsModule } from './contact-us/contact-us.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -63,6 +65,8 @@ import { ContactUsModule } from './contact-us/contact-us.module';
     PaymentsModule,
     AnalyticsModule,
     ContactUsModule,
+    DashboardModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}
