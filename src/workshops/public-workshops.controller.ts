@@ -6,6 +6,7 @@ import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { CheckoutOrderSummaryDto } from "./dto/checkout-order-summary.dto";
 import { CreateWorkshopPaymentSessionDto } from "./dto/create-workshop-payment-session.dto";
 import { VerifyWorkshopPaymentDto } from "./dto/verify-workshop-payment.dto";
+import { ListMyCoursesQueryDto } from './dto/list-my-courses.query.dto';
 
 @Controller("workshops")
 export class PublicWorkshopsController {
@@ -16,6 +17,20 @@ export class PublicWorkshopsController {
     getMyEnrolledWorkshops(@Request() req: any) {
         const userId = req.user.id;
         return this.service.getMyEnrolledWorkshops(userId);
+    }
+
+    @Get('student/my-courses/summary')
+    @UseGuards(AuthGuard('jwt'))
+    getMyCourseSummary(@Request() req: any) {
+        const userId = req.user.id;
+        return this.service.getMyCourseSummary(userId);
+    }
+
+    @Get('student/my-courses')
+    @UseGuards(AuthGuard('jwt'))
+    getMyCourses(@Request() req: any, @Query() query: ListMyCoursesQueryDto) {
+        const userId = req.user.id;
+        return this.service.getMyCourses(userId, query);
     }
 
     @Get()
