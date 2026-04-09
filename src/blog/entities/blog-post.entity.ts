@@ -57,6 +57,10 @@ export class BlogPost {
     readTimeMinutes: number;
 
     @Index()
+    @Column({ type: "int", default: 0 })
+    readCount: number;
+
+    @Index()
     @Column({ type: "timestamptz", nullable: true })
     publishedAt?: Date;
 

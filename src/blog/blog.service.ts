@@ -14,6 +14,7 @@ import { CreateBlogPostDto } from "./dto/create-blog-post.dto";
 import { UpdateBlogPostDto } from "./dto/update-blog-post.dto";
 import { ListBlogPostsQueryDto } from "./dto/list-blog-posts.query.dto";
 import { ListPublicBlogsQueryDto } from "./dto/list-public-blogs.query.dto";
+import { ListTrendingBlogsQueryDto } from "./dto/list-trending-blogs.query.dto";
 
 @Injectable()
 export class BlogService {
@@ -302,6 +303,43 @@ export class BlogService {
         };
     }
 
+    private formatReadCount(readCount: number): string {
+        const count = Number.isFinite(readCount) ? Math.max(0, readCount) : 0;
+
+        if (count < 1000) {
+            return `${count}`;
+        }
+
+        if (count < 1000000) {
+            const k = count / 1000;
+            const rounded = k >= 10 ? k.toFixed(0) : k.toFixed(1);
+            return `${rounded.replace(/\.0$/, "")}k`;
+        }
+
+        const m = count / 1000000;
+        const rounded = m >= 10 ? m.toFixed(0) : m.toFixed(1);
+        return `${rounded.replace(/\.0$/, "")}m`;
+    }
+
+    private toPublicBlogCard(post: BlogPost) {
+        return {
+            id: post.id,
+            title: post.title,
+            description: post.excerpt || post.content?.substring(0, 200),
+            coverImageUrl: post.coverImageUrl,
+            categories: post.categories.map((cat) => ({
+                id: cat.id,
+                name: cat.name,
+            })),
+            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
+            readTimeMinutes: post.readTimeMinutes,
+            readCount: post.readCount ?? 0,
+            readBy: this.formatReadCount(post.readCount ?? 0),
+            publishedAt: post.publishedAt,
+            isFeatured: post.isFeatured,
+        };
+    }
+
     async findAllPublic(query: ListPublicBlogsQueryDto) {
         const page = query.page ?? 1;
         const limit = query.limit ?? 10;
@@ -344,20 +382,7 @@ export class BlogService {
 
         const [posts, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
-        const items = posts.map(post => ({
-            id: post.id,
-            title: post.title,
-            description: post.excerpt || post.content?.substring(0, 200),
-            coverImageUrl: post.coverImageUrl,
-            categories: post.categories.map(cat => ({
-                id: cat.id,
-                name: cat.name,
-            })),
-            authors: post.authors.map(author => this.sanitizePublicAuthor(author)),
-            readTimeMinutes: post.readTimeMinutes,
-            publishedAt: post.publishedAt,
-            isFeatured: post.isFeatured,
-        }));
+        const items = posts.map((post) => this.toPublicBlogCard(post));
 
         return {
             items,
@@ -383,27 +408,57 @@ export class BlogService {
             throw new NotFoundException("Blog post not found or not published");
         }
 
+        await this.postRepo.increment({ id: post.id }, "readCount", 1);
+
+        const updatedReadCount = (post.readCount ?? 0) + 1;
+
         return {
             id: post.id,
             title: post.title,
             content: post.content,
             description: post.excerpt,
             coverImageUrl: post.coverImageUrl,
-            categories: post.categories.map(cat => ({
+            categories: post.categories.map((cat) => ({
                 id: cat.id,
                 name: cat.name,
             })),
-            tags: post.tags.map(tag => ({
+            tags: post.tags.map((tag) => ({
                 id: tag.id,
                 name: tag.name,
             })),
-            authors: post.authors.map(author => this.sanitizePublicAuthor(author)),
+            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
             readTimeMinutes: post.readTimeMinutes,
+            readCount: updatedReadCount,
+            readBy: this.formatReadCount(updatedReadCount),
             publishedAt: post.publishedAt,
             isFeatured: post.isFeatured,
             seo: {
                 metaTitle: post.seo?.metaTitle,
                 metaDescription: post.seo?.metaDescription,
+            },
+        };
+    }
+
+    async findTrendingPublic(query: ListTrendingBlogsQueryDto) {
+        const limit = query.limit ?? 6;
+
+        const posts = await this.postRepo
+            .createQueryBuilder("post")
+            .leftJoinAndSelect("post.authors", "authors")
+            .leftJoinAndSelect("post.categories", "categories")
+            .where("post.publishingStatus = :status", {
+                status: PublishingStatus.PUBLISHED,
+            })
+            .orderBy("post.readCount", "DESC")
+            .addOrderBy("post.publishedAt", "DESC")
+            .take(limit)
+            .getMany();
+
+        return {
+            items: posts.map((post) => this.toPublicBlogCard(post)),
+            meta: {
+                limit,
+                total: posts.length,
             },
         };
     }

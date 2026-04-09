@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderTimeline } from './entities/order-timeline.entity';
 import { Product } from '../products/entities/product.entity';
@@ -20,6 +20,7 @@ import { UpdateOrderDispatchDto } from './dto/update-order-dispatch.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
 import { PrintShippingLabelDto } from './dto/print-shipping-label.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { ListMyOrderHistoryQueryDto } from './dto/list-my-order-history.query.dto';
 import {
   PublicOrderSummaryItemDto,
   PublicOrderSummaryRequestDto,
@@ -73,6 +74,11 @@ export class OrdersService {
   private parsePositiveNumber(value: string | number | null | undefined): number {
     const n = Number(value ?? 0);
     return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  private parseAmount(value: string | number | null | undefined): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
   }
 
   private resolveProductUnitPrice(product: Product): number {
@@ -270,6 +276,37 @@ export class OrdersService {
     }
   }
 
+  private toMyOrderHistoryItem(order: Order) {
+    const items = (order.items ?? []).map((item) => ({
+      id: item.id,
+      productId: item.productId ?? null,
+      name: item.productName,
+      sku: item.sku ?? null,
+      image: item.image ?? null,
+      quantity: item.quantity,
+      unitPrice: this.parseAmount(item.unitPrice),
+      lineTotal: this.parseAmount(item.total),
+    }));
+
+    return {
+      id: order.id,
+      orderId: order.orderNumber,
+      orderedDate: order.createdAt,
+      status: {
+        paymentStatus: order.paymentStatus,
+        fulfillmentStatus: order.fulfillmentStatus,
+      },
+      quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+      totals: {
+        subtotal: this.parseAmount(order.subtotal),
+        shipping: this.parseAmount(order.shippingAmount),
+        tax: this.parseAmount(order.taxAmount),
+        grandTotal: this.parseAmount(order.grandTotal),
+      },
+      itemDetails: items,
+    };
+  }
+
   async getPublicOrderSummary(dto: PublicOrderSummaryRequestDto) {
     const summary = await this.buildPublicOrderSummary(dto.items);
 
@@ -322,6 +359,223 @@ export class OrdersService {
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           lineTotal: item.total,
+        })),
+      },
+    };
+  }
+
+  async getMyOrderHistorySummary(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail.trim().toLowerCase();
+    const now = new Date();
+    const startOfMonth = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const startOfYear = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+
+    const activeDeliveries = await this.ordersRepo
+      .createQueryBuilder('o')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.fulfillmentStatus IN (:...statuses)', {
+        statuses: [
+          FulfillmentStatus.UNFULFILLED,
+          FulfillmentStatus.PROCESSING,
+          FulfillmentStatus.SHIPPED,
+        ],
+      })
+      .getCount();
+
+    const monthRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COUNT(o.id)', 'totalOrdered')
+      .addSelect('COALESCE(SUM(o.grandTotal), 0)', 'orderedValue')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfMonth', { startOfMonth })
+      .getRawOne();
+
+    const lifetimeRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COALESCE(SUM(o.grandTotal), 0)', 'totalMoney')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .getRawOne();
+
+    const yearRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COALESCE(SUM(o.grandTotal), 0)', 'orderedValueThisYear')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfYear', { startOfYear })
+      .getRawOne();
+
+    return {
+      message: 'Order history summary fetched successfully',
+      data: {
+        activeDeliveries,
+        orderedThisMonth: Number(monthRaw?.totalOrdered ?? 0),
+        orderedValueThisMonth: this.parseAmount(monthRaw?.orderedValue),
+        totalMoney: this.parseAmount(lifetimeRaw?.totalMoney),
+        totalOrderedValueThisYear: this.parseAmount(
+          yearRaw?.orderedValueThisYear,
+        ),
+      },
+    };
+  }
+
+  async getMyPastOrders(userId: string, query: ListMyOrderHistoryQueryDto) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const email = user.medicalEmail.trim().toLowerCase();
+
+    const qb = this.ordersRepo
+      .createQueryBuilder('o')
+      .leftJoin('o.items', 'i')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .distinct(true);
+
+    if (query.monthsBack) {
+      const fromDate = new Date(
+        new Date().getFullYear(),
+        new Date().getMonth() - query.monthsBack,
+        1,
+        0,
+        0,
+        0,
+        0,
+      );
+      qb.andWhere('o.createdAt >= :fromDate', { fromDate });
+    }
+
+    if (query.fulfillmentStatus) {
+      qb.andWhere('o.fulfillmentStatus = :fulfillmentStatus', {
+        fulfillmentStatus: query.fulfillmentStatus,
+      });
+    }
+
+    if (query.paymentStatus) {
+      qb.andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: query.paymentStatus,
+      });
+    }
+
+    if (query.search?.trim()) {
+      const s = `%${query.search.trim().toLowerCase()}%`;
+      qb.andWhere(
+        new Brackets((subQb) => {
+          subQb
+            .where('LOWER(o.orderNumber) LIKE :s', { s })
+            .orWhere('LOWER(i.productName) LIKE :s', { s })
+            .orWhere('LOWER(i.sku) LIKE :s', { s });
+        }),
+      );
+    }
+
+    qb.orderBy('o.createdAt', 'DESC').skip(skip).take(limit);
+
+    const [orders, total] = await qb.getManyAndCount();
+
+    return {
+      message: 'Past orders fetched successfully',
+      data: {
+        items: orders.map((order) => this.toMyOrderHistoryItem(order)),
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    };
+  }
+
+  async getMyPastOrderDetails(userId: string, id: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail.trim().toLowerCase();
+
+    const order = await this.ordersRepo
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.items', 'items')
+      .leftJoinAndSelect('o.timeline', 'timeline')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere(
+        new Brackets((subQb) => {
+          subQb.where('o.id = :id', { id }).orWhere('o.orderNumber = :id', {
+            id,
+          });
+        }),
+      )
+      .getOne();
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const timeline = [...(order.timeline ?? [])].sort(
+      (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
+    );
+
+    return {
+      message: 'Order details fetched successfully',
+      data: {
+        ...this.toMyOrderHistoryItem(order),
+        shippingAddress: {
+          company: order.shippingCompany ?? null,
+          attention: order.shippingAttention ?? null,
+          addressLine1: order.shippingAddressLine1 ?? null,
+          addressLine2: order.shippingAddressLine2 ?? null,
+          city: order.shippingCity ?? null,
+          state: order.shippingState ?? null,
+          postalCode: order.shippingPostalCode ?? null,
+          country: order.shippingCountry ?? null,
+        },
+        dispatch: {
+          carrier: order.carrier ?? null,
+          trackingNumber: order.trackingNumber ?? null,
+          estimatedDeliveryDate: order.estimatedDeliveryDate ?? null,
+          shippingNotes: order.shippingNotes ?? null,
+        },
+        timeline: timeline.map((event) => ({
+          id: event.id,
+          type: event.eventType,
+          title: event.title,
+          description: event.description ?? null,
+          createdAt: event.createdAt,
         })),
       },
     };
