@@ -42,6 +42,18 @@ export class PublicOrdersController {
     return this.ordersService.getMyPastOrders(req.user.id, query);
   }
 
+  @Get('history/breakdown/:orderNumber')
+  @UseGuards(AuthGuard('jwt'))
+  getMyOrderBreakdown(
+    @Req() req: AuthenticatedRequest,
+    @Param('orderNumber') orderNumber: string,
+  ) {
+    return this.ordersService.getMyOrderBreakdownByOrderNumber(
+      req.user.id,
+      orderNumber,
+    );
+  }
+
   @Get('history/:id')
   @UseGuards(AuthGuard('jwt'))
   getMyPastOrderDetails(
