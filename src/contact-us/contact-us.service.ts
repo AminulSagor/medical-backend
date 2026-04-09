@@ -328,6 +328,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import * as SMTPTransport from 'nodemailer/lib/smtp-transport';
 import {
   ContactInquiryType,
   CreateContactUsDto,
@@ -343,8 +344,7 @@ export class ContactUsService implements OnModuleInit {
   async onModuleInit() {
     const smtpHost =
       this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
-    // Highly recommended to use 465 for Gmail for instant TLS connection
-    const smtpPort = Number(this.configService.get<string>('SMTP_PORT') || 465);
+    const smtpPort = Number(this.configService.get<string>('SMTP_PORT') || 587); // Use 587
     const user = this.configService.get<string>('SMTP_USER');
     const pass = this.configService.get<string>('SMTP_PASS');
 
@@ -355,7 +355,7 @@ export class ContactUsService implements OnModuleInit {
     this.transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
-      secure: smtpPort === 465, // true for 465, false for other ports
+      secure: smtpPort === 465,
       auth: {
         user,
         pass,
@@ -363,7 +363,7 @@ export class ContactUsService implements OnModuleInit {
       connectionTimeout: 15000,
       greetingTimeout: 10000,
       socketTimeout: 20000,
-    });
+    } as SMTPTransport.Options);
 
     try {
       await this.transporter.verify();
