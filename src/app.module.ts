@@ -20,6 +20,8 @@ import { ProductTagsModule } from './product-tags/product-tags.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { ContactUsModule } from './contact-us/contact-us.module';
 
 @Module({
   imports: [
@@ -59,6 +61,8 @@ import { PaymentsModule } from './payments/payments.module';
     ReviewsModule,
     OrdersModule,
     PaymentsModule,
+    AnalyticsModule,
+    ContactUsModule,
   ],
 })
 export class AppModule {}
