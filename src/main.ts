@@ -5,11 +5,10 @@ import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 async function bootstrap() {
+  dns.setDefaultResultOrder('ipv4first');
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
   });
-
-  dns.setDefaultResultOrder('ipv4first');
 
   // ✅ Enable CORS
   app.enableCors({

@@ -327,6 +327,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as dns from 'node:dns/promises';
 import * as nodemailer from 'nodemailer';
 import {
   ContactInquiryType,
@@ -336,9 +337,15 @@ import {
 @Injectable()
 export class ContactUsService implements OnModuleInit {
   private readonly logger = new Logger(ContactUsService.name);
-  private readonly transporter: nodemailer.Transporter;
+  private transporter!: nodemailer.Transporter;
+  private mailerReady = false;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(private readonly configService: ConfigService) {}
+
+  async onModuleInit() {
+    const smtpHost =
+      this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
+    const smtpPort = Number(this.configService.get<string>('SMTP_PORT') || 587);
     const user = this.configService.get<string>('SMTP_USER');
     const pass = this.configService.get<string>('SMTP_PASS');
 
@@ -346,27 +353,44 @@ export class ContactUsService implements OnModuleInit {
       throw new Error('SMTP configuration is missing.');
     }
 
-    this.transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,
-      requireTLS: true,
-      auth: {
-        user,
-        pass,
-      },
-      connectionTimeout: 15000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000,
-    });
-  }
-
-  async onModuleInit() {
     try {
+      const ipv4Addresses = await dns.resolve4(smtpHost);
+
+      if (!ipv4Addresses.length) {
+        throw new Error(`No IPv4 address found for ${smtpHost}`);
+      }
+
+      const smtpIpv4 = ipv4Addresses[0];
+
+      this.transporter = nodemailer.createTransport({
+        host: smtpIpv4,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        requireTLS: smtpPort === 587,
+        auth: {
+          user,
+          pass,
+        },
+        connectionTimeout: 15000,
+        greetingTimeout: 10000,
+        socketTimeout: 20000,
+        tls: {
+          servername: smtpHost,
+        },
+      });
+
       await this.transporter.verify();
-      this.logger.log('SMTP transporter verified successfully');
+      this.mailerReady = true;
+
+      this.logger.log(
+        `SMTP transporter verified successfully using IPv4 ${smtpIpv4}:${smtpPort}`,
+      );
     } catch (error) {
-      this.logger.error('SMTP transporter verification failed', error);
+      this.mailerReady = false;
+      this.logger.error(
+        'SMTP transporter verification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
   }
 
