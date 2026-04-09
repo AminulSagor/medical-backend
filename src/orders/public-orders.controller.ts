@@ -1,10 +1,21 @@
-import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { AuthenticatedRequest } from '../common/interfaces/authenticated-request.interface';
 import { OrdersService } from './orders.service';
 import { PublicOrderSummaryRequestDto } from './dto/public-order-summary.dto';
 import { ShippingAddressDto } from './dto/shipping-address.dto';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
+import { ListMyOrderHistoryQueryDto } from './dto/list-my-order-history.query.dto';
 
 @Controller('public/orders')
 export class PublicOrdersController {
@@ -14,6 +25,30 @@ export class PublicOrdersController {
   @UseGuards(AuthGuard('jwt'))
   getMyRecentProductOrder(@Req() req: AuthenticatedRequest) {
     return this.ordersService.getMyRecentProductOrder(req.user.id);
+  }
+
+  @Get('history/summary')
+  @UseGuards(AuthGuard('jwt'))
+  getMyOrderHistorySummary(@Req() req: AuthenticatedRequest) {
+    return this.ordersService.getMyOrderHistorySummary(req.user.id);
+  }
+
+  @Get('history')
+  @UseGuards(AuthGuard('jwt'))
+  getMyPastOrders(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: ListMyOrderHistoryQueryDto,
+  ) {
+    return this.ordersService.getMyPastOrders(req.user.id, query);
+  }
+
+  @Get('history/:id')
+  @UseGuards(AuthGuard('jwt'))
+  getMyPastOrderDetails(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.ordersService.getMyPastOrderDetails(req.user.id, id);
   }
 
   @Post('summary')

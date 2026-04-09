@@ -934,6 +934,39 @@ Then call `/workshops/reservations`.
 }
 ```
 
+## 8.5 Session stays pending and recent order is empty
+
+If `GET /payments/session-status/{{sessionId}}` returns `status: pending` and
+`GET /public/orders/student/recent-product-order` returns no data, payment finalization did not run yet.
+
+This backend finalizes product orders only after Stripe webhook event
+`checkout.session.completed` is received and verified on:
+
+`POST /payments/webhooks/stripe`
+
+Checklist:
+
+1. Open the returned `checkoutUrl` and complete payment on Stripe Checkout.
+2. Verify Stripe event delivery for `checkout.session.completed` shows HTTP 200 for your webhook endpoint.
+3. Ensure webhook endpoint URL is exactly `/payments/webhooks/stripe`.
+4. Ensure backend uses matching mode secrets:
+   - Test mode: `sk_test...` and matching test `whsec...`
+   - Live mode: `sk_live...` and matching live `whsec...`
+5. Ensure backend was restarted after env updates.
+6. For local development (`localhost`), forward events using Stripe CLI:
+
+```bash
+stripe listen --forward-to http://localhost:3000/payments/webhooks/stripe
+```
+
+Important:
+- Sending generic test events from Stripe dashboard may not finalize your payment record,
+  because this backend links checkout completion by `paymentId` metadata from the real created session.
+
+Expected after successful webhook:
+- `GET /payments/session-status/{{sessionId}}` -> `status: paid` and `finalizedRefId` not null.
+- `GET /public/orders/student/recent-product-order` -> latest order appears.
+
 ## 9) Recommended Postman Request Order
 
 1. Register

@@ -1,4 +1,20 @@
 import {
+    Injectable,
+    BadRequestException,
+    NotFoundException,
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, In, DeepPartial } from "typeorm";
+import { BlogPost, PublishingStatus } from "./entities/blog-post.entity";
+import { BlogPostSeo } from "./entities/blog-post-seo.entity";
+import { User } from "../users/entities/user.entity";
+import { BlogCategory } from "../blog-categories/entities/blog-category.entity";
+import { Tag } from "../tags/entities/tag.entity";
+import { CreateBlogPostDto } from "./dto/create-blog-post.dto";
+import { UpdateBlogPostDto } from "./dto/update-blog-post.dto";
+import { ListBlogPostsQueryDto } from "./dto/list-blog-posts.query.dto";
+import { ListPublicBlogsQueryDto } from "./dto/list-public-blogs.query.dto";
+import { ListTrendingBlogsQueryDto } from "./dto/list-trending-blogs.query.dto";
   Injectable,
   BadRequestException,
   NotFoundException,
@@ -297,6 +313,86 @@ export class BlogService {
       });
     }
 
+    private formatReadCount(readCount: number): string {
+        const count = Number.isFinite(readCount) ? Math.max(0, readCount) : 0;
+
+        if (count < 1000) {
+            return `${count}`;
+        }
+
+        if (count < 1000000) {
+            const k = count / 1000;
+            const rounded = k >= 10 ? k.toFixed(0) : k.toFixed(1);
+            return `${rounded.replace(/\.0$/, "")}k`;
+        }
+
+        const m = count / 1000000;
+        const rounded = m >= 10 ? m.toFixed(0) : m.toFixed(1);
+        return `${rounded.replace(/\.0$/, "")}m`;
+    }
+
+    private toPublicBlogCard(post: BlogPost) {
+        return {
+            id: post.id,
+            title: post.title,
+            description: post.excerpt || post.content?.substring(0, 200),
+            coverImageUrl: post.coverImageUrl,
+            categories: post.categories.map((cat) => ({
+                id: cat.id,
+                name: cat.name,
+            })),
+            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
+            readTimeMinutes: post.readTimeMinutes,
+            readCount: post.readCount ?? 0,
+            readBy: this.formatReadCount(post.readCount ?? 0),
+            publishedAt: post.publishedAt,
+            isFeatured: post.isFeatured,
+        };
+    }
+
+    async findAllPublic(query: ListPublicBlogsQueryDto) {
+        const page = query.page ?? 1;
+        const limit = query.limit ?? 10;
+        const skip = (page - 1) * limit;
+
+        const qb = this.postRepo
+            .createQueryBuilder("post")
+            .leftJoinAndSelect("post.authors", "authors")
+            .leftJoinAndSelect("post.categories", "categories")
+            .leftJoinAndSelect("post.tags", "tags")
+            .where("post.publishingStatus = :status", { status: PublishingStatus.PUBLISHED });
+
+        // Search filter
+        if (query.search?.trim()) {
+            const s = `%${query.search.trim().toLowerCase()}%`;
+            qb.andWhere(
+                "(LOWER(post.title) LIKE :s OR LOWER(post.excerpt) LIKE :s OR LOWER(post.content) LIKE :s)",
+                { s }
+            );
+        }
+
+        // Category filter
+        if (query.categoryId?.trim()) {
+            qb.andWhere("categories.id = :categoryId", { categoryId: query.categoryId });
+        }
+
+        // Sorting
+        switch (query.sortBy) {
+            case 'oldest':
+                qb.orderBy("post.publishedAt", "ASC");
+                break;
+            case 'featured':
+                qb.orderBy("post.isFeatured", "DESC").addOrderBy("post.publishedAt", "DESC");
+                break;
+            case 'latest':
+            default:
+                qb.orderBy("post.publishedAt", "DESC");
+                break;
+        }
+
+        const [posts, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+        const items = posts.map((post) => this.toPublicBlogCard(post));
     if (query.categoryId) {
       qb.andWhere('category.id = :categoryId', {
         categoryId: query.categoryId,
@@ -524,7 +620,60 @@ export class BlogService {
         const isPublished = p.publishingStatus === 'published';
         const eventDate = isPublished ? p.publishedAt : p.scheduledPublishDate;
 
+        await this.postRepo.increment({ id: post.id }, "readCount", 1);
+
+        const updatedReadCount = (post.readCount ?? 0) + 1;
+
         return {
+            id: post.id,
+            title: post.title,
+            content: post.content,
+            description: post.excerpt,
+            coverImageUrl: post.coverImageUrl,
+            categories: post.categories.map((cat) => ({
+                id: cat.id,
+                name: cat.name,
+            })),
+            tags: post.tags.map((tag) => ({
+                id: tag.id,
+                name: tag.name,
+            })),
+            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
+            readTimeMinutes: post.readTimeMinutes,
+            readCount: updatedReadCount,
+            readBy: this.formatReadCount(updatedReadCount),
+            publishedAt: post.publishedAt,
+            isFeatured: post.isFeatured,
+            seo: {
+                metaTitle: post.seo?.metaTitle,
+                metaDescription: post.seo?.metaDescription,
+            },
+        };
+    }
+
+    async findTrendingPublic(query: ListTrendingBlogsQueryDto) {
+        const limit = query.limit ?? 6;
+
+        const posts = await this.postRepo
+            .createQueryBuilder("post")
+            .leftJoinAndSelect("post.authors", "authors")
+            .leftJoinAndSelect("post.categories", "categories")
+            .where("post.publishingStatus = :status", {
+                status: PublishingStatus.PUBLISHED,
+            })
+            .orderBy("post.readCount", "DESC")
+            .addOrderBy("post.publishedAt", "DESC")
+            .take(limit)
+            .getMany();
+
+        return {
+            items: posts.map((post) => this.toPublicBlogCard(post)),
+            meta: {
+                limit,
+                total: posts.length,
+            },
+        };
+    }
           id: p.id,
           title: p.title,
           status: p.publishingStatus,
