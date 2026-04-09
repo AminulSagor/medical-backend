@@ -1,3 +1,4 @@
+import * as dns from 'node:dns';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -7,6 +8,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
   });
+
+  dns.setDefaultResultOrder('ipv4first');
 
   // ✅ Enable CORS
   app.enableCors({
