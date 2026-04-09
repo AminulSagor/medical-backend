@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderTimeline } from './entities/order-timeline.entity';
 import { Product } from '../products/entities/product.entity';
@@ -20,6 +20,7 @@ import { UpdateOrderDispatchDto } from './dto/update-order-dispatch.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
 import { PrintShippingLabelDto } from './dto/print-shipping-label.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { ListMyOrderHistoryQueryDto } from './dto/list-my-order-history.query.dto';
 import {
   PublicOrderSummaryItemDto,
   PublicOrderSummaryRequestDto,
@@ -73,6 +74,50 @@ export class OrdersService {
   private parsePositiveNumber(value: string | number | null | undefined): number {
     const n = Number(value ?? 0);
     return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  private parseAmount(value: string | number | null | undefined): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  private buildComparisonMetric(
+    currentValue: number,
+    previousValue: number,
+    baselineLabel: string,
+  ) {
+    let trend: 'increase' | 'decrease' | 'no_change' = 'no_change';
+    let changePercentage = 0;
+
+    if (previousValue <= 0) {
+      if (currentValue > 0) {
+        trend = 'increase';
+        changePercentage = 100;
+      }
+    } else {
+      const delta = ((currentValue - previousValue) / previousValue) * 100;
+      changePercentage = Number(delta.toFixed(2));
+
+      if (changePercentage > 0) {
+        trend = 'increase';
+      } else if (changePercentage < 0) {
+        trend = 'decrease';
+      }
+    }
+
+    const absolutePercentage = Number(Math.abs(changePercentage).toFixed(2));
+    const comparisonText =
+      trend === 'no_change'
+        ? `no change vs ${baselineLabel}`
+        : `${trend} ${absolutePercentage}% vs ${baselineLabel}`;
+
+    return {
+      current: currentValue,
+      previous: previousValue,
+      changePercentage,
+      trend,
+      comparisonText,
+    };
   }
 
   private resolveProductUnitPrice(product: Product): number {
@@ -270,6 +315,74 @@ export class OrdersService {
     }
   }
 
+  private normalizeOrderNumber(input: string): string {
+    return input.trim().replace(/^#/, '');
+  }
+
+  private getOrderProgressSnapshot(status: FulfillmentStatus) {
+    const steps: Array<{ status: FulfillmentStatus; label: string }> = [
+      { status: FulfillmentStatus.UNFULFILLED, label: 'Order Placed' },
+      { status: FulfillmentStatus.PROCESSING, label: 'Processing' },
+      { status: FulfillmentStatus.SHIPPED, label: 'Shipped' },
+      { status: FulfillmentStatus.RECEIVED, label: 'Delivered' },
+    ];
+
+    const currentStatusForProgress =
+      status === FulfillmentStatus.CLOSED ? FulfillmentStatus.RECEIVED : status;
+
+    const currentIndex = steps.findIndex(
+      (step) => step.status === currentStatusForProgress,
+    );
+
+    const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
+
+    return {
+      current: steps[safeCurrentIndex],
+      next: steps[safeCurrentIndex + 1] ?? null,
+      nextSteps: steps.slice(safeCurrentIndex + 1),
+      allSteps: steps.map((step, index) => ({
+        ...step,
+        state:
+          index < safeCurrentIndex
+            ? 'completed'
+            : index === safeCurrentIndex
+              ? 'current'
+              : 'upcoming',
+      })),
+    };
+  }
+
+  private toMyOrderHistoryItem(order: Order) {
+    const items = (order.items ?? []).map((item) => ({
+      id: item.id,
+      productId: item.productId ?? null,
+      name: item.productName,
+      sku: item.sku ?? null,
+      image: item.image ?? null,
+      quantity: item.quantity,
+      unitPrice: this.parseAmount(item.unitPrice),
+      lineTotal: this.parseAmount(item.total),
+    }));
+
+    return {
+      id: order.id,
+      orderId: order.orderNumber,
+      orderedDate: order.createdAt,
+      status: {
+        paymentStatus: order.paymentStatus,
+        fulfillmentStatus: order.fulfillmentStatus,
+      },
+      quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+      totals: {
+        subtotal: this.parseAmount(order.subtotal),
+        shipping: this.parseAmount(order.shippingAmount),
+        tax: this.parseAmount(order.taxAmount),
+        grandTotal: this.parseAmount(order.grandTotal),
+      },
+      itemDetails: items,
+    };
+  }
+
   async getPublicOrderSummary(dto: PublicOrderSummaryRequestDto) {
     const summary = await this.buildPublicOrderSummary(dto.items);
 
@@ -323,6 +436,371 @@ export class OrdersService {
           unitPrice: item.unitPrice,
           lineTotal: item.total,
         })),
+      },
+    };
+  }
+
+  async getMyOrderHistorySummary(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail.trim().toLowerCase();
+    const now = new Date();
+    const startOfMonth = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const startOfPreviousMonth = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const startOfYear = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const startOfPreviousYear = new Date(
+      now.getFullYear() - 1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const previousYearSameDateTime = new Date(now);
+    previousYearSameDateTime.setFullYear(now.getFullYear() - 1);
+
+    const activeDeliveries = await this.ordersRepo
+      .createQueryBuilder('o')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.fulfillmentStatus IN (:...statuses)', {
+        statuses: [
+          FulfillmentStatus.UNFULFILLED,
+          FulfillmentStatus.PROCESSING,
+          FulfillmentStatus.SHIPPED,
+        ],
+      })
+      .getCount();
+
+    const monthRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COUNT(o.id)', 'totalOrdered')
+      .addSelect('COALESCE(SUM(o.grandTotal), 0)', 'orderedValue')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfMonth', { startOfMonth })
+      .getRawOne();
+
+    const previousMonthRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COUNT(o.id)', 'totalOrdered')
+      .addSelect('COALESCE(SUM(o.grandTotal), 0)', 'orderedValue')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfPreviousMonth', {
+        startOfPreviousMonth,
+      })
+      .andWhere('o.createdAt < :startOfMonth', { startOfMonth })
+      .getRawOne();
+
+    const lifetimeRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COALESCE(SUM(o.grandTotal), 0)', 'totalMoney')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .getRawOne();
+
+    const yearRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COALESCE(SUM(o.grandTotal), 0)', 'orderedValueThisYear')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfYear', { startOfYear })
+      .getRawOne();
+
+    const previousYearRaw = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('COALESCE(SUM(o.grandTotal), 0)', 'orderedValuePreviousYear')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: PaymentStatus.PAID,
+      })
+      .andWhere('o.createdAt >= :startOfPreviousYear', { startOfPreviousYear })
+      .andWhere('o.createdAt <= :previousYearSameDateTime', {
+        previousYearSameDateTime,
+      })
+      .getRawOne();
+
+    const orderedThisMonth = Number(monthRaw?.totalOrdered ?? 0);
+    const orderedThisPreviousMonth = Number(previousMonthRaw?.totalOrdered ?? 0);
+    const orderedValueThisMonth = this.parseAmount(monthRaw?.orderedValue);
+    const orderedValuePreviousMonth = this.parseAmount(
+      previousMonthRaw?.orderedValue,
+    );
+    const orderedValueThisYear = this.parseAmount(yearRaw?.orderedValueThisYear);
+    const orderedValuePreviousYear = this.parseAmount(
+      previousYearRaw?.orderedValuePreviousYear,
+    );
+
+    return {
+      message: 'Order history summary fetched successfully',
+      data: {
+        activeDeliveries,
+        orderedThisMonth,
+        orderedValueThisMonth,
+        totalMoney: this.parseAmount(lifetimeRaw?.totalMoney),
+        totalOrderedValueThisYear: orderedValueThisYear,
+        comparisonMetrics: {
+          orderedThisMonthVsLastMonth: this.buildComparisonMetric(
+            orderedThisMonth,
+            orderedThisPreviousMonth,
+            'last month',
+          ),
+          orderedValueThisMonthVsLastMonth: this.buildComparisonMetric(
+            orderedValueThisMonth,
+            orderedValuePreviousMonth,
+            'last month',
+          ),
+          totalOrderedValueThisYearVsLastYear: this.buildComparisonMetric(
+            orderedValueThisYear,
+            orderedValuePreviousYear,
+            'last year',
+          ),
+        },
+      },
+    };
+  }
+
+  async getMyPastOrders(userId: string, query: ListMyOrderHistoryQueryDto) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const email = user.medicalEmail.trim().toLowerCase();
+
+    const qb = this.ordersRepo
+      .createQueryBuilder('o')
+      .leftJoin('o.items', 'i')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .distinct(true);
+
+    if (query.monthsBack) {
+      const fromDate = new Date(
+        new Date().getFullYear(),
+        new Date().getMonth() - query.monthsBack,
+        1,
+        0,
+        0,
+        0,
+        0,
+      );
+      qb.andWhere('o.createdAt >= :fromDate', { fromDate });
+    }
+
+    if (query.fulfillmentStatus) {
+      qb.andWhere('o.fulfillmentStatus = :fulfillmentStatus', {
+        fulfillmentStatus: query.fulfillmentStatus,
+      });
+    }
+
+    if (query.paymentStatus) {
+      qb.andWhere('o.paymentStatus = :paymentStatus', {
+        paymentStatus: query.paymentStatus,
+      });
+    }
+
+    if (query.search?.trim()) {
+      const s = `%${query.search.trim().toLowerCase()}%`;
+      qb.andWhere(
+        new Brackets((subQb) => {
+          subQb
+            .where('LOWER(o.orderNumber) LIKE :s', { s })
+            .orWhere('LOWER(i.productName) LIKE :s', { s })
+            .orWhere('LOWER(i.sku) LIKE :s', { s });
+        }),
+      );
+    }
+
+    qb.orderBy('o.createdAt', 'DESC').skip(skip).take(limit);
+
+    const [orders, total] = await qb.getManyAndCount();
+
+    return {
+      message: 'Past orders fetched successfully',
+      data: {
+        items: orders.map((order) => this.toMyOrderHistoryItem(order)),
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    };
+  }
+
+  async getMyPastOrderDetails(userId: string, id: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail.trim().toLowerCase();
+
+    const order = await this.ordersRepo
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.items', 'items')
+      .leftJoinAndSelect('o.timeline', 'timeline')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere(
+        new Brackets((subQb) => {
+          subQb.where('o.id = :id', { id }).orWhere('o.orderNumber = :id', {
+            id,
+          });
+        }),
+      )
+      .getOne();
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const timeline = [...(order.timeline ?? [])].sort(
+      (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
+    );
+
+    return {
+      message: 'Order details fetched successfully',
+      data: {
+        ...this.toMyOrderHistoryItem(order),
+        shippingAddress: {
+          company: order.shippingCompany ?? null,
+          attention: order.shippingAttention ?? null,
+          addressLine1: order.shippingAddressLine1 ?? null,
+          addressLine2: order.shippingAddressLine2 ?? null,
+          city: order.shippingCity ?? null,
+          state: order.shippingState ?? null,
+          postalCode: order.shippingPostalCode ?? null,
+          country: order.shippingCountry ?? null,
+        },
+        dispatch: {
+          carrier: order.carrier ?? null,
+          trackingNumber: order.trackingNumber ?? null,
+          estimatedDeliveryDate: order.estimatedDeliveryDate ?? null,
+          shippingNotes: order.shippingNotes ?? null,
+        },
+        timeline: timeline.map((event) => ({
+          id: event.id,
+          type: event.eventType,
+          title: event.title,
+          description: event.description ?? null,
+          createdAt: event.createdAt,
+        })),
+      },
+    };
+  }
+
+  async getMyOrderBreakdownByOrderNumber(userId: string, orderNumber: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail.trim().toLowerCase();
+    const normalizedOrderNumber = this.normalizeOrderNumber(orderNumber);
+
+    const order = await this.ordersRepo
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.items', 'items')
+      .leftJoinAndSelect('o.timeline', 'timeline')
+      .where('LOWER(o.customerEmail) = :email', { email })
+      .andWhere('o.type = :type', { type: OrderType.PRODUCT })
+      .andWhere('o.orderNumber = :orderNumber', {
+        orderNumber: normalizedOrderNumber,
+      })
+      .getOne();
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const progress = this.getOrderProgressSnapshot(order.fulfillmentStatus);
+    const itemDetails = (order.items ?? []).map((item) => ({
+      id: item.id,
+      productId: item.productId ?? null,
+      name: item.productName,
+      sku: item.sku ?? null,
+      image: item.image ?? null,
+      quantity: item.quantity,
+      unitPrice: this.parseAmount(item.unitPrice),
+      lineTotal: this.parseAmount(item.total),
+    }));
+
+    return {
+      message: 'Order breakdown fetched successfully',
+      data: {
+        orderId: `#${order.orderNumber}`,
+        orderedDate: order.createdAt,
+        status: {
+          paymentStatus: order.paymentStatus,
+          fulfillmentStatus: order.fulfillmentStatus,
+          currentStep: progress.current,
+          nextStep: progress.next,
+          nextSteps: progress.nextSteps,
+          allSteps: progress.allSteps,
+        },
+        totals: {
+          totalItems: itemDetails.length,
+          totalQuantity: itemDetails.reduce((sum, item) => sum + item.quantity, 0),
+          subtotal: this.parseAmount(order.subtotal),
+          shipping: this.parseAmount(order.shippingAmount),
+          tax: this.parseAmount(order.taxAmount),
+          grandTotal: this.parseAmount(order.grandTotal),
+        },
+        itemDetails,
+        shippingTo: {
+          fullName: order.shippingAttention ?? order.customerName ?? null,
+          company: order.shippingCompany ?? null,
+          addressLine1: order.shippingAddressLine1 ?? null,
+          addressLine2: order.shippingAddressLine2 ?? null,
+          city: order.shippingCity ?? null,
+          state: order.shippingState ?? null,
+          postalCode: order.shippingPostalCode ?? null,
+          country: order.shippingCountry ?? null,
+          phone: order.customerPhone ?? null,
+        },
       },
     };
   }

@@ -18,6 +18,7 @@ import { CheckoutOrderSummaryDto } from './dto/checkout-order-summary.dto';
 import { CreateWorkshopPaymentSessionDto } from './dto/create-workshop-payment-session.dto';
 import { VerifyWorkshopPaymentDto } from './dto/verify-workshop-payment.dto';
 import { PublicListWorkshopsQueryDto } from './dto/public-list-workshops.query.dto';
+import { ListMyCoursesQueryDto } from './dto/list-my-courses.query.dto';
 import { Facility } from '../facilities/entities/facility.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import { ListWorkshopsQueryDto } from './dto/list-workshops.query.dto';
@@ -94,6 +95,138 @@ export class WorkshopsService {
 
   private toMoneyString(value: number): string {
     return value.toFixed(2);
+  }
+
+  private getWorkshopDateRange(workshop: Workshop): {
+    startDate: Date | null;
+    endDate: Date | null;
+  } {
+    const dayDates = (workshop.days ?? [])
+      .map((day) => new Date(`${day.date}T00:00:00`))
+      .filter((date) => !Number.isNaN(date.getTime()))
+      .sort((a, b) => +a - +b);
+
+    if (dayDates.length === 0) {
+      return { startDate: null, endDate: null };
+    }
+
+    const startDate = dayDates[0];
+    const endDate = new Date(dayDates[dayDates.length - 1]);
+    endDate.setHours(23, 59, 59, 999);
+
+    return { startDate, endDate };
+  }
+
+  private getWorkshopTotalMinutes(workshop: Workshop): number {
+    let totalMinutes = 0;
+
+    for (const day of workshop.days ?? []) {
+      for (const segment of day.segments ?? []) {
+        const [startHour, startMinute] = segment.startTime
+          .split(':')
+          .map((v) => Number(v));
+        const [endHour, endMinute] = segment.endTime
+          .split(':')
+          .map((v) => Number(v));
+
+        if (
+          Number.isFinite(startHour) &&
+          Number.isFinite(startMinute) &&
+          Number.isFinite(endHour) &&
+          Number.isFinite(endMinute)
+        ) {
+          const start = startHour * 60 + startMinute;
+          const end = endHour * 60 + endMinute;
+          if (end > start) {
+            totalMinutes += end - start;
+          }
+        }
+      }
+    }
+
+    return totalMinutes;
+  }
+
+  private getCourseStatusForStudent(
+    workshop: Workshop,
+    now: Date,
+  ): 'active' | 'in_progress' | 'completed' {
+    const { startDate, endDate } = this.getWorkshopDateRange(workshop);
+
+    if (!startDate || !endDate) {
+      return 'active';
+    }
+
+    if (endDate < now) {
+      return 'completed';
+    }
+
+    if (startDate <= now && endDate >= now) {
+      return 'in_progress';
+    }
+
+    return 'active';
+  }
+
+  private async buildStudentWorkshopMeta(userId: string) {
+    const enrollments = await this.enrollmentsRepo.find({
+      where: { userId, isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    const reservations = await this.reservationsRepo.find({
+      where: { userId, status: ReservationStatus.CONFIRMED },
+      order: { createdAt: 'DESC' },
+    });
+
+    const enrollmentByWorkshop = new Map<string, WorkshopEnrollment>();
+    for (const enrollment of enrollments) {
+      if (!enrollmentByWorkshop.has(enrollment.workshopId)) {
+        enrollmentByWorkshop.set(enrollment.workshopId, enrollment);
+      }
+    }
+
+    const latestReservationByWorkshop = new Map<string, WorkshopReservation>();
+    for (const reservation of reservations) {
+      if (!latestReservationByWorkshop.has(reservation.workshopId)) {
+        latestReservationByWorkshop.set(reservation.workshopId, reservation);
+      }
+    }
+
+    const workshopMeta = new Map<
+      string,
+      {
+        enrolledAt: Date;
+        source: 'enrollment' | 'reservation';
+      }
+    >();
+
+    for (const enrollment of enrollmentByWorkshop.values()) {
+      workshopMeta.set(enrollment.workshopId, {
+        enrolledAt: enrollment.createdAt,
+        source: 'enrollment',
+      });
+    }
+
+    for (const reservation of latestReservationByWorkshop.values()) {
+      const existing = workshopMeta.get(reservation.workshopId);
+      if (!existing || reservation.createdAt > existing.enrolledAt) {
+        workshopMeta.set(reservation.workshopId, {
+          enrolledAt: reservation.createdAt,
+          source: 'reservation',
+        });
+      }
+    }
+
+    const enrolledWorkshopIds = [...workshopMeta.entries()]
+      .sort((a, b) => +b[1].enrolledAt - +a[1].enrolledAt)
+      .map(([workshopId]) => workshopId);
+
+    return {
+      enrolledWorkshopIds,
+      workshopMeta,
+      latestReservationByWorkshop,
+    };
   }
 
   async create(dto: CreateWorkshopDto) {
@@ -1013,6 +1146,231 @@ export class WorkshopsService {
     return {
       message: 'Enrolled workshops fetched successfully',
       data,
+    };
+  }
+
+  async getMyCourseSummary(userId: string) {
+    const { enrolledWorkshopIds } = await this.buildStudentWorkshopMeta(userId);
+
+    if (enrolledWorkshopIds.length === 0) {
+      return {
+        message: 'My course summary fetched successfully',
+        data: {
+          totalCmeCredits: 0,
+          totalInProgressCourses: 0,
+          nextLiveSession: null,
+        },
+      };
+    }
+
+    const workshops = await this.workshopsRepo.find({
+      where: enrolledWorkshopIds.map((id) => ({ id })),
+      relations: ['days', 'days.segments'],
+    });
+
+    const now = new Date();
+
+    let totalCmeCredits = 0;
+    let totalInProgressCourses = 0;
+    let nextLiveSession: {
+      workshopId: string;
+      title: string;
+      date: string;
+      time: string;
+      dateTime: string;
+    } | null = null;
+
+    for (const workshop of workshops) {
+      const courseStatus = this.getCourseStatusForStudent(workshop, now);
+      const totalMinutes = this.getWorkshopTotalMinutes(workshop);
+
+      if (courseStatus === 'in_progress') {
+        totalInProgressCourses += 1;
+      }
+
+      if (courseStatus === 'completed' && workshop.offersCmeCredits) {
+        totalCmeCredits += totalMinutes / 60;
+      }
+
+      if (courseStatus !== 'completed') {
+        for (const day of workshop.days ?? []) {
+          for (const segment of day.segments ?? []) {
+            const sessionDateTime = new Date(`${day.date}T${segment.startTime}`);
+            if (
+              Number.isNaN(sessionDateTime.getTime()) ||
+              sessionDateTime <= now
+            ) {
+              continue;
+            }
+
+            if (
+              !nextLiveSession ||
+              sessionDateTime < new Date(nextLiveSession.dateTime)
+            ) {
+              nextLiveSession = {
+                workshopId: workshop.id,
+                title: workshop.title,
+                date: day.date,
+                time: segment.startTime,
+                dateTime: sessionDateTime.toISOString(),
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      message: 'My course summary fetched successfully',
+      data: {
+        totalCmeCredits: Number(totalCmeCredits.toFixed(1)),
+        totalInProgressCourses,
+        nextLiveSession,
+      },
+    };
+  }
+
+  async getMyCourses(userId: string, query: ListMyCoursesQueryDto) {
+    const {
+      enrolledWorkshopIds,
+      workshopMeta,
+      latestReservationByWorkshop,
+    } = await this.buildStudentWorkshopMeta(userId);
+
+    const targetStatus = query.status ?? 'active';
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const now = new Date();
+
+    let workshops: Workshop[] = [];
+
+    if (targetStatus === 'browse') {
+      workshops = await this.workshopsRepo.find({
+        where: { status: WorkshopStatus.PUBLISHED },
+        relations: ['days', 'days.segments'],
+      });
+
+      const enrolledSet = new Set(enrolledWorkshopIds);
+      workshops = workshops.filter((workshop) => !enrolledSet.has(workshop.id));
+    } else {
+      if (enrolledWorkshopIds.length === 0) {
+        return {
+          message: 'My courses fetched successfully',
+          data: [],
+          meta: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      workshops = await this.workshopsRepo.find({
+        where: enrolledWorkshopIds.map((id) => ({ id })),
+        relations: ['days', 'days.segments'],
+      });
+    }
+
+    let items = workshops.map((workshop) => {
+      const { startDate, endDate } = this.getWorkshopDateRange(workshop);
+      const totalMinutes = this.getWorkshopTotalMinutes(workshop);
+      const totalHours = Number((totalMinutes / 60).toFixed(1));
+      const courseStatus =
+        targetStatus === 'browse'
+          ? 'browse'
+          : this.getCourseStatusForStudent(workshop, now);
+
+      const reservation = latestReservationByWorkshop.get(workshop.id);
+      const enrolledAt = workshopMeta.get(workshop.id)?.enrolledAt ?? null;
+
+      return {
+        workshopId: workshop.id,
+        title: workshop.title,
+        courseType: workshop.deliveryMode,
+        workshopPhoto: workshop.coverImageUrl ?? null,
+        status: courseStatus,
+        isEnrolled: targetStatus !== 'browse',
+        enrolledAt,
+        startDate,
+        endDate,
+        completedOn: courseStatus === 'completed' ? endDate : null,
+        totalHours,
+        cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
+        offersCmeCredits: workshop.offersCmeCredits,
+        reservation:
+          targetStatus !== 'browse' && reservation
+            ? {
+                reservationId: reservation.id,
+                status: reservation.status,
+                numberOfSeats: reservation.numberOfSeats,
+                pricePerSeat: reservation.pricePerSeat,
+                totalPrice: reservation.totalPrice,
+              }
+            : null,
+        createdAt: workshop.createdAt,
+      };
+    });
+
+    if (targetStatus === 'active') {
+      items = items.filter(
+        (item) => item.status === 'active' || item.status === 'in_progress',
+      );
+    } else if (targetStatus === 'in_progress') {
+      items = items.filter((item) => item.status === 'in_progress');
+    } else if (targetStatus === 'completed') {
+      items = items.filter((item) => item.status === 'completed');
+    }
+
+    if (query.courseType) {
+      items = items.filter((item) => item.courseType === query.courseType);
+    }
+
+    if (query.search?.trim()) {
+      const search = query.search.trim().toLowerCase();
+      items = items.filter((item) => item.title.toLowerCase().includes(search));
+    }
+
+    const sortBy = query.sortBy ?? 'startDate';
+    const sortDirection = query.sortOrder === 'desc' ? -1 : 1;
+
+    items.sort((a, b) => {
+      if (sortBy === 'title') {
+        return a.title.localeCompare(b.title) * sortDirection;
+      }
+
+      const toTime = (value: Date | null) => (value ? +new Date(value) : 0);
+
+      if (sortBy === 'endDate') {
+        return (toTime(a.endDate) - toTime(b.endDate)) * sortDirection;
+      }
+
+      if (sortBy === 'completedDate') {
+        return (toTime(a.completedOn) - toTime(b.completedOn)) * sortDirection;
+      }
+
+      if (sortBy === 'createdAt') {
+        return (
+          (+new Date(a.createdAt) - +new Date(b.createdAt)) * sortDirection
+        );
+      }
+
+      return (toTime(a.startDate) - toTime(b.startDate)) * sortDirection;
+    });
+
+    const total = items.length;
+    const pagedItems = items.slice(skip, skip + limit);
+
+    return {
+      message: 'My courses fetched successfully',
+      data: pagedItems,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 
