@@ -1,20 +1,4 @@
 import {
-    Injectable,
-    BadRequestException,
-    NotFoundException,
-} from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In, DeepPartial } from "typeorm";
-import { BlogPost, PublishingStatus } from "./entities/blog-post.entity";
-import { BlogPostSeo } from "./entities/blog-post-seo.entity";
-import { User } from "../users/entities/user.entity";
-import { BlogCategory } from "../blog-categories/entities/blog-category.entity";
-import { Tag } from "../tags/entities/tag.entity";
-import { CreateBlogPostDto } from "./dto/create-blog-post.dto";
-import { UpdateBlogPostDto } from "./dto/update-blog-post.dto";
-import { ListBlogPostsQueryDto } from "./dto/list-blog-posts.query.dto";
-import { ListPublicBlogsQueryDto } from "./dto/list-public-blogs.query.dto";
-import { ListTrendingBlogsQueryDto } from "./dto/list-trending-blogs.query.dto";
   Injectable,
   BadRequestException,
   NotFoundException,
@@ -30,6 +14,7 @@ import { CreateBlogPostDto } from './dto/create-blog-post.dto';
 import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
 import { ListBlogPostsQueryDto } from './dto/list-blog-posts.query.dto';
 import { ListPublicBlogsQueryDto } from './dto/list-public-blogs.query.dto';
+import { ListTrendingBlogsQueryDto } from './dto/list-trending-blogs.query.dto';
 import { SchedulePostDto } from './dto/calendar.dto';
 import { NewsletterBroadcastArticleLink } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-article-link.entity';
 
@@ -55,11 +40,9 @@ export class BlogService {
   async getAnalyticsOverview(): Promise<Record<string, unknown>> {
     const now = new Date();
 
-    // Date for "+X this week" (7 days ago)
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(now.getDate() - 7);
 
-    // Single optimized query to get all counts and sums
     const stats = await this.postRepo
       .createQueryBuilder('post')
       .select('COUNT(post.id)', 'totalPosts')
@@ -75,8 +58,6 @@ export class BlogService {
         `SUM(CASE WHEN post.publishingStatus = 'published' AND post.publishedAt >= :oneWeekAgo THEN 1 ELSE 0 END)`,
         'publishedThisWeek',
       )
-      // Removed the viewCount aggregation to prevent the 500 error
-      // since the column does not currently exist in your database.
       .setParameter('oneWeekAgo', oneWeekAgo)
       .getRawOne();
 
@@ -85,7 +66,6 @@ export class BlogService {
     const publishedThisWeek = Number(stats.publishedThisWeek || 0);
     const drafts = Number(stats.drafts || 0);
 
-    // Defaulting to 0 until a view column is added to your entity
     const totalViews = 0;
 
     return {
@@ -111,9 +91,7 @@ export class BlogService {
     };
   }
 
-  // ────────────────── CREATE ──────────────────
-
-  // ────────────────── SANITIZE ──────────────────
+  // ────────────────── SANITIZE HELPERS ──────────────────
 
   private sanitizeAuthor(author: User) {
     return {
@@ -124,6 +102,15 @@ export class BlogService {
     };
   }
 
+  private sanitizePublicAuthor(author: User) {
+    return {
+      id: author.id,
+      fullLegalName: author.fullLegalName,
+      professionalRole: author.professionalRole,
+      profilePhotoUrl: author.profilePhotoUrl,
+    };
+  }
+
   private sanitize(post: BlogPost) {
     return {
       ...post,
@@ -131,10 +118,43 @@ export class BlogService {
     };
   }
 
+  private formatReadCount(readCount: number): string {
+    const count = Number.isFinite(readCount) ? Math.max(0, readCount) : 0;
+    if (count < 1000) return `${count}`;
+    if (count < 1000000) {
+      const k = count / 1000;
+      const rounded = k >= 10 ? k.toFixed(0) : k.toFixed(1);
+      return `${rounded.replace(/\.0$/, '')}k`;
+    }
+    const m = count / 1000000;
+    const rounded = m >= 10 ? m.toFixed(0) : m.toFixed(1);
+    return `${rounded.replace(/\.0$/, '')}m`;
+  }
+
+  private toPublicBlogCard(post: BlogPost) {
+    return {
+      id: post.id,
+      title: post.title,
+      description: post.excerpt || post.content?.substring(0, 200),
+      coverImageUrl: post.coverImageUrl,
+      categories:
+        post.categories?.map((cat) => ({
+          id: cat.id,
+          name: cat.name,
+        })) ?? [],
+      authors:
+        post.authors?.map((author) => this.sanitizePublicAuthor(author)) ?? [],
+      readTimeMinutes: post.readTimeMinutes,
+      readCount: post.readCount ?? 0,
+      readBy: this.formatReadCount(post.readCount ?? 0),
+      publishedAt: post.publishedAt,
+      isFeatured: post.isFeatured,
+    };
+  }
+
   // ────────────────── CREATE ──────────────────
 
   async create(dto: CreateBlogPostDto) {
-    // Validate scheduled status requires a date
     if (
       dto.publishingStatus === PublishingStatus.SCHEDULED &&
       !dto.scheduledPublishDate
@@ -144,7 +164,6 @@ export class BlogService {
       );
     }
 
-    // Resolve authors
     let authors: User[] = [];
     if (dto.authorIds?.length) {
       authors = await this.userRepo.findBy({ id: In(dto.authorIds) });
@@ -153,18 +172,14 @@ export class BlogService {
       }
     }
 
-    // Resolve categories
     let categories: BlogCategory[] = [];
     if (dto.categoryIds?.length) {
-      categories = await this.categoryRepo.findBy({
-        id: In(dto.categoryIds),
-      });
+      categories = await this.categoryRepo.findBy({ id: In(dto.categoryIds) });
       if (categories.length !== dto.categoryIds.length) {
         throw new BadRequestException('One or more categoryIds are invalid');
       }
     }
 
-    // Resolve tags
     let tags: Tag[] = [];
     if (dto.tagIds?.length) {
       tags = await this.tagRepo.findBy({ id: In(dto.tagIds) });
@@ -209,11 +224,8 @@ export class BlogService {
       where: { id },
       relations: ['authors', 'categories', 'tags', 'seo'],
     });
-    if (!post) {
-      throw new NotFoundException('Blog post not found');
-    }
+    if (!post) throw new NotFoundException('Blog post not found');
 
-    // Validate scheduled status
     const newStatus = dto.publishingStatus ?? post.publishingStatus;
     const newScheduledDate =
       dto.scheduledPublishDate !== undefined
@@ -226,7 +238,6 @@ export class BlogService {
       );
     }
 
-    // Scalar fields
     if (dto.title !== undefined) post.title = dto.title;
     if (dto.content !== undefined) post.content = dto.content;
     if (dto.coverImageUrl !== undefined) post.coverImageUrl = dto.coverImageUrl;
@@ -237,7 +248,6 @@ export class BlogService {
     if (dto.isFeatured !== undefined) post.isFeatured = dto.isFeatured;
     if (dto.excerpt !== undefined) post.excerpt = dto.excerpt;
 
-    // Set publishedAt when transitioning to published
     if (
       dto.publishingStatus === PublishingStatus.PUBLISHED &&
       !post.publishedAt
@@ -245,7 +255,6 @@ export class BlogService {
       post.publishedAt = new Date();
     }
 
-    // Relations
     if (dto.authorIds !== undefined) {
       post.authors = dto.authorIds.length
         ? await this.userRepo.findBy({ id: In(dto.authorIds) })
@@ -262,7 +271,6 @@ export class BlogService {
         : [];
     }
 
-    // SEO
     if (
       dto.seoMetaTitle !== undefined ||
       dto.seoMetaDescription !== undefined
@@ -285,9 +293,7 @@ export class BlogService {
       where: { id },
       relations: ['authors', 'categories', 'tags', 'seo'],
     });
-    if (!post) {
-      throw new NotFoundException('Blog post not found');
-    }
+    if (!post) throw new NotFoundException('Blog post not found');
     return this.sanitize(post);
   }
 
@@ -305,115 +311,25 @@ export class BlogService {
       .leftJoinAndSelect('post.tags', 'tag')
       .leftJoinAndSelect('post.seo', 'seo');
 
-    // ── Filters ──
-
     if (query.status) {
-      qb.andWhere('post.publishingStatus = :status', {
-        status: query.status,
-      });
+      qb.andWhere('post.publishingStatus = :status', { status: query.status });
     }
-
-    private formatReadCount(readCount: number): string {
-        const count = Number.isFinite(readCount) ? Math.max(0, readCount) : 0;
-
-        if (count < 1000) {
-            return `${count}`;
-        }
-
-        if (count < 1000000) {
-            const k = count / 1000;
-            const rounded = k >= 10 ? k.toFixed(0) : k.toFixed(1);
-            return `${rounded.replace(/\.0$/, "")}k`;
-        }
-
-        const m = count / 1000000;
-        const rounded = m >= 10 ? m.toFixed(0) : m.toFixed(1);
-        return `${rounded.replace(/\.0$/, "")}m`;
-    }
-
-    private toPublicBlogCard(post: BlogPost) {
-        return {
-            id: post.id,
-            title: post.title,
-            description: post.excerpt || post.content?.substring(0, 200),
-            coverImageUrl: post.coverImageUrl,
-            categories: post.categories.map((cat) => ({
-                id: cat.id,
-                name: cat.name,
-            })),
-            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
-            readTimeMinutes: post.readTimeMinutes,
-            readCount: post.readCount ?? 0,
-            readBy: this.formatReadCount(post.readCount ?? 0),
-            publishedAt: post.publishedAt,
-            isFeatured: post.isFeatured,
-        };
-    }
-
-    async findAllPublic(query: ListPublicBlogsQueryDto) {
-        const page = query.page ?? 1;
-        const limit = query.limit ?? 10;
-        const skip = (page - 1) * limit;
-
-        const qb = this.postRepo
-            .createQueryBuilder("post")
-            .leftJoinAndSelect("post.authors", "authors")
-            .leftJoinAndSelect("post.categories", "categories")
-            .leftJoinAndSelect("post.tags", "tags")
-            .where("post.publishingStatus = :status", { status: PublishingStatus.PUBLISHED });
-
-        // Search filter
-        if (query.search?.trim()) {
-            const s = `%${query.search.trim().toLowerCase()}%`;
-            qb.andWhere(
-                "(LOWER(post.title) LIKE :s OR LOWER(post.excerpt) LIKE :s OR LOWER(post.content) LIKE :s)",
-                { s }
-            );
-        }
-
-        // Category filter
-        if (query.categoryId?.trim()) {
-            qb.andWhere("categories.id = :categoryId", { categoryId: query.categoryId });
-        }
-
-        // Sorting
-        switch (query.sortBy) {
-            case 'oldest':
-                qb.orderBy("post.publishedAt", "ASC");
-                break;
-            case 'featured':
-                qb.orderBy("post.isFeatured", "DESC").addOrderBy("post.publishedAt", "DESC");
-                break;
-            case 'latest':
-            default:
-                qb.orderBy("post.publishedAt", "DESC");
-                break;
-        }
-
-        const [posts, total] = await qb.skip(skip).take(limit).getManyAndCount();
-
-        const items = posts.map((post) => this.toPublicBlogCard(post));
     if (query.categoryId) {
       qb.andWhere('category.id = :categoryId', {
         categoryId: query.categoryId,
       });
     }
-
     if (query.tagId) {
       qb.andWhere('tag.id = :tagId', { tagId: query.tagId });
     }
-
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere(
         '(LOWER(post.title) LIKE :s OR LOWER(post.excerpt) LIKE :s)',
-        {
-          s,
-        },
+        { s },
       );
     }
 
-    // ── Status tab counts ──
     const countsRaw = await this.postRepo
       .createQueryBuilder('p')
       .select([
@@ -424,9 +340,7 @@ export class BlogService {
       ])
       .getRawOne();
 
-    qb.orderBy('post.createdAt', 'DESC');
-    qb.skip(skip).take(limit);
-
+    qb.orderBy('post.createdAt', 'DESC').skip(skip).take(limit);
     const [items, total] = await qb.getManyAndCount();
 
     return {
@@ -450,23 +364,12 @@ export class BlogService {
 
   async remove(id: string) {
     const post = await this.postRepo.findOne({ where: { id } });
-    if (!post) {
-      throw new NotFoundException('Blog post not found');
-    }
+    if (!post) throw new NotFoundException('Blog post not found');
     await this.postRepo.remove(post);
     return { deleted: true };
   }
 
   // ────────────────── PUBLIC ENDPOINTS ──────────────────
-
-  private sanitizePublicAuthor(author: User) {
-    return {
-      id: author.id,
-      fullLegalName: author.fullLegalName,
-      professionalRole: author.professionalRole,
-      profilePhotoUrl: author.profilePhotoUrl,
-    };
-  }
 
   async findAllPublic(query: ListPublicBlogsQueryDto) {
     const page = query.page ?? 1;
@@ -482,7 +385,6 @@ export class BlogService {
         status: PublishingStatus.PUBLISHED,
       });
 
-    // Search filter
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere(
@@ -490,15 +392,12 @@ export class BlogService {
         { s },
       );
     }
-
-    // Category filter
     if (query.categoryId?.trim()) {
       qb.andWhere('categories.id = :categoryId', {
         categoryId: query.categoryId,
       });
     }
 
-    // Sorting
     switch (query.sortBy) {
       case 'oldest':
         qb.orderBy('post.publishedAt', 'ASC');
@@ -517,44 +416,23 @@ export class BlogService {
 
     const [posts, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
-    const items = posts.map((post) => ({
-      id: post.id,
-      title: post.title,
-      description: post.excerpt || post.content?.substring(0, 200),
-      coverImageUrl: post.coverImageUrl,
-      categories: post.categories.map((cat) => ({
-        id: cat.id,
-        name: cat.name,
-      })),
-      authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
-      readTimeMinutes: post.readTimeMinutes,
-      publishedAt: post.publishedAt,
-      isFeatured: post.isFeatured,
-    }));
-
     return {
-      items,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      items: posts.map((post) => this.toPublicBlogCard(post)),
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
 
   async findOnePublic(id: string) {
     const post = await this.postRepo.findOne({
-      where: {
-        id,
-        publishingStatus: PublishingStatus.PUBLISHED,
-      },
+      where: { id, publishingStatus: PublishingStatus.PUBLISHED },
       relations: ['authors', 'categories', 'tags', 'seo'],
     });
 
-    if (!post) {
+    if (!post)
       throw new NotFoundException('Blog post not found or not published');
-    }
+
+    await this.postRepo.increment({ id: post.id }, 'readCount', 1);
+    const updatedReadCount = (post.readCount ?? 0) + 1;
 
     return {
       id: post.id,
@@ -562,22 +440,40 @@ export class BlogService {
       content: post.content,
       description: post.excerpt,
       coverImageUrl: post.coverImageUrl,
-      categories: post.categories.map((cat) => ({
-        id: cat.id,
-        name: cat.name,
-      })),
-      tags: post.tags.map((tag) => ({
-        id: tag.id,
-        name: tag.name,
-      })),
-      authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
+      categories:
+        post.categories?.map((cat) => ({ id: cat.id, name: cat.name })) ?? [],
+      tags: post.tags?.map((tag) => ({ id: tag.id, name: tag.name })) ?? [],
+      authors:
+        post.authors?.map((author) => this.sanitizePublicAuthor(author)) ?? [],
       readTimeMinutes: post.readTimeMinutes,
+      readCount: updatedReadCount,
+      readBy: this.formatReadCount(updatedReadCount),
       publishedAt: post.publishedAt,
       isFeatured: post.isFeatured,
       seo: {
         metaTitle: post.seo?.metaTitle,
         metaDescription: post.seo?.metaDescription,
       },
+    };
+  }
+
+  async findTrendingPublic(query: ListTrendingBlogsQueryDto) {
+    const limit = query.limit ?? 6;
+    const posts = await this.postRepo
+      .createQueryBuilder('post')
+      .leftJoinAndSelect('post.authors', 'authors')
+      .leftJoinAndSelect('post.categories', 'categories')
+      .where('post.publishingStatus = :status', {
+        status: PublishingStatus.PUBLISHED,
+      })
+      .orderBy('post.readCount', 'DESC')
+      .addOrderBy('post.publishedAt', 'DESC')
+      .take(limit)
+      .getMany();
+
+    return {
+      items: posts.map((post) => this.toPublicBlogCard(post)),
+      meta: { limit, total: posts.length },
     };
   }
 
@@ -601,7 +497,6 @@ export class BlogService {
 
     const posts = await qb.getMany();
 
-    // Fetch REAL Distribution Status (Has this blog been added to a newsletter?)
     const postIds = posts.map((p) => p.id);
     let distributedPostIds = new Set<string>();
 
@@ -620,60 +515,7 @@ export class BlogService {
         const isPublished = p.publishingStatus === 'published';
         const eventDate = isPublished ? p.publishedAt : p.scheduledPublishDate;
 
-        await this.postRepo.increment({ id: post.id }, "readCount", 1);
-
-        const updatedReadCount = (post.readCount ?? 0) + 1;
-
         return {
-            id: post.id,
-            title: post.title,
-            content: post.content,
-            description: post.excerpt,
-            coverImageUrl: post.coverImageUrl,
-            categories: post.categories.map((cat) => ({
-                id: cat.id,
-                name: cat.name,
-            })),
-            tags: post.tags.map((tag) => ({
-                id: tag.id,
-                name: tag.name,
-            })),
-            authors: post.authors.map((author) => this.sanitizePublicAuthor(author)),
-            readTimeMinutes: post.readTimeMinutes,
-            readCount: updatedReadCount,
-            readBy: this.formatReadCount(updatedReadCount),
-            publishedAt: post.publishedAt,
-            isFeatured: post.isFeatured,
-            seo: {
-                metaTitle: post.seo?.metaTitle,
-                metaDescription: post.seo?.metaDescription,
-            },
-        };
-    }
-
-    async findTrendingPublic(query: ListTrendingBlogsQueryDto) {
-        const limit = query.limit ?? 6;
-
-        const posts = await this.postRepo
-            .createQueryBuilder("post")
-            .leftJoinAndSelect("post.authors", "authors")
-            .leftJoinAndSelect("post.categories", "categories")
-            .where("post.publishingStatus = :status", {
-                status: PublishingStatus.PUBLISHED,
-            })
-            .orderBy("post.readCount", "DESC")
-            .addOrderBy("post.publishedAt", "DESC")
-            .take(limit)
-            .getMany();
-
-        return {
-            items: posts.map((post) => this.toPublicBlogCard(post)),
-            meta: {
-                limit,
-                total: posts.length,
-            },
-        };
-    }
           id: p.id,
           title: p.title,
           status: p.publishingStatus,
@@ -685,13 +527,12 @@ export class BlogService {
                 initials: p.authors[0].fullLegalName
                   ?.substring(0, 2)
                   .toUpperCase(),
-                role: p.authors[0].professionalRole || null, // e.g., "MD" or "RN" for the Day View UI
+                role: p.authors[0].professionalRole || null,
               }
             : null,
-          // Day View Specifics: REAL Distribution Data
           distribution: {
-            internalPortal: true, // Always true if it's on the calendar
-            newsletterBlast: distributedPostIds.has(p.id), // True ONLY if actually in a broadcast
+            internalPortal: true,
+            newsletterBlast: distributedPostIds.has(p.id),
           },
         };
       }),
@@ -745,7 +586,6 @@ export class BlogService {
     };
   }
 
-  // NEW: Revert to Draft (Unschedule)
   async unschedulePost(id: string): Promise<Record<string, unknown>> {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) throw new NotFoundException('Blog post not found');
@@ -763,12 +603,10 @@ export class BlogService {
     };
   }
 
-  // NEW: Export Schedule Payload
   async exportCalendar(
     startDate: string,
     endDate: string,
   ): Promise<Record<string, unknown>> {
-    // Re-use the query logic but format for a flat CSV-style export
     const data = await this.getCalendarEvents(startDate, endDate);
     const items = data.items as any[];
 
