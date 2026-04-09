@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DeepPartial, Repository } from 'typeorm';
+import { DeepPartial, In, Repository } from 'typeorm';
 import { Workshop } from './entities/workshop.entity';
 import { WorkshopReservation } from './entities/workshop-reservation.entity';
 import { WorkshopAttendee } from './entities/workshop-attendee.entity';
@@ -25,6 +25,17 @@ import { WorkshopStatus } from './entities/workshop.entity';
 import { OrderSummaryStatus } from './entities/workshop-order-summary.entity';
 import { ReservationStatus } from './entities/workshop-reservation.entity';
 import Stripe = require('stripe');
+import {
+  WorkshopRefund,
+  WorkshopRefundStatus,
+  WorkshopRefundType,
+} from './entities/workshop-refund.entity';
+import {
+  WorkshopRefundItem,
+  WorkshopRefundItemStatus,
+} from './entities/workshop-refund-item.entity';
+import { ConfirmWorkshopRefundDto } from './dto/confirm-workshop-refund.dto';
+import { ListWorkshopEnrolleesQueryDto } from './dto/list-workshop-enrollees.query.dto';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -66,11 +77,24 @@ export class WorkshopsService {
     private orderSummariesRepo: Repository<WorkshopOrderSummary>,
     @InjectRepository(WorkshopOrderAttendee)
     private orderAttendeesRepo: Repository<WorkshopOrderAttendee>,
+    @InjectRepository(WorkshopRefund)
+    private refundsRepo: Repository<WorkshopRefund>,
+    @InjectRepository(WorkshopRefundItem)
+    private refundItemsRepo: Repository<WorkshopRefundItem>,
     @InjectRepository(WorkshopEnrollment)
     private enrollmentsRepo: Repository<WorkshopEnrollment>,
     @InjectRepository(Facility) private facilitiesRepo: Repository<Facility>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
   ) {}
+
+  private toMoney(value: string | number): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  private toMoneyString(value: number): string {
+    return value.toFixed(2);
+  }
 
   async create(dto: CreateWorkshopDto) {
     // --- validations ---
@@ -940,7 +964,9 @@ export class WorkshopsService {
       relations: ['days'],
     });
 
-    const workshopById = new Map(workshops.map((workshop) => [workshop.id, workshop]));
+    const workshopById = new Map(
+      workshops.map((workshop) => [workshop.id, workshop]),
+    );
 
     const data = workshopIds
       .map((workshopId) => {
@@ -958,7 +984,8 @@ export class WorkshopsService {
           .sort((a, b) => +a - +b);
 
         const startDate = dayDates.length > 0 ? dayDates[0] : null;
-        const endDate = dayDates.length > 0 ? dayDates[dayDates.length - 1] : null;
+        const endDate =
+          dayDates.length > 0 ? dayDates[dayDates.length - 1] : null;
 
         return {
           workshopId: workshop.id,
@@ -1223,7 +1250,9 @@ export class WorkshopsService {
     }
 
     if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
-      throw new BadRequestException('Order summary already used for reservation');
+      throw new BadRequestException(
+        'Order summary already used for reservation',
+      );
     }
 
     if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
@@ -1346,7 +1375,9 @@ export class WorkshopsService {
     }
 
     if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
-      throw new BadRequestException('Order summary already used for reservation');
+      throw new BadRequestException(
+        'Order summary already used for reservation',
+      );
     }
 
     if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
@@ -1517,6 +1548,387 @@ export class WorkshopsService {
         attendees: saved.attendees,
         availableSeatsRemaining: availableSeats - numberOfSeats,
         createdAt: saved.createdAt,
+      },
+    };
+  }
+
+  async getWorkshopEnrollees(
+    workshopId: string,
+    query: ListWorkshopEnrolleesQueryDto,
+  ) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: workshopId },
+      select: ['id', 'title'],
+    });
+
+    if (!workshop) {
+      throw new NotFoundException(`Workshop with ID ${workshopId} not found`);
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+
+    const reservations = await this.reservationsRepo.find({
+      where: { workshopId },
+      relations: ['attendees'],
+      order: { createdAt: 'DESC' },
+    });
+
+    const refundItems = await this.refundItemsRepo
+      .createQueryBuilder('item')
+      .leftJoinAndSelect('item.refund', 'refund')
+      .where('refund.workshopId = :workshopId', { workshopId })
+      .getMany();
+
+    const attendeeRefundMap = new Map<
+      string,
+      { status: 'REFUNDED' | 'PARTIAL_REFUNDED'; refundAmount: string }
+    >();
+
+    for (const item of refundItems) {
+      attendeeRefundMap.set(item.attendeeId, {
+        status: item.status,
+        refundAmount: item.refundAmount,
+      });
+    }
+
+    const transformed = reservations.map((reservation) => {
+      const members = (reservation.attendees ?? []).map((attendee) => {
+        const refundInfo = attendeeRefundMap.get(attendee.id);
+
+        return {
+          attendeeId: attendee.id,
+          fullName: attendee.fullName,
+          email: attendee.email,
+          institutionOrHospital: reservation.institutionOrHospital ?? null,
+          status:
+            refundInfo?.status === 'REFUNDED'
+              ? 'REFUNDED'
+              : refundInfo?.status === 'PARTIAL_REFUNDED'
+                ? 'PARTIAL_REFUNDED'
+                : 'CONFIRMED',
+        };
+      });
+
+      const refundedCount = members.filter(
+        (m) => m.status === 'REFUNDED',
+      ).length;
+      const partialRefundCount = members.filter(
+        (m) => m.status === 'PARTIAL_REFUNDED',
+      ).length;
+
+      let status:
+        | 'BOOKED'
+        | 'REFUND_REQUESTED'
+        | 'PARTIAL_REFUNDED'
+        | 'REFUNDED' = 'BOOKED';
+
+      if (members.length > 0 && refundedCount === members.length) {
+        status = 'REFUNDED';
+      } else if (partialRefundCount > 0 || refundedCount > 0) {
+        status = 'PARTIAL_REFUNDED';
+      }
+
+      const bookingType =
+        reservation.bookingType ??
+        (reservation.numberOfSeats > 1 ? 'group' : 'single');
+
+      return {
+        reservationId: reservation.id,
+        bookingType,
+        groupSize: reservation.numberOfSeats,
+        studentInfo: {
+          fullName:
+            reservation.bookerFullName ??
+            reservation.attendees?.[0]?.fullName ??
+            'Unknown',
+          email:
+            reservation.bookerEmail ??
+            reservation.attendees?.[0]?.email ??
+            null,
+          phoneNumber: reservation.bookerPhoneNumber ?? null,
+        },
+        institutionOrHospital: reservation.institutionOrHospital ?? null,
+        registeredAt: reservation.createdAt,
+        paymentAmount: reservation.totalPrice,
+        status,
+        paymentGateway: reservation.paymentGateway ?? null,
+        transactionId: reservation.paymentTransactionId ?? null,
+        members,
+      };
+    });
+
+    let filtered = transformed;
+
+    if (query.search?.trim()) {
+      const q = query.search.trim().toLowerCase();
+
+      filtered = filtered.filter((item) => {
+        const matchesTop =
+          item.studentInfo.fullName?.toLowerCase().includes(q) ||
+          item.studentInfo.email?.toLowerCase().includes(q) ||
+          item.institutionOrHospital?.toLowerCase().includes(q);
+
+        const matchesMember = item.members.some(
+          (member) =>
+            member.fullName.toLowerCase().includes(q) ||
+            member.email.toLowerCase().includes(q),
+        );
+
+        return Boolean(matchesTop || matchesMember);
+      });
+    }
+
+    if (query.bookingType) {
+      filtered = filtered.filter(
+        (item) => item.bookingType === query.bookingType,
+      );
+    }
+
+    if (query.enrollmentStatus) {
+      filtered = filtered.filter(
+        (item) => item.status === query.enrollmentStatus,
+      );
+    }
+
+    const totalEnrolled = transformed.reduce(
+      (sum, item) => sum + (item.groupSize || 0),
+      0,
+    );
+
+    const refundRequested = 0;
+    const partialRefund = transformed.filter(
+      (item) => item.status === 'PARTIAL_REFUNDED',
+    ).length;
+    const refunded = transformed.filter(
+      (item) => item.status === 'REFUNDED',
+    ).length;
+
+    const total = filtered.length;
+    const paginated = filtered.slice(skip, skip + limit);
+
+    return {
+      message: 'Workshop enrollees fetched successfully',
+      data: {
+        workshop: {
+          id: workshop.id,
+          title: workshop.title,
+        },
+        overview: {
+          totalEnrolled,
+          refundRequested,
+          partialRefund,
+          refunded,
+        },
+        items: paginated,
+      },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(Math.ceil(total / limit), 1),
+      },
+    };
+  }
+
+  async getRefundPreview(workshopId: string, reservationId: string) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: workshopId },
+      select: ['id', 'title'],
+    });
+
+    if (!workshop) {
+      throw new NotFoundException(`Workshop with ID ${workshopId} not found`);
+    }
+
+    const reservation = await this.reservationsRepo.findOne({
+      where: { id: reservationId, workshopId },
+      relations: ['attendees'],
+    });
+
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with ID ${reservationId} not found for this workshop`,
+      );
+    }
+
+    const existingRefundItems = await this.refundItemsRepo
+      .createQueryBuilder('item')
+      .leftJoinAndSelect('item.refund', 'refund')
+      .where('refund.reservationId = :reservationId', { reservationId })
+      .getMany();
+
+    const refundStatusMap = new Map<
+      string,
+      { status: string; refundedAmount: string }
+    >();
+
+    for (const item of existingRefundItems) {
+      refundStatusMap.set(item.attendeeId, {
+        status: item.status,
+        refundedAmount: item.refundAmount,
+      });
+    }
+
+    const perSeatAmount = this.toMoney(reservation.pricePerSeat);
+
+    const members = (reservation.attendees ?? []).map((attendee) => {
+      const existing = refundStatusMap.get(attendee.id);
+      const isFullyRefunded = existing?.status === 'REFUNDED';
+
+      return {
+        attendeeId: attendee.id,
+        fullName: attendee.fullName,
+        email: attendee.email,
+        refundAmount: this.toMoneyString(perSeatAmount),
+        refundStatus: existing?.status ?? 'NONE',
+        isRefundable: !isFullyRefunded,
+      };
+    });
+
+    const selectedMembers = members.filter((member) => member.isRefundable);
+    const calculatedRefundAmount = selectedMembers.reduce(
+      (sum, member) => sum + this.toMoney(member.refundAmount),
+      0,
+    );
+
+    return {
+      message: 'Refund preview fetched successfully',
+      data: {
+        reservationId: reservation.id,
+        workshopId,
+        bookingOwner: {
+          fullName:
+            reservation.bookerFullName ??
+            reservation.attendees?.[0]?.fullName ??
+            'Unknown',
+        },
+        groupSize: reservation.numberOfSeats,
+        totalPaid: reservation.totalPrice,
+        paymentGateway: reservation.paymentGateway ?? null,
+        transactionId: reservation.paymentTransactionId ?? null,
+        members,
+        summary: {
+          selectedCount: selectedMembers.length,
+          calculatedRefundAmount: this.toMoneyString(calculatedRefundAmount),
+        },
+      },
+    };
+  }
+
+  async confirmRefund(
+    workshopId: string,
+    adminId: string,
+    dto: ConfirmWorkshopRefundDto,
+  ) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: workshopId },
+      select: ['id', 'title'],
+    });
+
+    if (!workshop) {
+      throw new NotFoundException(`Workshop with ID ${workshopId} not found`);
+    }
+
+    const reservation = await this.reservationsRepo.findOne({
+      where: { id: dto.reservationId, workshopId },
+      relations: ['attendees'],
+    });
+
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with ID ${dto.reservationId} not found for this workshop`,
+      );
+    }
+
+    const attendees = await this.attendeesRepo.find({
+      where: {
+        reservationId: dto.reservationId,
+        id: In(dto.attendeeIds),
+      },
+    });
+
+    if (attendees.length !== dto.attendeeIds.length) {
+      throw new BadRequestException(
+        'One or more attendeeIds are invalid for this reservation',
+      );
+    }
+
+    const existingRefundItems = await this.refundItemsRepo
+      .createQueryBuilder('item')
+      .leftJoinAndSelect('item.refund', 'refund')
+      .where('refund.reservationId = :reservationId', {
+        reservationId: dto.reservationId,
+      })
+      .andWhere('item.attendeeId IN (:...attendeeIds)', {
+        attendeeIds: dto.attendeeIds,
+      })
+      .getMany();
+
+    const alreadyRefundedIds = new Set(
+      existingRefundItems
+        .filter((item) => item.status === 'REFUNDED')
+        .map((item) => item.attendeeId),
+    );
+
+    if (alreadyRefundedIds.size > 0) {
+      throw new BadRequestException(
+        'One or more selected attendees are already fully refunded',
+      );
+    }
+
+    const refundType =
+      dto.attendeeIds.length === reservation.numberOfSeats
+        ? WorkshopRefundType.FULL
+        : WorkshopRefundType.PARTIAL;
+
+    const refund = this.refundsRepo.create({
+      workshopId,
+      reservationId: dto.reservationId,
+      processedByAdminId: adminId,
+      refundType,
+      refundAmount: dto.refundAmount,
+      adjustmentNote: dto.adjustmentNote,
+      paymentGateway: dto.paymentGateway,
+      transactionId: dto.transactionId,
+      status: WorkshopRefundStatus.PROCESSED,
+      processedAt: new Date(),
+      items: attendees.map((attendee) =>
+        this.refundItemsRepo.create({
+          attendeeId: attendee.id,
+          refundAmount: this.toMoneyString(
+            this.toMoney(dto.refundAmount) / dto.attendeeIds.length,
+          ),
+          status:
+            refundType === WorkshopRefundType.FULL
+              ? WorkshopRefundItemStatus.REFUNDED
+              : WorkshopRefundItemStatus.PARTIAL_REFUNDED,
+        }),
+      ),
+    });
+
+    await this.refundsRepo.save(refund);
+
+    if (refundType === WorkshopRefundType.FULL) {
+      reservation.status = ReservationStatus.CANCELLED;
+      await this.reservationsRepo.save(reservation);
+    }
+
+    return {
+      message: 'Refund status updated successfully',
+      data: {
+        reservationId: reservation.id,
+        bookingOwnerName:
+          reservation.bookerFullName ??
+          reservation.attendees?.[0]?.fullName ??
+          'Unknown',
+        refundedAmount: dto.refundAmount,
+        paymentGateway: dto.paymentGateway,
+        transactionId: dto.transactionId,
+        processedMemberCount: dto.attendeeIds.length,
+        emailNotificationSent: true,
+        processedAt: refund.processedAt,
       },
     };
   }
