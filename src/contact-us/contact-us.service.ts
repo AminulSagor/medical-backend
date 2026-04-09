@@ -339,20 +339,18 @@ export class ContactUsService implements OnModuleInit {
   private readonly transporter: nodemailer.Transporter;
 
   constructor(private readonly configService: ConfigService) {
-    const host = this.configService.get<string>('SMTP_HOST');
-    const port = Number(this.configService.get<string>('SMTP_PORT') || 587);
     const user = this.configService.get<string>('SMTP_USER');
     const pass = this.configService.get<string>('SMTP_PASS');
 
-    if (!host || !user || !pass) {
+    if (!user || !pass) {
       throw new Error('SMTP configuration is missing.');
     }
 
     this.transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      requireTLS: port === 587,
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      requireTLS: true,
       auth: {
         user,
         pass,
@@ -360,9 +358,6 @@ export class ContactUsService implements OnModuleInit {
       connectionTimeout: 15000,
       greetingTimeout: 10000,
       socketTimeout: 20000,
-      tls: {
-        servername: host,
-      },
     });
   }
 
@@ -371,10 +366,7 @@ export class ContactUsService implements OnModuleInit {
       await this.transporter.verify();
       this.logger.log('SMTP transporter verified successfully');
     } catch (error) {
-      this.logger.error(
-        'SMTP transporter verification failed',
-        error instanceof Error ? error.stack : String(error),
-      );
+      this.logger.error('SMTP transporter verification failed', error);
     }
   }
 
