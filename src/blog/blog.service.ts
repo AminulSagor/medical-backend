@@ -15,6 +15,7 @@ import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
 import { ListBlogPostsQueryDto } from './dto/list-blog-posts.query.dto';
 import { ListPublicBlogsQueryDto } from './dto/list-public-blogs.query.dto';
 import { SchedulePostDto } from './dto/calendar.dto';
+import { NewsletterBroadcastArticleLink } from 'src/newsletters/broadcasts/entities/newsletter-broadcast-article-link.entity';
 
 @Injectable()
 export class BlogService {
@@ -29,6 +30,8 @@ export class BlogService {
     private readonly categoryRepo: Repository<BlogCategory>,
     @InjectRepository(Tag)
     private readonly tagRepo: Repository<Tag>,
+    @InjectRepository(NewsletterBroadcastArticleLink)
+    private readonly articleLinkRepo: Repository<NewsletterBroadcastArticleLink>,
   ) {}
 
   // ────────────────── ANALYTICS ──────────────────
@@ -502,6 +505,20 @@ export class BlogService {
 
     const posts = await qb.getMany();
 
+    // Fetch REAL Distribution Status (Has this blog been added to a newsletter?)
+    const postIds = posts.map((p) => p.id);
+    let distributedPostIds = new Set<string>();
+
+    if (postIds.length > 0) {
+      const distributedLinks = await this.articleLinkRepo.find({
+        where: { sourceRefId: In(postIds) },
+        select: ['sourceRefId'],
+      });
+      distributedPostIds = new Set(
+        distributedLinks.map((link) => link.sourceRefId),
+      );
+    }
+
     return {
       items: posts.map((p) => {
         const isPublished = p.publishingStatus === 'published';
@@ -510,7 +527,7 @@ export class BlogService {
         return {
           id: p.id,
           title: p.title,
-          status: p.publishingStatus, // 'scheduled' or 'published'
+          status: p.publishingStatus,
           date: eventDate,
           category: p.categories?.[0]?.name || 'UNCATEGORIZED',
           author: p.authors?.[0]
@@ -519,13 +536,13 @@ export class BlogService {
                 initials: p.authors[0].fullLegalName
                   ?.substring(0, 2)
                   .toUpperCase(),
-                // Avatar URL can be added here if available in your User entity
+                role: p.authors[0].professionalRole || null, // e.g., "MD" or "RN" for the Day View UI
               }
             : null,
-          // Day View Specifics
+          // Day View Specifics: REAL Distribution Data
           distribution: {
-            internalPortal: true, // Always true for published/scheduled blogs
-            newsletterBlast: p.isFeatured, // Example logic: tie newsletter status to a flag or broadcast relation
+            internalPortal: true, // Always true if it's on the calendar
+            newsletterBlast: distributedPostIds.has(p.id), // True ONLY if actually in a broadcast
           },
         };
       }),
@@ -537,7 +554,7 @@ export class BlogService {
       where: { publishingStatus: 'draft' as any },
       relations: ['authors', 'categories'],
       order: { updatedAt: 'DESC' },
-      take: 50, // Reasonable limit for the sidebar
+      take: 50,
     });
 
     return {
@@ -564,9 +581,7 @@ export class BlogService {
     dto: SchedulePostDto,
   ): Promise<Record<string, unknown>> {
     const post = await this.postRepo.findOne({ where: { id } });
-    if (!post) {
-      throw new NotFoundException('Blog post not found');
-    }
+    if (!post) throw new NotFoundException('Blog post not found');
 
     post.publishingStatus = 'scheduled' as any;
     post.scheduledPublishDate = new Date(dto.scheduledPublishDate);
@@ -578,6 +593,48 @@ export class BlogService {
       id: post.id,
       status: post.publishingStatus,
       scheduledPublishDate: post.scheduledPublishDate,
+    };
+  }
+
+  // NEW: Revert to Draft (Unschedule)
+  async unschedulePost(id: string): Promise<Record<string, unknown>> {
+    const post = await this.postRepo.findOne({ where: { id } });
+    if (!post) throw new NotFoundException('Blog post not found');
+
+    post.publishingStatus = 'draft' as any;
+    post.scheduledPublishDate = null as any;
+    post.publishedAt = null as any;
+
+    await this.postRepo.save(post);
+
+    return {
+      message: 'Post reverted to unscheduled draft',
+      id: post.id,
+      status: post.publishingStatus,
+    };
+  }
+
+  // NEW: Export Schedule Payload
+  async exportCalendar(
+    startDate: string,
+    endDate: string,
+  ): Promise<Record<string, unknown>> {
+    // Re-use the query logic but format for a flat CSV-style export
+    const data = await this.getCalendarEvents(startDate, endDate);
+    const items = data.items as any[];
+
+    return {
+      message: 'Schedule export generated',
+      filename: `publication_schedule_${startDate.split('T')[0]}_to_${endDate.split('T')[0]}.csv`,
+      data: items.map((i) => ({
+        ID: i.id,
+        Title: i.title,
+        Status: i.status.toUpperCase(),
+        Date: new Date(i.date).toISOString(),
+        Category: i.category,
+        Author: i.author?.name || 'N/A',
+        InNewsletter: i.distribution.newsletterBlast ? 'Yes' : 'No',
+      })),
     };
   }
 }

@@ -82,6 +82,14 @@ export class BlogController {
     return this.blogService.getCalendarEvents(query.startDate, query.endDate);
   }
 
+  // ── Calendar: Export Events ──
+  @Get('calendar/export')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  exportCalendar(@Query() query: GetCalendarQueryDto) {
+    return this.blogService.exportCalendar(query.startDate, query.endDate);
+  }
+
   // ── Calendar: Get Unscheduled Drafts ──
   @Get('calendar/drafts')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -99,5 +107,13 @@ export class BlogController {
     @Body() dto: SchedulePostDto,
   ) {
     return this.blogService.quickSchedule(id, dto);
+  }
+
+  // ── Calendar: Unschedule Post (Revert to Draft) ──
+  @Patch('calendar/:id/unschedule')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  unschedulePost(@Param('id', ParseUUIDPipe) id: string) {
+    return this.blogService.unschedulePost(id);
   }
 }
