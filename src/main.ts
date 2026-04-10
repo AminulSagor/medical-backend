@@ -1,11 +1,11 @@
-import * as dns from 'node:dns';
+// import * as dns from 'node:dns';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 async function bootstrap() {
-  dns.setDefaultResultOrder('ipv4first');
+  // dns.setDefaultResultOrder('ipv4first');
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
   });
