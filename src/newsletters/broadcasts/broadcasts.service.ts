@@ -1832,18 +1832,6 @@ export class BroadcastsService {
     };
   }
 
-  private getAudienceLabel(
-    audienceMode: string,
-    segmentNames: string[],
-  ): string {
-    if (audienceMode === NewsletterAudienceMode.ALL_SUBSCRIBERS)
-      return 'All Subscribers';
-    if (segmentNames.length === 1) return segmentNames[0];
-    if (segmentNames.length > 1)
-      return `${segmentNames[0]} +${segmentNames.length - 1}`;
-    return 'Target cohorts';
-  }
-
   private getTypeBadgeVariant(typeLabel: string): string {
     if (/clinical/i.test(typeLabel)) return 'teal';
     if (/special/i.test(typeLabel)) return 'purple';
@@ -1947,14 +1935,14 @@ export class BroadcastsService {
     if (!dto.subjectLine?.trim())
       throw new BadRequestException('subjectLine is required');
 
-    // 1. Conditionally require segmentIds ONLY if mode is SEGMENTS
-    if (dto.audienceMode === NewsletterAudienceMode.SEGMENTS) {
-      if (!dto.segmentIds || dto.segmentIds.length === 0) {
-        throw new BadRequestException(
-          'segmentIds is required when audienceMode is SEGMENTS',
-        );
-      }
-    }
+    // // 1. Conditionally require segmentIds ONLY if mode is SEGMENTS
+    // if (dto.audienceMode === NewsletterAudienceMode.SEGMENTS) {
+    //   if (!dto.segmentIds || dto.segmentIds.length === 0) {
+    //     throw new BadRequestException(
+    //       'segmentIds is required when audienceMode is SEGMENTS',
+    //     );
+    //   }
+    // }
 
     if (dto.contentType === NewsletterContentType.CUSTOM_MESSAGE) {
       if (!dto.customContent)

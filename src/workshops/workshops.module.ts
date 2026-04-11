@@ -18,6 +18,7 @@ import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { WorkshopRefund } from './entities/workshop-refund.entity';
 import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
+import { PrivateWorkshopsController } from './private-workshops.controller';
 
 @Module({
   imports: [
@@ -39,7 +40,11 @@ import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
       Faculty,
     ]),
   ],
-  controllers: [WorkshopsController, PublicWorkshopsController],
+  controllers: [
+    WorkshopsController,
+    PublicWorkshopsController,
+    PrivateWorkshopsController,
+  ],
   providers: [WorkshopsService],
 })
 export class WorkshopsModule {}

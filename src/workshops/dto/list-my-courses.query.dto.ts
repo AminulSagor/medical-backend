@@ -1,5 +1,32 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
+
+export enum CourseTab {
+  ACTIVE = 'active', // "In-Progress & Upcoming"
+  COMPLETED = 'completed',
+  BROWSE = 'browse', // "Browse Course"
+}
+
+export enum CourseTypeFilter {
+  ALL = 'all',
+  IN_PERSON = 'in_person',
+  ONLINE = 'online',
+}
+
+export enum CourseSort {
+  NEWEST = 'newest',
+  OLDEST = 'oldest',
+  A_Z = 'a_z',
+}
 
 export class ListMyCoursesQueryDto {
   @IsOptional()
@@ -35,4 +62,22 @@ export class ListMyCoursesQueryDto {
   @Min(1)
   @Max(100)
   limit?: number = 10;
+}
+
+export class ListMyCoursesLoggedQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsEnum(CourseTab)
+  tab?: CourseTab = CourseTab.ACTIVE;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsEnum(CourseTypeFilter)
+  type?: CourseTypeFilter = CourseTypeFilter.ALL;
+
+  @IsOptional()
+  @IsEnum(CourseSort)
+  sortBy?: CourseSort = CourseSort.NEWEST;
 }
