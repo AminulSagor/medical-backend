@@ -10,6 +10,8 @@ import { Workshop } from 'src/workshops/entities/workshop.entity';
 import { WorkshopEnrollment } from 'src/workshops/entities/workshop-enrollment.entity';
 import { ProfilesService } from './profiles.service';
 import { Order } from 'src/orders/entities/order.entity';
+import { PaymentSettingsController } from './payment-settings.controller';
+import { PaymentSettingsService } from './payment-settings.service';
 
 @Module({
   imports: [
@@ -22,8 +24,13 @@ import { Order } from 'src/orders/entities/order.entity';
       Order,
     ]),
   ],
-  controllers: [UsersController, UserProfileController, UserProfileController],
-  providers: [UsersService, ProfilesService],
+  controllers: [
+    UsersController,
+    UserProfileController,
+    UserProfileController,
+    PaymentSettingsController,
+  ],
+  providers: [UsersService, ProfilesService, PaymentSettingsService],
   exports: [TypeOrmModule],
 })
 export class UsersModule {}
