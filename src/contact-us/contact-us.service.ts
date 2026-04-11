@@ -324,71 +324,53 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
-  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import * as SMTPTransport from 'nodemailer/lib/smtp-transport';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import {
   ContactInquiryType,
   CreateContactUsDto,
 } from './dto/create-contact-us.dto';
 
 @Injectable()
-export class ContactUsService implements OnModuleInit {
+export class ContactUsService {
   private readonly logger = new Logger(ContactUsService.name);
-  private transporter!: nodemailer.Transporter;
+  private readonly ses: SESv2Client;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) {
+    const region =
+      this.configService.get<string>('AWS_REGION') ||
+      this.configService.get<string>('AWS_S3_REGION');
 
-  async onModuleInit() {
-    const smtpHost =
-      this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
-    const smtpPort = Number(this.configService.get<string>('SMTP_PORT') || 587); // Use 587
-    const user = this.configService.get<string>('SMTP_USER');
-    const pass = this.configService.get<string>('SMTP_PASS');
+    const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
+    const secretAccessKey = this.configService.get<string>(
+      'AWS_SECRET_ACCESS_KEY',
+    );
 
-    if (!user || !pass) {
-      throw new Error('SMTP configuration is missing.');
+    if (!region || !accessKeyId || !secretAccessKey) {
+      throw new Error('AWS SES configuration is missing.');
     }
 
-    this.transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user,
-        pass,
+    this.ses = new SESv2Client({
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
       },
-      connectionTimeout: 15000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000,
-    } as SMTPTransport.Options);
-
-    try {
-      await this.transporter.verify();
-      this.logger.log(
-        `SMTP transporter verified successfully with ${smtpHost}:${smtpPort}`,
-      );
-    } catch (error) {
-      this.logger.error(
-        'SMTP transporter verification failed',
-        error instanceof Error ? error.stack : String(error),
-      );
-    }
+    });
   }
 
   async sendContactMessage(dto: CreateContactUsDto) {
-    const fromEmail =
-      this.configService.get<string>('SMTP_FROM') ||
-      this.configService.get<string>('SMTP_USER');
-
-    const receiverEmail =
-      this.configService.get<string>('CONTACT_RECEIVER_EMAIL') || fromEmail;
+    const fromEmail = this.configService.get<string>('SES_FROM_EMAIL');
+    const receiverEmail = this.configService.get<string>(
+      'SES_CONTACT_RECEIVER_EMAIL',
+    );
+    const enableAutoReply =
+      this.configService.get<string>('SES_ENABLE_AUTO_REPLY') === 'true';
 
     if (!fromEmail || !receiverEmail) {
       throw new BadRequestException(
-        'Mail sender or receiver is not configured.',
+        'SES sender or receiver is not configured.',
       );
     }
 
@@ -403,109 +385,160 @@ export class ContactUsService implements OnModuleInit {
 
     const formattedMessage = this.escapeHtml(normalizedMessage);
 
-    try {
-      // 1. Send to Admin/Receiver
-      await this.transporter.sendMail({
-        from: `"Website Contact Form" <${fromEmail}>`,
-        to: receiverEmail,
-        replyTo: dto.email,
-        subject: `[Contact Us] ${inquiryLabel} - ${dto.fullName}`,
-        html: `
-          <div style="margin:0;padding:0;background-color:#f4f7fb;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7fb;padding:32px 16px;">
-              <tr>
-                <td align="center">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:720px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
-                    <tr>
-                      <td style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:28px 32px;">
-                        <p style="margin:0 0 8px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#bfdbfe;font-family:Arial,sans-serif;">Website Contact Form</p>
-                        <h1 style="margin:0;font-size:28px;line-height:36px;color:#ffffff;font-family:Arial,sans-serif;">New Contact Us Submission</h1>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding:32px;">
-                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-                          <tr>
-                            <td style="padding:0 0 16px 0;">
-                              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
-                                <tr>
-                                  <td style="padding:20px 24px;font-family:Arial,sans-serif;">
-                                    <p style="margin:0 0 14px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Contact Details</p>
-                                    <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Full Name:</span> ${this.escapeHtml(dto.fullName)}</p>
-                                    <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Email:</span> <a href="mailto:${this.escapeHtml(dto.email)}" style="color:#2563eb;text-decoration:none;">${this.escapeHtml(dto.email)}</a></p>
-                                    <p style="margin:0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Inquiry Type:</span> <span style="display:inline-block;background:#dbeafe;color:#1d4ed8;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700;">${this.escapeHtml(inquiryLabel)}</span></p>
-                                  </td>
-                                </tr>
-                              </table>
-                            </td>
-                          </tr>
-                          <tr>
-                            <td>
-                              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;">
-                                <tr>
-                                  <td style="padding:20px 24px;font-family:Arial,sans-serif;">
-                                    <p style="margin:0 0 14px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Message</p>
-                                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;font-size:15px;line-height:30px;color:#1e293b;white-space:pre-line;word-break:break-word;">${formattedMessage}</div>
-                                  </td>
-                                </tr>
-                              </table>
-                            </td>
-                          </tr>
-                        </table>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-          </div>
-        `,
-        text: `New Contact Us Submission\n\nFull Name: ${dto.fullName}\nEmail: ${dto.email}\nInquiry Type: ${inquiryLabel}\n\nMessage:\n${normalizedMessage}`,
-      });
+    const adminHtml = `
+      <div style="margin:0;padding:0;background-color:#f4f7fb;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7fb;padding:32px 16px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:720px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
+                <tr>
+                  <td style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:28px 32px;">
+                    <p style="margin:0 0 8px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#bfdbfe;font-family:Arial,sans-serif;">Website Contact Form</p>
+                    <h1 style="margin:0;font-size:28px;line-height:36px;color:#ffffff;font-family:Arial,sans-serif;">New Contact Us Submission</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td style="padding:0 0 16px 0;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+                            <tr>
+                              <td style="padding:20px 24px;font-family:Arial,sans-serif;">
+                                <p style="margin:0 0 14px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Contact Details</p>
+                                <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Full Name:</span> ${this.escapeHtml(dto.fullName)}</p>
+                                <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Email:</span> <a href="mailto:${this.escapeHtml(dto.email)}" style="color:#2563eb;text-decoration:none;">${this.escapeHtml(dto.email)}</a></p>
+                                <p style="margin:0;font-size:15px;color:#0f172a;"><span style="display:inline-block;width:120px;font-weight:700;color:#334155;">Inquiry Type:</span> <span style="display:inline-block;background:#dbeafe;color:#1d4ed8;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700;">${this.escapeHtml(inquiryLabel)}</span></p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;">
+                            <tr>
+                              <td style="padding:20px 24px;font-family:Arial,sans-serif;">
+                                <p style="margin:0 0 14px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Message</p>
+                                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;font-size:15px;line-height:30px;color:#1e293b;white-space:pre-line;word-break:break-word;">${formattedMessage}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>
+    `;
 
-      // 2. Send Auto-Reply to User
-      await this.transporter.sendMail({
-        from: `"Support Team" <${fromEmail}>`,
-        to: dto.email,
-        subject: 'We received your message',
-        html: `
-          <div style="margin:0;padding:0;background-color:#f4f7fb;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7fb;padding:32px 16px;">
-              <tr>
-                <td align="center">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:680px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
-                    <tr>
-                      <td style="background:linear-gradient(135deg,#0ea5e9,#2563eb);padding:28px 32px;">
-                        <h2 style="margin:0;font-size:26px;line-height:34px;color:#ffffff;font-family:Arial,sans-serif;">Thank you for contacting us</h2>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding:32px;font-family:Arial,sans-serif;color:#1e293b;">
-                        <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Hello ${this.escapeHtml(dto.fullName)},</p>
-                        <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Thank you for reaching out to us. We received your inquiry regarding <strong>${this.escapeHtml(inquiryLabel)}</strong>.</p>
-                        <div style="margin:24px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;">
-                          <p style="margin:0 0 8px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;">Your Submitted Message</p>
-                          <div style="margin:0;font-size:15px;line-height:30px;color:#334155;white-space:pre-line;word-break:break-word;">${formattedMessage}</div>
-                        </div>
-                        <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Our team will review your request and get back to you as soon as possible.</p>
-                        <p style="margin:24px 0 0 0;font-size:15px;line-height:26px;">Best regards,<br /><strong>Support Team</strong></p>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-          </div>
-        `,
-        text: `Hello ${dto.fullName},\n\nThank you for contacting us regarding ${inquiryLabel}.\n\nYour message:\n${normalizedMessage}\n\nOur team will get back to you soon.\n\nBest regards,\nSupport Team`,
-      });
+    const userHtml = `
+      <div style="margin:0;padding:0;background-color:#f4f7fb;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7fb;padding:32px 16px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:680px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
+                <tr>
+                  <td style="background:linear-gradient(135deg,#0ea5e9,#2563eb);padding:28px 32px;">
+                    <h2 style="margin:0;font-size:26px;line-height:34px;color:#ffffff;font-family:Arial,sans-serif;">Thank you for contacting us</h2>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px;font-family:Arial,sans-serif;color:#1e293b;">
+                    <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Hello ${this.escapeHtml(dto.fullName)},</p>
+                    <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Thank you for reaching out to us. We received your inquiry regarding <strong>${this.escapeHtml(inquiryLabel)}</strong>.</p>
+                    <div style="margin:24px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;">
+                      <p style="margin:0 0 8px 0;font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;">Your Submitted Message</p>
+                      <div style="margin:0;font-size:15px;line-height:30px;color:#334155;white-space:pre-line;word-break:break-word;">${formattedMessage}</div>
+                    </div>
+                    <p style="margin:0 0 16px 0;font-size:15px;line-height:26px;">Our team will get back to you as soon as possible.</p>
+                    <p style="margin:24px 0 0 0;font-size:15px;line-height:26px;">Best regards,<br /><strong>Support Team</strong></p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>
+    `;
+
+    try {
+      await this.ses.send(
+        new SendEmailCommand({
+          FromEmailAddress: fromEmail,
+          ReplyToAddresses: [dto.email],
+          Destination: {
+            ToAddresses: [receiverEmail],
+          },
+          Content: {
+            Simple: {
+              Subject: {
+                Data: `[Contact Us] ${inquiryLabel} - ${dto.fullName}`,
+              },
+              Body: {
+                Html: { Data: adminHtml },
+                Text: {
+                  Data: `New Contact Us Submission
+
+Full Name: ${dto.fullName}
+Email: ${dto.email}
+Inquiry Type: ${inquiryLabel}
+
+Message:
+${normalizedMessage}`,
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      if (enableAutoReply) {
+        await this.ses.send(
+          new SendEmailCommand({
+            FromEmailAddress: fromEmail,
+            Destination: {
+              ToAddresses: [dto.email],
+            },
+            Content: {
+              Simple: {
+                Subject: {
+                  Data: 'We received your message',
+                },
+                Body: {
+                  Html: { Data: userHtml },
+                  Text: {
+                    Data: `Hello ${dto.fullName},
+
+Thank you for contacting us regarding ${inquiryLabel}.
+
+Your message:
+${normalizedMessage}
+
+Our team will get back to you soon.
+
+Best regards,
+Support Team`,
+                  },
+                },
+              },
+            },
+          }),
+        );
+      }
 
       return {
-        message: 'Your message has been sent successfully.',
+        message: enableAutoReply
+          ? 'Your message has been sent successfully.'
+          : 'Your message has been sent successfully. Auto-reply is disabled in sandbox mode.',
       };
     } catch (error) {
       this.logger.error(
-        'Failed to send contact email',
+        'Failed to send contact email via SES',
         error instanceof Error ? error.stack : String(error),
       );
 
@@ -522,6 +555,7 @@ export class ContactUsService implements OnModuleInit {
       [ContactInquiryType.FACILITY_BOOKING]: 'Facility Booking',
       [ContactInquiryType.TECHNICAL_SUPPORT]: 'Technical Support',
     };
+
     return labels[type];
   }
 
