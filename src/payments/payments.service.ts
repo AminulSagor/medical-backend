@@ -925,6 +925,12 @@ export class PaymentsService {
       return;
     }
 
+    if (payment.providerSessionId && payment.providerSessionId !== session.id) {
+      throw new BadRequestException(
+        `Webhook session mismatch. Expected ${payment.providerSessionId}, got ${session.id}`,
+      );
+    }
+
     payment.providerSessionId = session.id;
     payment.providerPaymentIntentId =
       typeof session.payment_intent === 'string'
