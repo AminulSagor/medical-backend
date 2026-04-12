@@ -65,6 +65,14 @@ export class BroadcastsController {
     return this.broadcastsService.getDetail(id);
   }
 
+  @Delete(':id')
+  deleteDraft(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<Record<string, unknown>> {
+    return this.broadcastsService.deleteDraft(req.user.id, id);
+  }
+
   @Get(':id/preview')
   preview(
     @Param('id', new ParseUUIDPipe()) id: string,

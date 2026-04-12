@@ -237,6 +237,50 @@ export class BroadcastsService {
     }
   }
 
+  async deleteDraft(
+    userId: string,
+    broadcastId: string,
+  ): Promise<Record<string, unknown>> {
+    const broadcast = await this.broadcastRepo.findOne({
+      where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
+    });
+
+    if (!broadcast) {
+      throw new NotFoundException('Broadcast not found');
+    }
+
+    // Only allow deletion if the broadcast is in a draft or pending state
+    const allowedStatuses = [
+      NewsletterBroadcastStatus.DRAFT,
+      NewsletterBroadcastStatus.REVIEW_PENDING,
+      NewsletterBroadcastStatus.READY, // Allow deleting ready but unscheduled items
+      NewsletterBroadcastStatus.SCHEDULED, // Optional: If you want to allow deleting scheduled items (they will be unscheduled)
+    ];
+
+    if (!allowedStatuses.includes(broadcast.status)) {
+      throw new BadRequestException(
+        `Cannot delete broadcast with status: ${broadcast.status}`,
+      );
+    }
+
+    // Remove from Queue if it was scheduled/ready
+    if (
+      broadcast.status === NewsletterBroadcastStatus.SCHEDULED ||
+      broadcast.status === NewsletterBroadcastStatus.READY
+    ) {
+      await this.queueOrderRepo.delete({ broadcastId: broadcast.id });
+    }
+
+    // Soft delete or hard delete depending on your business logic.
+    // Here we are doing a hard delete.
+    await this.broadcastRepo.delete(broadcast.id);
+
+    return {
+      message: 'Broadcast deleted successfully',
+      deletedId: broadcastId,
+    };
+  }
+
   async list(query: ListBroadcastsQueryDto): Promise<Record<string, unknown>> {
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
@@ -1442,9 +1486,11 @@ export class BroadcastsService {
     // 3. Search by Title, Author, or Keyword
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
+      // COALESCE shouldn't be inside LOWER if the result is a boolean/null, but it's fine for text.
+      // Let's use standard TypeORM parameter binding:
       qb.andWhere(
-        `(LOWER(b.subjectLine) LIKE :s OR LOWER(COALESCE(b.internalName,'')) LIKE :s OR LOWER(COALESCE(al.sourceTitleSnapshot,'')) LIKE :s OR LOWER(COALESCE(al.sourceAuthorSnapshot,'')) LIKE :s)`,
-        { s },
+        '(LOWER(b.subjectLine) LIKE :search OR LOWER(b.internalName) LIKE :search OR LOWER(al.sourceTitleSnapshot) LIKE :search OR LOWER(al.sourceAuthorSnapshot) LIKE :search)',
+        { search: s }, // Changed parameter name to match binding
       );
     }
 
