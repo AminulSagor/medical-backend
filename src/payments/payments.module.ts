@@ -11,6 +11,7 @@ import { PaymentTransaction } from './entities/payment-transaction.entity';
 import { ProductOrderSummary } from './entities/product-order-summary.entity';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
+import { CartModule } from 'src/cart/cart.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { PaymentsService } from './payments.service';
       WorkshopOrderSummary,
       WorkshopReservation,
     ]),
+    CartModule,
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService],

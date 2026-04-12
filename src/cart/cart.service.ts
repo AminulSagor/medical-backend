@@ -30,6 +30,14 @@ export class CartService {
     return cart;
   }
 
+  async clearCart(userId: string) {
+    const cart = await this.cartRepo.findOne({ where: { userId } });
+    if (cart) {
+      // Delete all items associated with this cart
+      await this.cartItemRepo.delete({ cartId: cart.id });
+    }
+  }
+
   async addToCart(userId: string, dto: AddToCartDto) {
     // 1. Verify the product exists and is active
     const product = await this.productRepo.findOne({

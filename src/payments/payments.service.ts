@@ -42,6 +42,7 @@ import {
   ProductOrderSummaryItem,
   ProductOrderSummaryStatus,
 } from './entities/product-order-summary.entity';
+import { CartService } from 'src/cart/cart.service';
 
 type ProductCalculatedItem = {
   productId: string;
@@ -102,13 +103,16 @@ export class PaymentsService {
     private readonly workshopOrderSummariesRepo: Repository<WorkshopOrderSummary>,
     @InjectRepository(WorkshopReservation)
     private readonly workshopReservationsRepo: Repository<WorkshopReservation>,
+    private readonly cartService: CartService,
   ) {}
 
   private formatAmount(value: number): string {
     return value.toFixed(2);
   }
 
-  private parsePositiveNumber(value: string | number | null | undefined): number {
+  private parsePositiveNumber(
+    value: string | number | null | undefined,
+  ): number {
     const n = Number(value ?? 0);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
@@ -207,7 +211,8 @@ export class PaymentsService {
   private getUserShippingAddress(
     user: User,
   ): CheckoutShippingAddressDto | null {
-    const fullName = user.shippingFullName?.trim() || user.fullLegalName?.trim();
+    const fullName =
+      user.shippingFullName?.trim() || user.fullLegalName?.trim();
     const addressLine1 = user.shippingAddressLine1?.trim();
     const city = user.shippingCity?.trim();
     const state = user.shippingState?.trim();
@@ -267,7 +272,9 @@ export class PaymentsService {
       throw new BadRequestException('Some products are invalid or inactive');
     }
 
-    const productMap = new Map(products.map((product) => [product.id, product]));
+    const productMap = new Map(
+      products.map((product) => [product.id, product]),
+    );
 
     let subtotal = 0;
     const mappedItems: ProductCalculatedItem[] = uniqueProductIds.map(
@@ -348,7 +355,9 @@ export class PaymentsService {
   }
 
   private getProductSummaryExpiryMinutes(): number {
-    const configured = Number(process.env.PRODUCT_ORDER_SUMMARY_EXPIRES_MINUTES ?? 30);
+    const configured = Number(
+      process.env.PRODUCT_ORDER_SUMMARY_EXPIRES_MINUTES ?? 30,
+    );
     return Number.isFinite(configured) && configured > 0 ? configured : 30;
   }
 
@@ -420,7 +429,9 @@ export class PaymentsService {
       throw new NotFoundException('User not found');
     }
 
-    const summary = await this.buildProductSummary(dto.items as CheckoutSessionItemDto[]);
+    const summary = await this.buildProductSummary(
+      dto.items as CheckoutSessionItemDto[],
+    );
     const saved = await this.createSavedProductOrderSummary(userId, summary);
 
     return {
@@ -435,7 +446,10 @@ export class PaymentsService {
   }
 
   async getProductOrderSummary(userId: string, orderSummaryId: string) {
-    const summary = await this.getOwnedProductOrderSummary(userId, orderSummaryId);
+    const summary = await this.getOwnedProductOrderSummary(
+      userId,
+      orderSummaryId,
+    );
 
     if (summary.status === ProductOrderSummaryStatus.PENDING) {
       await this.ensurePendingAndNotExpired(summary);
@@ -461,7 +475,8 @@ export class PaymentsService {
       throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
     }
 
-    const successUrl = dto.successUrl || process.env.STRIPE_CHECKOUT_SUCCESS_URL;
+    const successUrl =
+      dto.successUrl || process.env.STRIPE_CHECKOUT_SUCCESS_URL;
     const cancelUrl = dto.cancelUrl || process.env.STRIPE_CHECKOUT_CANCEL_URL;
 
     if (!successUrl || !cancelUrl) {
@@ -524,20 +539,25 @@ export class PaymentsService {
       }
 
       summary = await this.buildProductSummary(dto.items);
-      productSummary = await this.createSavedProductOrderSummary(user.id, summary);
+      productSummary = await this.createSavedProductOrderSummary(
+        user.id,
+        summary,
+      );
     }
 
     const incomingShipping = dto.shippingAddress
       ? this.normalizeShippingAddress(dto.shippingAddress)
       : null;
-    const shippingAddress = incomingShipping ?? this.getUserShippingAddress(user);
+    const shippingAddress =
+      incomingShipping ?? this.getUserShippingAddress(user);
     this.requireShippingAddress(shippingAddress);
 
     if (incomingShipping) {
       await this.saveUserShippingAddress(user, incomingShipping);
     }
 
-    const { stripeSecretKey, successUrl, cancelUrl } = this.getStripeConfig(dto);
+    const { stripeSecretKey, successUrl, cancelUrl } =
+      this.getStripeConfig(dto);
     const stripe = Stripe(stripeSecretKey);
 
     const existingPending = await this.paymentsRepo.findOne({
@@ -584,21 +604,20 @@ export class PaymentsService {
 
     const savedPayment = await this.paymentsRepo.save(payment);
 
-    const lineItems =
-      summary.items.map((item) => ({
-        quantity: item.quantity,
-        price_data: {
-          currency: 'usd',
-          unit_amount: Math.round(item.unitPrice * 100),
-          product_data: {
-            name: item.name,
-            metadata: {
-              productId: item.productId,
-              sku: item.sku ?? '',
-            },
+    const lineItems = summary.items.map((item) => ({
+      quantity: item.quantity,
+      price_data: {
+        currency: 'usd',
+        unit_amount: Math.round(item.unitPrice * 100),
+        product_data: {
+          name: item.name,
+          metadata: {
+            productId: item.productId,
+            sku: item.sku ?? '',
           },
         },
-      }));
+      },
+    }));
 
     if (summary.estimatedShipping > 0) {
       lineItems.push({
@@ -699,7 +718,9 @@ export class PaymentsService {
     }
 
     if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
-      throw new BadRequestException('Order summary already used for reservation');
+      throw new BadRequestException(
+        'Order summary already used for reservation',
+      );
     }
 
     if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
@@ -738,7 +759,8 @@ export class PaymentsService {
       );
     }
 
-    const { stripeSecretKey, successUrl, cancelUrl } = this.getStripeConfig(dto);
+    const { stripeSecretKey, successUrl, cancelUrl } =
+      this.getStripeConfig(dto);
     const stripe = Stripe(stripeSecretKey);
 
     const unitAmount = Math.round(Number(orderSummary.pricePerSeat) * 100);
@@ -859,15 +881,11 @@ export class PaymentsService {
     }
 
     if (event.type === 'checkout.session.completed') {
-      await this.handleCheckoutSessionCompleted(
-        event.data.object,
-      );
+      await this.handleCheckoutSessionCompleted(event.data.object);
     }
 
     if (event.type === 'checkout.session.expired') {
-      await this.handleCheckoutSessionExpired(
-        event.data.object,
-      );
+      await this.handleCheckoutSessionExpired(event.data.object);
     }
 
     return {
@@ -882,12 +900,17 @@ export class PaymentsService {
       return;
     }
 
-    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    const payment = await this.paymentsRepo.findOne({
+      where: { id: paymentId },
+    });
     if (!payment) {
       return;
     }
 
-    if (payment.status === PaymentTransactionStatus.PAID && payment.finalizedRefId) {
+    if (
+      payment.status === PaymentTransactionStatus.PAID &&
+      payment.finalizedRefId
+    ) {
       return;
     }
 
@@ -922,7 +945,9 @@ export class PaymentsService {
       return;
     }
 
-    const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
+    const payment = await this.paymentsRepo.findOne({
+      where: { id: paymentId },
+    });
     if (!payment) {
       return;
     }
@@ -939,7 +964,8 @@ export class PaymentsService {
     await this.paymentsRepo.save(payment);
 
     if (payment.domainType === PaymentDomainType.PRODUCT) {
-      const orderSummaryId = payment.metadata?.orderSummaryId ?? payment.domainRefId;
+      const orderSummaryId =
+        payment.metadata?.orderSummaryId ?? payment.domainRefId;
 
       if (orderSummaryId && orderSummaryId !== 'product_checkout') {
         await this.productOrderSummariesRepo.update(
@@ -983,7 +1009,9 @@ export class PaymentsService {
       );
     }
 
-    const user = await this.usersRepo.findOne({ where: { id: payment.userId } });
+    const user = await this.usersRepo.findOne({
+      where: { id: payment.userId },
+    });
     if (!user) {
       throw new NotFoundException('User not found for payment finalization');
     }
@@ -1035,6 +1063,17 @@ export class PaymentsService {
     } as any);
 
     const savedOrder = await this.ordersRepo.save(order as any);
+
+    try {
+      await this.cartService.clearCart(user.id);
+    } catch (cartError) {
+      // We log this but don't throw an error, because the payment and order were successful.
+      // Failing to clear the cart shouldn't crash the webhook.
+      console.error(
+        `Failed to clear cart for user ${user.id} after order ${orderNumber}:`,
+        cartError,
+      );
+    }
 
     const orderSummaryId = metadata.orderSummaryId ?? payment.domainRefId;
     if (orderSummaryId && orderSummaryId !== 'product_checkout') {
