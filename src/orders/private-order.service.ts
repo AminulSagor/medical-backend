@@ -18,36 +18,132 @@ export class PrivateOrderService {
     });
 
     const now = new Date();
-    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
+    // Time Boundaries for Comparisons
+    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const startOfThisYear = new Date(now.getFullYear(), 0, 1);
+    const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
+
+    // Current Period Variables
     let activeDeliveries = 0;
     let orderedThisMonthCount = 0;
     let orderValueThisMonth = 0;
     let totalOrderedValue = 0;
 
+    // Previous Period Variables
+    let activeDeliveriesLastMonth = 0;
+    let orderedLastMonthCount = 0;
+    let orderValueLastMonth = 0;
+    let totalOrderedValueLastYear = 0;
+
     allOrders.forEach((order) => {
       const grandTotal = parseFloat(order.grandTotal) || 0;
       totalOrderedValue += grandTotal;
 
-      // Active Deliveries (Not Fulfilled/Delivered yet)
-      if (order.fulfillmentStatus !== FulfillmentStatus.CLOSED) {
+      const orderDate = new Date(order.createdAt);
+      const isClosed = order.fulfillmentStatus === FulfillmentStatus.CLOSED;
+
+      // ── Metrics: Active Deliveries ──
+      if (!isClosed) {
         activeDeliveries++;
       }
 
-      // Current Month Stats
-      if (order.createdAt >= startOfThisMonth) {
+      // To calculate "Active Deliveries vs Last Month", we need to know how many were active AT THIS TIME last month.
+      // For simplicity in a dynamic system, we can approximate this by looking at orders placed last month that are STILL active,
+      // OR count how many orders were placed last month vs this month.
+      // Let's use orders placed last month as a proxy for the trend base:
+      if (
+        orderDate >= startOfLastMonth &&
+        orderDate < startOfThisMonth &&
+        !isClosed
+      ) {
+        activeDeliveriesLastMonth++;
+      }
+
+      // ── Metrics: Monthly Orders & Value ──
+      if (orderDate >= startOfThisMonth) {
+        // Current Month
         orderedThisMonthCount++;
         orderValueThisMonth += grandTotal;
+      } else if (
+        orderDate >= startOfLastMonth &&
+        orderDate < startOfThisMonth
+      ) {
+        // Last Month
+        orderedLastMonthCount++;
+        orderValueLastMonth += grandTotal;
+      }
+
+      // ── Metrics: Yearly Value ──
+      if (orderDate >= startOfLastYear && orderDate < startOfThisYear) {
+        totalOrderedValueLastYear += grandTotal;
       }
     });
+
+    // Calculate "Total Ordered Value" for the CURRENT year (to compare against last year)
+    const totalOrderedValueThisYear = allOrders
+      .filter((o) => new Date(o.createdAt) >= startOfThisYear)
+      .reduce((sum, o) => sum + (parseFloat(o.grandTotal) || 0), 0);
+
+    // ── Trend Calculation Helpers ──
+    const calculateTrend = (
+      current: number,
+      previous: number,
+      suffix: string,
+    ) => {
+      if (previous === 0) {
+        return current > 0 ? `+ 100% ${suffix}` : `0% ${suffix}`; // Avoid division by zero
+      }
+      const percentage = ((current - previous) / previous) * 100;
+      const sign = percentage > 0 ? '+' : '';
+      return `${sign} ${percentage.toFixed(1)}% ${suffix}`;
+    };
+
+    const activeTrend = calculateTrend(
+      activeDeliveries,
+      activeDeliveriesLastMonth,
+      'vs last month',
+    );
+    const countTrend = calculateTrend(
+      orderedThisMonthCount,
+      orderedLastMonthCount,
+      'vs last month',
+    );
+    const valueTrend = calculateTrend(
+      orderValueThisMonth,
+      orderValueLastMonth,
+      'vs last month',
+    );
+
+    // The UI specifically says "vs last year" for the total ordered value.
+    // We compare this year's total so far against last year's total.
+    const totalTrend = calculateTrend(
+      totalOrderedValueThisYear,
+      totalOrderedValueLastYear,
+      'vs last year',
+    );
 
     return {
       message: 'Order summary retrieved successfully',
       data: {
-        activeDeliveries: { value: activeDeliveries },
-        orderedThisMonth: { value: orderedThisMonthCount },
-        orderValueMonth: { value: orderValueThisMonth.toFixed(2) },
-        totalOrderedValue: { value: totalOrderedValue.toFixed(2) },
+        activeDeliveries: {
+          value: activeDeliveries,
+          trend: activeTrend,
+        },
+        orderedThisMonth: {
+          value: orderedThisMonthCount,
+          trend: countTrend,
+        },
+        orderValueMonth: {
+          value: orderValueThisMonth.toFixed(2),
+          trend: valueTrend,
+        },
+        totalOrderedValue: {
+          value: totalOrderedValue.toFixed(2),
+          trend: totalTrend,
+        },
       },
     };
   }
