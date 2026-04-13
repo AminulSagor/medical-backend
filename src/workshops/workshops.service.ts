@@ -2297,10 +2297,23 @@ export class WorkshopsService {
 
   // ── 1. SUMMARY METRICS API ──
   async getMyCoursesSummary(userId: string) {
-    const enrollments = await this.enrollmentsRepo.find({
-      where: { userId },
-      relations: ['workshop', 'workshop.days', 'workshop.days.segments'],
-    });
+    const [enrollments, reservations] = await Promise.all([
+      this.enrollmentsRepo.find({
+        where: { userId, isActive: true },
+        select: ['workshopId'],
+      }),
+      this.reservationsRepo.find({
+        where: { userId, status: ReservationStatus.CONFIRMED as any },
+        select: ['workshopId'],
+      }),
+    ]);
+
+    const uniqueWorkshopIds = [
+      ...new Set([
+        ...enrollments.map((e) => e.workshopId),
+        ...reservations.map((r) => r.workshopId),
+      ]),
+    ];
 
     let activeCount = 0;
     let completedCount = 0;
@@ -2308,31 +2321,38 @@ export class WorkshopsService {
     let nextSessionDatetime: Date | null = null;
     const now = new Date();
 
-    for (const e of enrollments) {
-      const w = e.workshop;
-      if (!w || !w.days || w.days.length === 0) continue;
+    if (uniqueWorkshopIds.length > 0) {
+      const workshops = await this.workshopsRepo.find({
+        where: uniqueWorkshopIds.map((id) => ({ id })),
+        relations: ['days', 'days.segments'],
+      });
 
-      const sortedDays = [...w.days].sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-      );
-      const lastDay = sortedDays[sortedDays.length - 1];
-      const isCompleted = new Date(lastDay.date) < now;
+      for (const w of workshops) {
+        if (!w.days || w.days.length === 0) continue;
 
-      if (isCompleted) {
-        completedCount++;
-        // Calculate CME (Assuming 4 credits per day as a safe derived metric if no specific column exists)
-        if (w.offersCmeCredits) totalCmeCredits += sortedDays.length * 4;
-      } else {
-        activeCount++;
-        // Find exact next session time
-        for (const day of sortedDays) {
-          const dayDate = new Date(day.date);
-          if (dayDate >= new Date(now.toDateString())) {
-            for (const seg of day.segments || []) {
-              const segDateTime = new Date(`${day.date}T${seg.startTime}`);
-              if (segDateTime > now) {
-                if (!nextSessionDatetime || segDateTime < nextSessionDatetime) {
-                  nextSessionDatetime = segDateTime;
+        const sortedDays = [...w.days].sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+        );
+        const lastDay = sortedDays[sortedDays.length - 1];
+        const isCompleted = new Date(lastDay.date) < now;
+
+        if (isCompleted) {
+          completedCount++;
+          if (w.offersCmeCredits) totalCmeCredits += sortedDays.length * 4;
+        } else {
+          activeCount++;
+          for (const day of sortedDays) {
+            const dayDate = new Date(day.date);
+            if (dayDate >= new Date(now.toDateString())) {
+              for (const seg of day.segments || []) {
+                const segDateTime = new Date(`${day.date}T${seg.startTime}`);
+                if (segDateTime > now) {
+                  if (
+                    !nextSessionDatetime ||
+                    segDateTime < nextSessionDatetime
+                  ) {
+                    nextSessionDatetime = segDateTime;
+                  }
                 }
               }
             }
@@ -2367,22 +2387,35 @@ export class WorkshopsService {
     const skip = ((Number(query.page) || 1) - 1) * limit;
     const currentTab = query.tab || 'active';
 
+    // 1. Get ALL workshop IDs the user is part of (Enrollment + Reservation)
+    const [enrollments, reservations] = await Promise.all([
+      this.enrollmentsRepo.find({ where: { userId, isActive: true } }),
+      this.reservationsRepo.find({
+        where: { userId, status: ReservationStatus.CONFIRMED as any },
+      }),
+    ]);
+
+    const userWorkshopIds = [
+      ...new Set([
+        ...enrollments.map((e) => e.workshopId),
+        ...reservations.map((r) => r.workshopId),
+      ]),
+    ];
+
+    // ==========================================
+    // BROWSE TAB LOGIC
+    // ==========================================
     if (currentTab === 'browse') {
       const qbBrowse = this.workshopsRepo
         .createQueryBuilder('w')
-        .where('w.status = :status', { status: 'published' })
-        .andWhere(
-          (qb) => {
-            const subQuery = qb
-              .subQuery()
-              .select('e.workshopId')
-              .from(WorkshopEnrollment, 'e')
-              .where('e.userId = :userId')
-              .getQuery();
-            return `w.id NOT IN ${subQuery}`;
-          },
-          { userId },
-        );
+        .where('w.status = :status', { status: 'published' });
+
+      // Exclude workshops the user is already enrolled in/reserved
+      if (userWorkshopIds.length > 0) {
+        qbBrowse.andWhere('w.id NOT IN (:...userWorkshopIds)', {
+          userWorkshopIds,
+        });
+      }
 
       const [items, total] = await qbBrowse
         .skip(skip)
@@ -2393,11 +2426,11 @@ export class WorkshopsService {
         items: items.map((w) => ({
           id: w.id,
           tag: w.deliveryMode === 'online' ? 'ONLINE' : 'IN-PERSON',
-          coverImageUrl: w.coverImageUrl || null, // UI Needs this
+          coverImageUrl: w.coverImageUrl || null,
           title: w.title,
           description: w.shortBlurb,
           price: w.standardBaseRate,
-          cmeCredits: w.offersCmeCredits ? 12 : null, // Should map to DB column
+          cmeCredits: w.offersCmeCredits ? 12 : null,
           actions: {
             primary: { label: 'View Details', route: `/courses/${w.id}` },
           },
@@ -2411,29 +2444,26 @@ export class WorkshopsService {
       };
     }
 
-    // Active & Completed Logic
-    const qb = this.enrollmentsRepo
-      .createQueryBuilder('e')
-      .innerJoinAndSelect('e.workshop', 'w')
-      .leftJoinAndSelect('w.days', 'wd')
-      .leftJoinAndSelect('wd.segments', 'ws')
-      .leftJoinAndSelect(
-        'WorkshopOrderSummary',
-        'ord',
-        "ord.workshopId = w.id AND ord.userId = e.userId AND ord.status = 'completed'",
-      )
-      .leftJoinAndSelect(
-        'WorkshopReservation',
-        'res',
-        "res.workshopId = w.id AND res.userId = e.userId AND res.status = 'confirmed'",
-      )
-      .where('e.userId = :userId', { userId });
+    // ==========================================
+    // ACTIVE & COMPLETED TAB LOGIC
+    // ==========================================
+    if (userWorkshopIds.length === 0) {
+      return {
+        items: [],
+        meta: { total: 0, page: Number(query.page) || 1, limit, totalPages: 0 },
+      };
+    }
 
-    const enrollments = await qb.getMany();
+    const workshops = await this.workshopsRepo.find({
+      where: userWorkshopIds.map((id) => ({ id })),
+      relations: ['days', 'days.segments'],
+    });
+
     const now = new Date();
+    const resMap = new Map(reservations.map((r) => [r.workshopId, r]));
+    const enrMap = new Map(enrollments.map((e) => [e.workshopId, e]));
 
-    const mappedCourses = enrollments.map((e) => {
-      const w = e.workshop;
+    const mappedCourses = workshops.map((w) => {
       const sortedDays = (w.days || []).sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
       );
@@ -2463,12 +2493,14 @@ export class WorkshopsService {
           ? Math.round((pastSegments / totalSegments) * 100)
           : 0;
 
-      // Extract Order/Booking data from the joined raw results
-      const groupSize = (e as any).res?.numberOfSeats || 1;
-      const paidAmount = (e as any).ord?.totalPrice || w.standardBaseRate;
+      // Get Pricing/Group Size from Reservation (if exists)
+      const res = resMap.get(w.id);
+      const enr = enrMap.get(w.id);
+      const groupSize = res?.numberOfSeats || 1;
+      const paidAmount = res?.totalPrice || w.standardBaseRate;
 
       return {
-        enrollmentId: e.id,
+        enrollmentId: enr?.id || res?.id, // Fallback to reservation ID if no formal enrollment row yet
         courseId: w.id,
         isCompleted,
         coverImageUrl: w.coverImageUrl,
@@ -2494,14 +2526,14 @@ export class WorkshopsService {
         location:
           w.deliveryMode === 'online'
             ? w.webinarPlatform || 'Zoom'
-            : 'Sim Lab B', // Assuming parsed from facilityIds
+            : 'Sim Lab B',
         groupSizeText: groupSize > 1 ? `${groupSize} people` : '1 person',
         bookingFee: `$${paidAmount}`,
         progress: `${progressPercent}% Complete`,
         cmeCreditsBadge: w.offersCmeCredits ? '12.0 CME CREDITS' : null,
         nextSessionBanner:
-          w.deliveryMode === 'online' && !isCompleted
-            ? `Live Online Session Included: A Q&A workshop is scheduled for ${firstDate?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`
+          w.deliveryMode === 'online' && !isCompleted && firstDate
+            ? `Live Online Session Included: A Q&A workshop is scheduled for ${firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`
             : null,
         actions: {
           primary: isCompleted
@@ -2519,14 +2551,16 @@ export class WorkshopsService {
       };
     });
 
+    // Filter by Active or Completed
     const filtered = mappedCourses.filter((c) =>
       currentTab === 'completed' ? c.isCompleted : !c.isCompleted,
     );
+
     return {
       items: filtered.slice(skip, skip + limit),
       meta: {
         total: filtered.length,
-        page: Number(query.page),
+        page: Number(query.page) || 1,
         limit,
         totalPages: Math.ceil(filtered.length / limit),
       },
@@ -2545,26 +2579,52 @@ export class WorkshopsService {
 
   // ── 3. PUBLIC TICKET (QR VERIFICATION) ──
   async getPublicTicketDetails(ticketId: string) {
+    // Check if the ticket ID belongs to an Enrollment OR a Reservation
+    let userId: string;
+    let workshopId: string;
+    let bookingRef = ticketId;
+
     const enrollment = await this.enrollmentsRepo.findOne({
       where: { id: ticketId },
-      relations: [
-        'user',
-        'workshop',
-        'workshop.days',
-        'workshop.days.segments',
-      ],
+      relations: ['user'],
     });
-    if (!enrollment) throw new NotFoundException('Ticket not found.');
-
-    const reservation = await this.reservationsRepo.findOne({
-      where: { userId: enrollment.userId, workshopId: enrollment.workshopId },
+    let reservation = await this.reservationsRepo.findOne({
+      where: { id: ticketId },
       relations: ['attendees'],
+    }); // assuming relation exists or we fetch below
+
+    if (enrollment) {
+      userId = enrollment.userId;
+      workshopId = enrollment.workshopId;
+      if (!reservation) {
+        reservation = await this.reservationsRepo.findOne({
+          where: { userId, workshopId },
+          relations: ['attendees'],
+        });
+      }
+    } else if (reservation) {
+      userId = reservation.userId;
+      workshopId = reservation.workshopId;
+    } else {
+      throw new NotFoundException('Ticket not found.');
+    }
+
+    const w = await this.workshopsRepo.findOne({
+      where: { id: workshopId },
+      relations: ['days', 'days.segments'],
     });
 
-    const w = enrollment.workshop;
-    const u = enrollment.user;
+    if (!w) throw new NotFoundException('Workshop details not found.');
+
+    // We need user details. If you don't have usersRepo injected, we can safely get it from enrollment or fallback to booking names.
+    const bookerName =
+      reservation?.bookerFullName ||
+      enrollment?.user?.fullLegalName ||
+      'Verified Attendee';
+    const bookerEmail =
+      reservation?.bookerEmail || enrollment?.user?.medicalEmail || '';
     const otherAttendees =
-      reservation?.attendees.filter((a) => a.email !== u.medicalEmail) || [];
+      reservation?.attendees?.filter((a) => a.email !== bookerEmail) || [];
 
     // Dynamic Date Range Calculation
     const sortedDays = (w.days || []).sort(
@@ -2600,15 +2660,18 @@ export class WorkshopsService {
 
     return {
       attendee: {
-        name: reservation?.bookerFullName || `${u.firstName} ${u.lastName}`,
-        department: u.professionalRole || 'Medical Professional',
-        roleInfo: u.npiNumber ? `ID: #${u.npiNumber}` : 'Verified',
+        name: bookerName,
+        department:
+          enrollment?.user?.professionalRole || 'Medical Professional',
+        roleInfo: enrollment?.user?.npiNumber
+          ? `ID: #${enrollment.user.npiNumber}`
+          : 'Verified',
         isVerified: true,
       },
       groupAttendees: otherAttendees.map((a) => ({
         name: a.fullName,
         role: a.professionalRole,
-        status: 'PENDING CHECK-IN', // You need a check-in column in WorkshopAttendee to make this real
+        status: 'PENDING CHECK-IN',
       })),
       course: {
         title: w.title,
@@ -2623,14 +2686,13 @@ export class WorkshopsService {
           reservation?.status === 'confirmed'
             ? `Paid in Full ($${reservation.totalPrice})`
             : 'Pending',
-        bookingRef: `#${(reservation?.id || enrollment.id).split('-')[0].toUpperCase()}`,
+        bookingRef: `#${bookingRef.split('-')[0].toUpperCase()}`,
       },
       venueLogistics: {
         currentLocation:
           w.facilityIds && w.facilityIds.length > 0
             ? w.facilityIds[0]
             : 'Venue TBA',
-        // Note: Equipment needs to be added to your Workshop entity. Leaving empty for now.
         assignedEquipment: [],
       },
     };
@@ -2638,21 +2700,23 @@ export class WorkshopsService {
 
   // ── 4. COURSE DETAILS (IN-DEPTH) ──
   async getMyCourseDetails(userId: string, courseId: string) {
-    const e = await this.enrollmentsRepo.findOne({
-      where: { userId, workshopId: courseId },
-      relations: [
-        'workshop',
-        'workshop.days',
-        'workshop.days.segments',
-        'workshop.faculty',
-      ],
-    });
-    if (!e) throw new NotFoundException('Course details not found.');
+    const [e, reservation] = await Promise.all([
+      this.enrollmentsRepo.findOne({ where: { userId, workshopId: courseId } }),
+      this.reservationsRepo.findOne({
+        where: { userId, workshopId: courseId, status: 'confirmed' as any },
+      }),
+    ]);
 
-    const w = e.workshop;
-    const reservation = await this.reservationsRepo.findOne({
-      where: { userId, workshopId: courseId, status: 'confirmed' as any },
+    if (!e && !reservation)
+      throw new NotFoundException('Course details not found.');
+
+    const w = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+      relations: ['days', 'days.segments', 'faculty'],
     });
+
+    if (!w) throw new NotFoundException('Workshop not found.');
+
     const order = await this.orderSummariesRepo.findOne({
       where: { userId, workshopId: courseId, status: 'completed' as any },
     });
@@ -2666,7 +2730,6 @@ export class WorkshopsService {
       new Date(sortedDays[sortedDays.length - 1].date) <
         new Date(now.toDateString());
 
-    // Dynamic Time & Date Range for Banner
     let dateRangeStr = 'TBA';
     let timeRangeStr = 'TBA';
 
@@ -2685,7 +2748,6 @@ export class WorkshopsService {
           ? `${firstMonth} ${firstDay.getDate()} - ${lastDay.getDate()}`
           : `${firstMonth} ${firstDay.getDate()} - ${lastMonth} ${lastDay.getDate()}`;
 
-      // Calculate Earliest Start and Latest End Time across all segments
       let startTimes = [] as any;
       let endTimes = [] as any;
       sortedDays.forEach((d) => {
@@ -2702,7 +2764,6 @@ export class WorkshopsService {
       }
     }
 
-    // Build rich schedule
     const schedule = sortedDays.map((day, dIdx) => {
       const isDayPassed = new Date(day.date) < new Date(now.toDateString());
       return {
@@ -2726,7 +2787,6 @@ export class WorkshopsService {
                 : startDt <= now && endDt >= now
                   ? '(CURRENT)'
                   : '';
-
             return {
               id: seg.id,
               timeLabel: `${this.formatTime(seg.startTime)} - ${this.formatTime(seg.endTime)}`,
@@ -2744,8 +2804,10 @@ export class WorkshopsService {
     });
 
     const isOnline = w.deliveryMode === 'online';
-    const cme = w.offersCmeCredits ? '12.0 CME CREDITS' : null; // Assuming 12 is a safe standard if no explicit DB column exists for credit count
-    const bookRef = `#${(order?.id || reservation?.id || e.id).split('-')[0].toUpperCase()}-AC`;
+    const cme = w.offersCmeCredits ? '12.0 CME CREDITS' : null;
+    // Safely generate bookRef based on which record exists
+    const validId = order?.id || reservation?.id || e?.id || 'BOOKING';
+    const bookRef = `#${validId.split('-')[0].toUpperCase()}-AC`;
 
     return {
       courseId: w.id,
@@ -2792,13 +2854,12 @@ export class WorkshopsService {
               message:
                 "Congratulations! You've successfully mastered the curriculum.",
               certId: `CERT-${bookRef}`,
-              downloadUrl: `/api/certs/${e.id}`,
+              downloadUrl: `/api/certs/${validId}`,
             }
           : null,
         onlineDetails:
           !isCompleted && isOnline
             ? {
-                // Note: Tech requirements and files need columns in DB. Returning empty lists safely.
                 technicalRequirements: [],
                 registrationReference: bookRef,
                 prepMaterials: [],
@@ -2808,7 +2869,7 @@ export class WorkshopsService {
           !isCompleted && !isOnline
             ? {
                 qrNote: `Note: This ticket is valid for ${reservation?.numberOfSeats || 1} persons only.`,
-                qrDataUrl: `https://texasairway.com/verify/${e.id}`,
+                qrDataUrl: `https://texasairway.com/verify/${validId}`,
                 ticketReference: bookRef,
               }
             : null,
@@ -2818,30 +2879,32 @@ export class WorkshopsService {
 
   // ── 3. REFUND ELIGIBILITY & ESTIMATION API ──
   async getRefundEstimation(userId: string, courseId: string) {
-    // 1. Verify Enrollment & Get Course Days
-    const enrollment = await this.enrollmentsRepo.findOne({
-      where: { userId, workshopId: courseId },
-      relations: ['workshop', 'workshop.days'],
+    const [e, reservation] = await Promise.all([
+      this.enrollmentsRepo.findOne({ where: { userId, workshopId: courseId } }),
+      this.reservationsRepo.findOne({
+        where: { userId, workshopId: courseId, status: 'confirmed' as any },
+      }),
+    ]);
+
+    if (!e && !reservation)
+      throw new NotFoundException('Course enrollment not found.');
+
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+      relations: ['days'],
     });
 
-    if (!enrollment || !enrollment.workshop) {
-      throw new NotFoundException('Course enrollment not found.');
-    }
+    if (!workshop) throw new NotFoundException('Workshop not found.');
 
-    const workshop = enrollment.workshop;
-
-    // 2. Find the exact paid amount from the user's Order Summary
     const order = await this.orderSummariesRepo.findOne({
       where: { userId, workshopId: courseId, status: 'completed' as any },
       order: { id: 'DESC' },
     });
 
-    // Fallback to standard base rate if order is not found
     const amountPaid = order
       ? parseFloat(order.pricePerSeat)
       : parseFloat(workshop.standardBaseRate);
 
-    // 3. Find Course Start Date
     if (!workshop.days || workshop.days.length === 0) {
       throw new BadRequestException('Course schedule is not defined yet.');
     }
@@ -2852,20 +2915,18 @@ export class WorkshopsService {
     const courseStartDate = new Date(sortedDays[0].date);
     const currentDate = new Date();
 
-    // 4. Calculate Days Difference
     const timeDiff = courseStartDate.getTime() - currentDate.getTime();
     const daysBeforeStart = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
-    // 5. Refund Policy Logic (As per UI)
     let refundPercentage = 0;
     let isEligible = true;
 
     if (daysBeforeStart >= 14) {
-      refundPercentage = 100; // Full refund
+      refundPercentage = 100;
     } else if (daysBeforeStart >= 7 && daysBeforeStart <= 13) {
-      refundPercentage = 50; // 50% refund
+      refundPercentage = 50;
     } else {
-      refundPercentage = 0; // No refund
+      refundPercentage = 0;
       isEligible = false;
     }
 
@@ -2897,7 +2958,7 @@ export class WorkshopsService {
         title: isEligible ? 'Request Refund' : 'Refund Period Expired',
         description: isEligible
           ? 'Are you sure you want to request a refund for this course? Please review our refund policy before proceeding.'
-          : "We're sorry, but the refund period for this course has expired. As per our policy, refunds must be requested at least 7 days before the course start date. If you have extenuating circumstances, please contact support.",
+          : "We're sorry, but the refund period for this course has expired. As per our policy, refunds must be requested at least 7 days before the course start date.",
       },
     };
   }
@@ -2926,17 +2987,23 @@ export class WorkshopsService {
 
   // ── 5. ADD TO CALENDAR LINKS API ──
   async getCalendarLinks(userId: string, courseId: string) {
-    const enrollment = await this.enrollmentsRepo.findOne({
-      where: { userId, workshopId: courseId },
-      relations: ['workshop', 'workshop.days', 'workshop.days.segments'],
+    const [e, reservation] = await Promise.all([
+      this.enrollmentsRepo.findOne({ where: { userId, workshopId: courseId } }),
+      this.reservationsRepo.findOne({
+        where: { userId, workshopId: courseId, status: 'confirmed' as any },
+      }),
+    ]);
+
+    if (!e && !reservation) throw new NotFoundException('Course not found.');
+
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+      relations: ['days', 'days.segments'],
     });
 
-    if (!enrollment || !enrollment.workshop)
-      throw new NotFoundException('Course not found.');
-
-    const workshop = enrollment.workshop;
-    if (!workshop.days || workshop.days.length === 0)
+    if (!workshop || !workshop.days || workshop.days.length === 0) {
       throw new BadRequestException('No schedule available.');
+    }
 
     const sortedDays = [...workshop.days].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
@@ -2952,7 +3019,6 @@ export class WorkshopsService {
         : 'Dallas Training Center',
     );
 
-    // Basic Date formatting for Calendar URLs (YYYYMMDD)
     const startDateStr = firstDay.date.replace(/-/g, '');
     const endDateStr = lastDay.date.replace(/-/g, '');
 
@@ -2964,26 +3030,29 @@ export class WorkshopsService {
         google: `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startDateStr}T090000Z/${endDateStr}T170000Z&details=${details}&location=${location}`,
         outlook: `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${title}&startdt=${firstDay.date}T09:00:00&enddt=${lastDay.date}T17:00:00&body=${details}&location=${location}`,
         yahoo: `https://calendar.yahoo.com/?v=60&view=d&type=20&title=${title}&st=${startDateStr}T090000Z&et=${endDateStr}T170000Z&desc=${details}&in_loc=${location}`,
-        appleOrIcs: `/api/workshops/${courseId}/download-ics`, // Endpoint to download .ics file
+        appleOrIcs: `/api/workshops/${courseId}/download-ics`,
       },
     };
   }
 
   // ── 6. MEETING JOINING DETAILS API ──
   async getMeetingDetails(userId: string, courseId: string) {
-    const enrollment = await this.enrollmentsRepo.findOne({
-      where: { userId, workshopId: courseId },
-      relations: ['workshop'],
+    const [e, reservation] = await Promise.all([
+      this.enrollmentsRepo.findOne({ where: { userId, workshopId: courseId } }),
+      this.reservationsRepo.findOne({
+        where: { userId, workshopId: courseId, status: 'confirmed' as any },
+      }),
+    ]);
+
+    if (!e && !reservation) throw new NotFoundException('Course not found.');
+
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
     });
 
-    if (!enrollment || !enrollment.workshop)
-      throw new NotFoundException('Course not found.');
-
-    const workshop = enrollment.workshop;
-
-    if (workshop.deliveryMode !== 'online') {
+    if (!workshop) throw new NotFoundException('Workshop not found.');
+    if (workshop.deliveryMode !== 'online')
       throw new BadRequestException('This is not an online course.');
-    }
 
     return {
       title: 'Join Live Session',
