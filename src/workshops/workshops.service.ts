@@ -2297,14 +2297,14 @@ export class WorkshopsService {
 
   // ── 1. SUMMARY METRICS API ──
   async getMyCoursesSummary(userId: string) {
-    // 1. Safe query without 'select' to avoid TypeORM mapping issues, and handle case sensitivity
+    // 1. Safe query using standard ENUM
     const [enrollments, reservations] = await Promise.all([
       this.enrollmentsRepo.find({
         where: { userId, isActive: true },
       }),
       this.reservationsRepo.find({
-        // Handle both uppercase and lowercase to be absolutely safe
-        where: { userId, status: In(['confirmed', 'CONFIRMED']) as any },
+        // ✅ FIXED: Use strict enum instead of In() to prevent Postgres Enum Crash
+        where: { userId, status: ReservationStatus.CONFIRMED },
       }),
     ]);
 
@@ -2432,7 +2432,8 @@ export class WorkshopsService {
     const [enrollments, reservations] = await Promise.all([
       this.enrollmentsRepo.find({ where: { userId, isActive: true } }),
       this.reservationsRepo.find({
-        where: { userId, status: In(['confirmed', 'CONFIRMED']) as any },
+        // ✅ FIXED: Use strict enum
+        where: { userId, status: ReservationStatus.CONFIRMED },
       }),
     ]);
 
