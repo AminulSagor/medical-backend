@@ -2,7 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets } from 'typeorm';
 import { Order } from './entities/order.entity';
-import { FulfillmentStatus } from 'src/common/enums/order.enums';
+import {
+  FulfillmentStatus,
+  TimelineEventType,
+} from 'src/common/enums/order.enums';
 
 @Injectable()
 export class PrivateOrderService {
@@ -203,8 +206,10 @@ export class PrivateOrderService {
 
       // Map DB fulfillment status to UI status format
       let displayStatus = order.fulfillmentStatus.toString().toLowerCase();
-      if (displayStatus === 'unfulfilled') displayStatus = 'processing';
-      if (displayStatus === 'closed') displayStatus = 'delivered';
+      if (displayStatus === 'unfulfilled') displayStatus = 'ordered';
+      if (displayStatus === 'processing') displayStatus = 'processing';
+      if (displayStatus === 'shipped') displayStatus = 'shipped';
+      if (displayStatus === 'received') displayStatus = 'delivered';
 
       return {
         id: order.id,
@@ -276,17 +281,20 @@ export class PrivateOrderService {
     } else if (statusStr === 'SHIPPED') {
       currentStepIndex = 2;
       statusLabel = 'In Transit';
-    } else if (statusStr === 'CLOSED') {
+    } else if (statusStr === 'RECEIVED') {
       currentStepIndex = 3;
       statusLabel = 'Delivered';
     }
 
-    // Build the 4 standard UI steps
+    // ✅ FIX: Use the exact TimelineEventType enum values to get the dates
     const orderedDate = order.createdAt;
-    const processingDate = timelineMap.get('PROCESSING' as any); // Adapt to your exact enum
-    const shippedDate = timelineMap.get('SHIPPED' as any);
+    const processingDate = timelineMap.get(
+      TimelineEventType.PROCESSING_STARTED,
+    );
+    const shippedDate = timelineMap.get(TimelineEventType.ORDER_SHIPPED);
     const deliveredDate =
-      timelineMap.get('DELIVERED' as any) || order.estimatedDeliveryDate;
+      timelineMap.get(TimelineEventType.ORDER_RECEIVED) ||
+      order.estimatedDeliveryDate;
 
     const formatDt = (dt?: Date) =>
       dt
@@ -306,7 +314,11 @@ export class PrivateOrderService {
       {
         key: 'shipped',
         label: 'Shipped',
-        date: currentStepIndex >= 2 ? formatDt(shippedDate) : 'PENDING',
+        // ✅ FIX: Now it will correctly show the date if shippedDate exists
+        date:
+          currentStepIndex >= 2 && shippedDate
+            ? formatDt(shippedDate)
+            : 'PENDING',
       },
       {
         key: 'delivered',
@@ -329,7 +341,7 @@ export class PrivateOrderService {
         actions: {
           downloadInvoice: `/api/orders/${order.id}/invoice`,
           trackPackage: order.trackingNumber
-            ? `https://tracking.com/${order.trackingNumber}`
+            ? `https://tracking.com/${order.trackingNumber}` // Adapt to your actual carrier URL if needed
             : null,
           reorderAll: `/cart?reorderFrom=${order.id}`,
         },
@@ -356,14 +368,13 @@ export class PrivateOrderService {
           imageUrl: item.image || null,
           price: parseFloat(item.unitPrice).toFixed(2),
           quantity: item.quantity,
-          // DB entity does not have attributes JSON, so we return null to strictly follow DB schema without mocking
           attributes: null,
           buyAgainUrl: item.productId
             ? `/store/products/${item.productId}`
             : null,
         })),
         shipping: {
-          fullName: order.customerName, // From entity
+          fullName: order.customerName,
           addressLine1: order.shippingAddressLine1 || '',
           addressLine2: order.shippingAddressLine2 || null,
           cityStateZip: [
@@ -375,7 +386,6 @@ export class PrivateOrderService {
             .join(', '),
         },
         payment: {
-          // No card info in entity, sending null so frontend knows to hide it or show "Paid"
           brand: null,
           last4: null,
           subtotal: parseFloat(order.subtotal).toFixed(2),
