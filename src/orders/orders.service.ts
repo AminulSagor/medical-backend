@@ -71,7 +71,9 @@ export class OrdersService {
     return value.toFixed(2);
   }
 
-  private parsePositiveNumber(value: string | number | null | undefined): number {
+  private parsePositiveNumber(
+    value: string | number | null | undefined,
+  ): number {
     const n = Number(value ?? 0);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
@@ -174,7 +176,9 @@ export class OrdersService {
     return subtotal * taxRate;
   }
 
-  private normalizeShippingAddress(dto: ShippingAddressDto): ShippingAddressDto {
+  private normalizeShippingAddress(
+    dto: ShippingAddressDto,
+  ): ShippingAddressDto {
     return {
       fullName: dto.fullName.trim(),
       addressLine1: dto.addressLine1.trim(),
@@ -186,7 +190,9 @@ export class OrdersService {
     };
   }
 
-  private validateShippingAddress(address: ShippingAddressDto | null): asserts address is ShippingAddressDto {
+  private validateShippingAddress(
+    address: ShippingAddressDto | null,
+  ): asserts address is ShippingAddressDto {
     if (!address) {
       throw new BadRequestException(
         'Shipping address is required before checkout',
@@ -207,7 +213,8 @@ export class OrdersService {
   }
 
   private getUserShippingAddress(user: User): ShippingAddressDto | null {
-    const fullName = user.shippingFullName?.trim() || user.fullLegalName?.trim();
+    const fullName =
+      user.shippingFullName?.trim() || user.fullLegalName?.trim();
     const addressLine1 = user.shippingAddressLine1?.trim();
     const city = user.shippingCity?.trim();
     const state = user.shippingState?.trim();
@@ -246,7 +253,9 @@ export class OrdersService {
       throw new BadRequestException('Some products are invalid or inactive');
     }
 
-    const productMap = new Map(products.map((product) => [product.id, product]));
+    const productMap = new Map(
+      products.map((product) => [product.id, product]),
+    );
 
     let subtotal = 0;
     const mappedItems: CalculatedPublicOrderItem[] = items.map((item) => {
@@ -398,27 +407,29 @@ export class OrdersService {
       throw new NotFoundException('User not found');
     }
 
-    const order = await this.ordersRepo.findOne({
+    // ✅ FIX: Use 'find' and 'take: 3' to get an array of recent orders
+    const orders = await this.ordersRepo.find({
       where: {
         customerEmail: user.medicalEmail,
         type: OrderType.PRODUCT,
       },
       order: { createdAt: 'DESC' },
       relations: ['items'],
+      take: 3, // Only grab the latest 3
     });
 
-    if (!order) {
+    if (!orders || orders.length === 0) {
       return {
-        message: 'No recent product order found',
-        data: null,
+        message: 'No recent product orders found',
+        data: [], // Return empty array instead of null for consistency
       };
     }
 
-    const firstItem = order.items?.[0];
+    // ✅ FIX: Map the array of orders
+    const mappedOrders = orders.map((order) => {
+      const firstItem = order.items?.[0];
 
-    return {
-      message: 'Recent product order fetched successfully',
-      data: {
+      return {
         orderId: order.orderNumber,
         orderedAt: order.createdAt,
         orderedAtFullDate: order.createdAt.toISOString(),
@@ -436,7 +447,12 @@ export class OrdersService {
           unitPrice: item.unitPrice,
           lineTotal: item.total,
         })),
-      },
+      };
+    });
+
+    return {
+      message: 'Recent product orders fetched successfully',
+      data: mappedOrders, // Now returns an array of up to 3 order objects
     };
   }
 
@@ -558,12 +574,16 @@ export class OrdersService {
       .getRawOne();
 
     const orderedThisMonth = Number(monthRaw?.totalOrdered ?? 0);
-    const orderedThisPreviousMonth = Number(previousMonthRaw?.totalOrdered ?? 0);
+    const orderedThisPreviousMonth = Number(
+      previousMonthRaw?.totalOrdered ?? 0,
+    );
     const orderedValueThisMonth = this.parseAmount(monthRaw?.orderedValue);
     const orderedValuePreviousMonth = this.parseAmount(
       previousMonthRaw?.orderedValue,
     );
-    const orderedValueThisYear = this.parseAmount(yearRaw?.orderedValueThisYear);
+    const orderedValueThisYear = this.parseAmount(
+      yearRaw?.orderedValueThisYear,
+    );
     const orderedValuePreviousYear = this.parseAmount(
       previousYearRaw?.orderedValuePreviousYear,
     );
@@ -783,7 +803,10 @@ export class OrdersService {
         },
         totals: {
           totalItems: itemDetails.length,
-          totalQuantity: itemDetails.reduce((sum, item) => sum + item.quantity, 0),
+          totalQuantity: itemDetails.reduce(
+            (sum, item) => sum + item.quantity,
+            0,
+          ),
           subtotal: this.parseAmount(order.subtotal),
           shipping: this.parseAmount(order.shippingAmount),
           tax: this.parseAmount(order.taxAmount),
@@ -826,10 +849,10 @@ export class OrdersService {
 
     const isComplete = Boolean(
       payload.fullName &&
-        payload.addressLine1 &&
-        payload.city &&
-        payload.state &&
-        payload.zipCode,
+      payload.addressLine1 &&
+      payload.city &&
+      payload.state &&
+      payload.zipCode,
     );
 
     return {
@@ -920,21 +943,20 @@ export class OrdersService {
 
     const stripe = Stripe(stripeSecretKey);
 
-    const lineItems =
-      summary.items.map((item) => ({
-        quantity: item.quantity,
-        price_data: {
-          currency: 'usd',
-          unit_amount: Math.round(item.unitPrice * 100),
-          product_data: {
-            name: item.name,
-            metadata: {
-              productId: item.productId,
-              sku: item.sku ?? '',
-            },
+    const lineItems = summary.items.map((item) => ({
+      quantity: item.quantity,
+      price_data: {
+        currency: 'usd',
+        unit_amount: Math.round(item.unitPrice * 100),
+        product_data: {
+          name: item.name,
+          metadata: {
+            productId: item.productId,
+            sku: item.sku ?? '',
           },
         },
-      }));
+      },
+    }));
 
     if (summary.estimatedShipping > 0) {
       lineItems.push({
