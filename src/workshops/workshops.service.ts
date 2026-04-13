@@ -42,6 +42,7 @@ import {
 } from './entities/workshop-refund-item.entity';
 import { ConfirmWorkshopRefundDto } from './dto/confirm-workshop-refund.dto';
 import { ListWorkshopEnrolleesQueryDto } from './dto/list-workshop-enrollees.query.dto';
+import { CourseProgressStatus } from './entities/course-progress-status.enum';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -173,6 +174,224 @@ export class WorkshopsService {
     return 'active';
   }
 
+  private toDateOnly(value: Date): Date {
+    const date = new Date(value);
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }
+
+  private getWorkshopTotalDays(workshop: Workshop): number {
+    return (workshop.days ?? []).filter((day) => {
+      const dayDate = new Date(`${day.date}T00:00:00`);
+      return !Number.isNaN(dayDate.getTime());
+    }).length;
+  }
+
+  private getCompletedWorkshopDays(workshop: Workshop, now: Date): number {
+    const today = this.toDateOnly(now);
+
+    return (workshop.days ?? []).filter((day) => {
+      const dayDate = new Date(`${day.date}T00:00:00`);
+      return !Number.isNaN(dayDate.getTime()) && dayDate <= today;
+    }).length;
+  }
+
+  private getInitialProgressStatus(
+    status?: CourseProgressStatus | null,
+  ): CourseProgressStatus {
+    if (status === CourseProgressStatus.IN_PROGRESS) {
+      return CourseProgressStatus.IN_PROGRESS;
+    }
+
+    if (status === CourseProgressStatus.COMPLETED) {
+      return CourseProgressStatus.COMPLETED;
+    }
+
+    return CourseProgressStatus.NOT_STARTED;
+  }
+
+  private resolveTrackedCourseProgress(
+    workshop: Workshop,
+    tracking?: {
+      courseProgressStatus?: CourseProgressStatus | null;
+      courseStartedAt?: Date | null;
+    } | null,
+    now: Date = new Date(),
+  ) {
+    const totalDays = this.getWorkshopTotalDays(workshop);
+    const completedDays = this.getCompletedWorkshopDays(workshop, now);
+    const hasStarted = Boolean(tracking?.courseStartedAt);
+    const initialStatus = this.getInitialProgressStatus(
+      tracking?.courseProgressStatus,
+    );
+
+    if (!hasStarted && initialStatus === CourseProgressStatus.NOT_STARTED) {
+      return {
+        status: CourseProgressStatus.NOT_STARTED,
+        statusLabel: 'Course Not Started',
+        totalDays,
+        completedDays: 0,
+        remainingDays: totalDays,
+      };
+    }
+
+    const isCompleted = totalDays > 0 && completedDays >= totalDays;
+
+    if (isCompleted || initialStatus === CourseProgressStatus.COMPLETED) {
+      return {
+        status: CourseProgressStatus.COMPLETED,
+        statusLabel: 'Completed',
+        totalDays,
+        completedDays: totalDays,
+        remainingDays: 0,
+      };
+    }
+
+    return {
+      status: CourseProgressStatus.IN_PROGRESS,
+      statusLabel: 'In Progress',
+      totalDays,
+      completedDays,
+      remainingDays: Math.max(totalDays - completedDays, 0),
+    };
+  }
+
+  private getCourseDayStatuses(
+    workshop: Workshop,
+    progressStatus: CourseProgressStatus,
+    now: Date,
+  ): Array<{
+    dayNumber: number;
+    date: string;
+    status: 'not_started' | 'completed' | 'upcoming';
+  }> {
+    const today = this.toDateOnly(now);
+
+    return [...(workshop.days ?? [])]
+      .filter((day) => {
+        const dayDate = new Date(`${day.date}T00:00:00`);
+        return !Number.isNaN(dayDate.getTime());
+      })
+      .sort((a, b) => {
+        const byDate =
+          new Date(`${a.date}T00:00:00`).getTime() -
+          new Date(`${b.date}T00:00:00`).getTime();
+        if (byDate !== 0) {
+          return byDate;
+        }
+        return a.dayNumber - b.dayNumber;
+      })
+      .map((day) => {
+        if (progressStatus === CourseProgressStatus.NOT_STARTED) {
+          return {
+            dayNumber: day.dayNumber,
+            date: day.date,
+            status: 'not_started' as const,
+          };
+        }
+
+        const dayDate = new Date(`${day.date}T00:00:00`);
+        return {
+          dayNumber: day.dayNumber,
+          date: day.date,
+          status: dayDate <= today ? ('completed' as const) : ('upcoming' as const),
+        };
+      });
+  }
+
+  private async syncCourseProgressTracking(
+    workshop: Workshop,
+    source: 'enrollment' | 'reservation',
+    tracking: WorkshopEnrollment | WorkshopReservation,
+    now: Date,
+  ) {
+    const progress = this.resolveTrackedCourseProgress(workshop, tracking, now);
+
+    const updatePayload: Partial<WorkshopEnrollment & WorkshopReservation> = {};
+
+    if (tracking.courseProgressStatus !== progress.status) {
+      updatePayload.courseProgressStatus = progress.status;
+    }
+
+    if (
+      progress.status === CourseProgressStatus.COMPLETED &&
+      !tracking.courseCompletedAt
+    ) {
+      updatePayload.courseCompletedAt = now;
+    }
+
+    if (
+      progress.status === CourseProgressStatus.COMPLETED &&
+      workshop.offersCmeCredits &&
+      !tracking.cmeCreditsAwarded
+    ) {
+      updatePayload.cmeCreditsAwarded = true;
+      updatePayload.cmeCreditsAwardedAt = now;
+    }
+
+    if (Object.keys(updatePayload).length > 0) {
+      if (source === 'enrollment') {
+        await this.enrollmentsRepo.update(tracking.id, updatePayload);
+      } else {
+        await this.reservationsRepo.update(tracking.id, updatePayload);
+      }
+
+      Object.assign(tracking, updatePayload);
+    }
+
+    return this.resolveTrackedCourseProgress(workshop, tracking, now);
+  }
+
+  private async markCourseAsStarted(
+    userId: string,
+    courseId: string,
+  ): Promise<{ source: 'enrollment' | 'reservation'; startedAt: Date }> {
+    const [enrollment, reservation] = await Promise.all([
+      this.enrollmentsRepo.findOne({
+        where: { userId, workshopId: courseId, isActive: true },
+        order: { createdAt: 'DESC' },
+      }),
+      this.reservationsRepo.findOne({
+        where: {
+          userId,
+          workshopId: courseId,
+          status: ReservationStatus.CONFIRMED,
+        },
+        order: { createdAt: 'DESC' },
+      }),
+    ]);
+
+    if (!enrollment && !reservation) {
+      throw new NotFoundException('Course not found.');
+    }
+
+    const now = new Date();
+
+    if (enrollment) {
+      if (!enrollment.courseStartedAt) {
+        enrollment.courseStartedAt = now;
+      }
+      if (enrollment.courseProgressStatus === CourseProgressStatus.NOT_STARTED) {
+        enrollment.courseProgressStatus = CourseProgressStatus.IN_PROGRESS;
+      }
+      await this.enrollmentsRepo.save(enrollment);
+      return { source: 'enrollment', startedAt: enrollment.courseStartedAt };
+    }
+
+    if (!reservation) {
+      throw new NotFoundException('Course not found.');
+    }
+
+    if (!reservation.courseStartedAt) {
+      reservation.courseStartedAt = now;
+    }
+    if (reservation.courseProgressStatus === CourseProgressStatus.NOT_STARTED) {
+      reservation.courseProgressStatus = CourseProgressStatus.IN_PROGRESS;
+    }
+    await this.reservationsRepo.save(reservation);
+    return { source: 'reservation', startedAt: reservation.courseStartedAt };
+  }
+
   private async buildStudentWorkshopMeta(userId: string) {
     const enrollments = await this.enrollmentsRepo.find({
       where: { userId, isActive: true },
@@ -230,6 +449,7 @@ export class WorkshopsService {
     return {
       enrolledWorkshopIds,
       workshopMeta,
+      enrollmentByWorkshop,
       latestReservationByWorkshop,
     };
   }
@@ -1155,7 +1375,12 @@ export class WorkshopsService {
   }
 
   async getMyCourseSummary(userId: string) {
-    const { enrolledWorkshopIds } = await this.buildStudentWorkshopMeta(userId);
+    const {
+      enrolledWorkshopIds,
+      workshopMeta,
+      enrollmentByWorkshop,
+      latestReservationByWorkshop,
+    } = await this.buildStudentWorkshopMeta(userId);
 
     if (enrolledWorkshopIds.length === 0) {
       return {
@@ -1186,18 +1411,34 @@ export class WorkshopsService {
     } | null = null;
 
     for (const workshop of workshops) {
-      const courseStatus = this.getCourseStatusForStudent(workshop, now);
+      const meta = workshopMeta.get(workshop.id);
+      if (!meta) {
+        continue;
+      }
+
+      const tracking =
+        meta.source === 'enrollment'
+          ? enrollmentByWorkshop.get(workshop.id)
+          : latestReservationByWorkshop.get(workshop.id);
+
+      const progress = tracking
+        ? await this.syncCourseProgressTracking(workshop, meta.source, tracking, now)
+        : this.resolveTrackedCourseProgress(workshop, null, now);
+
       const totalMinutes = this.getWorkshopTotalMinutes(workshop);
 
-      if (courseStatus === 'in_progress') {
+      if (progress.status === CourseProgressStatus.IN_PROGRESS) {
         totalInProgressCourses += 1;
       }
 
-      if (courseStatus === 'completed' && workshop.offersCmeCredits) {
+      if (
+        progress.status === CourseProgressStatus.COMPLETED &&
+        workshop.offersCmeCredits
+      ) {
         totalCmeCredits += totalMinutes / 60;
       }
 
-      if (courseStatus !== 'completed') {
+      if (progress.status !== CourseProgressStatus.COMPLETED) {
         for (const day of workshop.days ?? []) {
           for (const segment of day.segments ?? []) {
             const sessionDateTime = new Date(
@@ -1238,8 +1479,12 @@ export class WorkshopsService {
   }
 
   async getMyCourses(userId: string, query: ListMyCoursesQueryDto) {
-    const { enrolledWorkshopIds, workshopMeta, latestReservationByWorkshop } =
-      await this.buildStudentWorkshopMeta(userId);
+    const {
+      enrolledWorkshopIds,
+      workshopMeta,
+      enrollmentByWorkshop,
+      latestReservationByWorkshop,
+    } = await this.buildStudentWorkshopMeta(userId);
 
     const targetStatus = query.status ?? 'active';
     const page = query.page ?? 1;
@@ -1277,34 +1522,106 @@ export class WorkshopsService {
       });
     }
 
-    let items = workshops.map((workshop) => {
-      const { startDate, endDate } = this.getWorkshopDateRange(workshop);
-      const totalMinutes = this.getWorkshopTotalMinutes(workshop);
-      const totalHours = Number((totalMinutes / 60).toFixed(1));
-      const courseStatus =
-        targetStatus === 'browse'
-          ? 'browse'
-          : this.getCourseStatusForStudent(workshop, now);
+    let items = await Promise.all(
+      workshops.map(async (workshop) => {
+        const { startDate, endDate } = this.getWorkshopDateRange(workshop);
+        const totalMinutes = this.getWorkshopTotalMinutes(workshop);
+        const totalHours = Number((totalMinutes / 60).toFixed(1));
+        const reservation = latestReservationByWorkshop.get(workshop.id);
+        const enrolledAt = workshopMeta.get(workshop.id)?.enrolledAt ?? null;
 
-      const reservation = latestReservationByWorkshop.get(workshop.id);
-      const enrolledAt = workshopMeta.get(workshop.id)?.enrolledAt ?? null;
+        if (targetStatus === 'browse') {
+          const browseDayStatuses = this.getCourseDayStatuses(
+            workshop,
+            CourseProgressStatus.NOT_STARTED,
+            now,
+          );
 
-      return {
-        workshopId: workshop.id,
-        title: workshop.title,
-        courseType: workshop.deliveryMode,
-        workshopPhoto: workshop.coverImageUrl ?? null,
-        status: courseStatus,
-        isEnrolled: targetStatus !== 'browse',
-        enrolledAt,
-        startDate,
-        endDate,
-        completedOn: courseStatus === 'completed' ? endDate : null,
-        totalHours,
-        cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
-        offersCmeCredits: workshop.offersCmeCredits,
-        reservation:
-          targetStatus !== 'browse' && reservation
+          return {
+            workshopId: workshop.id,
+            title: workshop.title,
+            courseType: workshop.deliveryMode,
+            workshopPhoto: workshop.coverImageUrl ?? null,
+            status: 'browse',
+            statusLabel: 'Browse',
+            isEnrolled: false,
+            enrolledAt,
+            startDate,
+            endDate,
+            completedOn: null,
+            totalHours,
+            cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
+            earnedCmeCredits: 0,
+            offersCmeCredits: workshop.offersCmeCredits,
+            totalDays: this.getWorkshopTotalDays(workshop),
+            completedDays: 0,
+            remainingDays: this.getWorkshopTotalDays(workshop),
+            days: {
+              summary: {
+                totalDays: this.getWorkshopTotalDays(workshop),
+                completedDays: 0,
+                remainingDays: this.getWorkshopTotalDays(workshop),
+              },
+              data: browseDayStatuses,
+            },
+            reservation: null,
+            createdAt: workshop.createdAt,
+          };
+        }
+
+        const meta = workshopMeta.get(workshop.id);
+        const tracking = meta
+          ? meta.source === 'enrollment'
+            ? enrollmentByWorkshop.get(workshop.id)
+            : latestReservationByWorkshop.get(workshop.id)
+          : null;
+
+        const progress = meta && tracking
+          ? await this.syncCourseProgressTracking(workshop, meta.source, tracking, now)
+          : this.resolveTrackedCourseProgress(workshop, null, now);
+
+        const completedOn =
+          progress.status === CourseProgressStatus.COMPLETED
+            ? tracking?.courseCompletedAt ?? endDate
+            : null;
+        const dayStatuses = this.getCourseDayStatuses(
+          workshop,
+          progress.status,
+          now,
+        );
+
+        return {
+          workshopId: workshop.id,
+          title: workshop.title,
+          courseType: workshop.deliveryMode,
+          workshopPhoto: workshop.coverImageUrl ?? null,
+          status: progress.status,
+          statusLabel: progress.statusLabel,
+          isEnrolled: true,
+          enrolledAt,
+          startDate,
+          endDate,
+          completedOn,
+          totalHours,
+          cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
+          earnedCmeCredits:
+            progress.status === CourseProgressStatus.COMPLETED &&
+            workshop.offersCmeCredits
+              ? totalHours
+              : 0,
+          offersCmeCredits: workshop.offersCmeCredits,
+          totalDays: progress.totalDays,
+          completedDays: progress.completedDays,
+          remainingDays: progress.remainingDays,
+          days: {
+            summary: {
+              totalDays: progress.totalDays,
+              completedDays: progress.completedDays,
+              remainingDays: progress.remainingDays,
+            },
+            data: dayStatuses,
+          },
+          reservation: reservation
             ? {
                 reservationId: reservation.id,
                 status: reservation.status,
@@ -1313,18 +1630,29 @@ export class WorkshopsService {
                 totalPrice: reservation.totalPrice,
               }
             : null,
-        createdAt: workshop.createdAt,
-      };
-    });
+          createdAt: workshop.createdAt,
+        };
+      }),
+    );
 
     if (targetStatus === 'active') {
       items = items.filter(
-        (item) => item.status === 'active' || item.status === 'in_progress',
+        (item) =>
+          item.status === CourseProgressStatus.NOT_STARTED ||
+          item.status === CourseProgressStatus.IN_PROGRESS,
+      );
+    } else if (targetStatus === 'not_started') {
+      items = items.filter(
+        (item) => item.status === CourseProgressStatus.NOT_STARTED,
       );
     } else if (targetStatus === 'in_progress') {
-      items = items.filter((item) => item.status === 'in_progress');
+      items = items.filter(
+        (item) => item.status === CourseProgressStatus.IN_PROGRESS,
+      );
     } else if (targetStatus === 'completed') {
-      items = items.filter((item) => item.status === 'completed');
+      items = items.filter(
+        (item) => item.status === CourseProgressStatus.COMPLETED,
+      );
     }
 
     if (query.courseType) {
@@ -2297,49 +2625,41 @@ export class WorkshopsService {
 
   // ── 1. SUMMARY METRICS API (Dashboard Cards) ──
   async getMyCoursesSummary(userId: string) {
-    // 1. Safe query to get all enrolled/reserved workshop IDs
-    const [enrollments, reservations] = await Promise.all([
-      this.enrollmentsRepo.find({
-        where: { userId, isActive: true },
-      }),
-      this.reservationsRepo.find({
-        where: { userId, status: ReservationStatus.CONFIRMED },
-      }),
-    ]);
-
-    const uniqueWorkshopIds = [
-      ...new Set([
-        ...enrollments.map((e) => e.workshopId).filter(Boolean),
-        ...reservations.map((r) => r.workshopId).filter(Boolean),
-      ]),
-    ];
+    const {
+      enrolledWorkshopIds,
+      workshopMeta,
+      enrollmentByWorkshop,
+      latestReservationByWorkshop,
+    } = await this.buildStudentWorkshopMeta(userId);
 
     let completedCount = 0;
     let totalCmeCredits = 0;
     let nextSessionDatetime: Date | null = null;
     const now = new Date();
 
-    if (uniqueWorkshopIds.length > 0) {
+    if (enrolledWorkshopIds.length > 0) {
       // Fetch workshops with days and segments
       const workshops = await this.workshopsRepo.find({
-        where: { id: In(uniqueWorkshopIds) },
+        where: { id: In(enrolledWorkshopIds) },
         relations: ['days', 'days.segments'],
       });
 
       for (const w of workshops) {
-        if (!w.days || w.days.length === 0) continue;
+        const meta = workshopMeta.get(w.id);
+        if (!meta) {
+          continue;
+        }
 
-        const sortedDays = [...w.days].sort(
-          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-        );
+        const tracking =
+          meta.source === 'enrollment'
+            ? enrollmentByWorkshop.get(w.id)
+            : latestReservationByWorkshop.get(w.id);
 
-        const lastDay = sortedDays[sortedDays.length - 1];
-        const lastDayDate = new Date(lastDay.date);
+        const progress = tracking
+          ? await this.syncCourseProgressTracking(w, meta.source, tracking, now)
+          : this.resolveTrackedCourseProgress(w, null, now);
 
-        // If the course is fully completed
-        const isCompleted = lastDayDate < now;
-
-        if (isCompleted) {
+        if (progress.status === CourseProgressStatus.COMPLETED) {
           completedCount++; // ✅ Increment completed courses
 
           if (w.offersCmeCredits) {
@@ -2348,6 +2668,10 @@ export class WorkshopsService {
             totalCmeCredits += totalMinutes / 60;
           }
         } else {
+          const sortedDays = [...(w.days || [])].sort(
+            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+          );
+
           // If not completed, find the absolute next upcoming class session
           for (const day of sortedDays) {
             const dayDate = new Date(day.date);
@@ -2473,7 +2797,7 @@ export class WorkshopsService {
     const resMap = new Map(reservations.map((r) => [r.workshopId, r]));
     const enrMap = new Map(enrollments.map((e) => [e.workshopId, e]));
 
-    const mappedCourses = workshops.map((w) => {
+    const mappedCourses = await Promise.all(workshops.map(async (w) => {
       const sortedDays = (w.days || []).sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
       );
@@ -2481,31 +2805,22 @@ export class WorkshopsService {
       const lastDate = sortedDays.length
         ? new Date(sortedDays[sortedDays.length - 1].date)
         : null;
-      const isCompleted = lastDate && lastDate < now;
-
-      // Calculate basic progress %
-      const totalSegments = sortedDays.reduce(
-        (acc, day) => acc + (day.segments ? day.segments.length : 0),
-        0,
-      );
-      const pastSegments = sortedDays.reduce((acc, day) => {
-        return (
-          acc +
-          (day.segments
-            ? day.segments.filter(
-                (s) => new Date(`${day.date}T${s.endTime}`) < now,
-              ).length
-            : 0)
-        );
-      }, 0);
-      const progressPercent =
-        totalSegments > 0
-          ? Math.round((pastSegments / totalSegments) * 100)
-          : 0;
 
       // Get Pricing/Group Size from Reservation (if exists)
       const res = resMap.get(w.id);
       const enr = enrMap.get(w.id);
+      const tracking = enr ?? res;
+      const trackingSource: 'enrollment' | 'reservation' = enr
+        ? 'enrollment'
+        : 'reservation';
+      const progress = tracking
+        ? await this.syncCourseProgressTracking(w, trackingSource, tracking, now)
+        : this.resolveTrackedCourseProgress(w, null, now);
+      const isCompleted = progress.status === CourseProgressStatus.COMPLETED;
+      const progressPercent =
+        progress.totalDays > 0
+          ? Math.round((progress.completedDays / progress.totalDays) * 100)
+          : 0;
       const groupSize = res?.numberOfSeats || 1;
       const paidAmount = res?.totalPrice || w.standardBaseRate;
 
@@ -2513,6 +2828,8 @@ export class WorkshopsService {
         enrollmentId: enr?.id || res?.id,
         courseId: w.id,
         isCompleted,
+        courseStatus: progress.status,
+        courseStatusLabel: progress.statusLabel,
         coverImageUrl: w.coverImageUrl,
         tag:
           w.deliveryMode === 'online'
@@ -2526,8 +2843,8 @@ export class WorkshopsService {
               year: 'numeric',
             })
           : 'TBA',
-        completedDate: lastDate
-          ? lastDate.toLocaleDateString('en-US', {
+        completedDate: isCompleted
+          ? (tracking?.courseCompletedAt ?? lastDate)?.toLocaleDateString('en-US', {
               month: 'short',
               day: 'numeric',
               year: 'numeric',
@@ -2559,7 +2876,7 @@ export class WorkshopsService {
             : { label: 'Add to Calendar', route: `/api/calendar/${w.id}` },
         },
       };
-    });
+    }));
 
     const filtered = mappedCourses.filter((c) =>
       currentTab === 'completed' ? c.isCompleted : !c.isCompleted,
@@ -2731,13 +3048,18 @@ export class WorkshopsService {
     });
 
     const now = new Date();
+    const tracking = e ?? reservation;
+    const trackingSource: 'enrollment' | 'reservation' = e
+      ? 'enrollment'
+      : 'reservation';
+    const progress = tracking
+      ? await this.syncCourseProgressTracking(w, trackingSource, tracking, now)
+      : this.resolveTrackedCourseProgress(w, null, now);
+    const isCompleted = progress.status === CourseProgressStatus.COMPLETED;
+    const hasStarted = progress.status !== CourseProgressStatus.NOT_STARTED;
     const sortedDays = (w.days || []).sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
     );
-    const isCompleted =
-      sortedDays.length > 0 &&
-      new Date(sortedDays[sortedDays.length - 1].date) <
-        new Date(now.toDateString());
 
     let dateRangeStr = 'TBA';
     let timeRangeStr = 'TBA';
@@ -2774,7 +3096,10 @@ export class WorkshopsService {
     }
 
     const schedule = sortedDays.map((day, dIdx) => {
-      const isDayPassed = new Date(day.date) < new Date(now.toDateString());
+      const isDayPassed =
+        hasStarted &&
+        new Date(`${day.date}T00:00:00`) <= new Date(now.toDateString());
+
       return {
         title: `DAY ${dIdx + 1}`,
         date: new Date(day.date)
@@ -2790,21 +3115,24 @@ export class WorkshopsService {
           .map((seg) => {
             const endDt = new Date(`${day.date}T${seg.endTime}`);
             const startDt = new Date(`${day.date}T${seg.startTime}`);
+            const segmentCompleted = hasStarted && endDt < now;
+            const segmentCurrent = hasStarted && startDt <= now && endDt >= now;
             let statusText =
-              endDt < now
+              segmentCompleted
                 ? '(COMPLETED)'
-                : startDt <= now && endDt >= now
+                : segmentCurrent
                   ? '(CURRENT)'
                   : '';
+
             return {
               id: seg.id,
               timeLabel: `${this.formatTime(seg.startTime)} - ${this.formatTime(seg.endTime)}`,
               title: `${seg.courseTopic} ${statusText}`.trim(),
               description: seg.topicDetails,
-              isCompleted: endDt < now,
-              isCurrent: startDt <= now && endDt >= now,
+              isCompleted: segmentCompleted,
+              isCurrent: segmentCurrent,
               joinLink:
-                w.deliveryMode === 'online' && !(endDt < now)
+                w.deliveryMode === 'online' && !segmentCompleted
                   ? w.meetingLink
                   : null,
             };
@@ -2825,6 +3153,8 @@ export class WorkshopsService {
       banner: {
         badgePrimary: isCompleted
           ? 'Course Completed'
+          : progress.status === CourseProgressStatus.NOT_STARTED
+            ? 'Course Not Started'
           : isOnline
             ? 'ONLINE REGISTRATION CONFIRMED'
             : 'Registration Confirmed',
@@ -2832,6 +3162,8 @@ export class WorkshopsService {
         title: w.title,
         description: isCompleted
           ? 'You have successfully completed this intensive simulation training.'
+          : progress.status === CourseProgressStatus.NOT_STARTED
+            ? 'Start this course to begin day-by-day progress tracking.'
           : w.shortBlurb,
         dateBox: {
           dateRange: dateRangeStr,
@@ -2851,9 +3183,22 @@ export class WorkshopsService {
           ? 'Transaction closed. Refund period expired.'
           : 'Refunds available up to 48h before start.',
       },
+      progress: {
+        status: progress.status,
+        statusLabel: progress.statusLabel,
+        totalDays: progress.totalDays,
+        completedDays: progress.completedDays,
+        remainingDays: progress.remainingDays,
+        startedAt: tracking?.courseStartedAt ?? null,
+        completedAt: tracking?.courseCompletedAt ?? null,
+      },
       scheduleHeader: {
         title: 'COURSE SCHEDULE',
-        badge: isCompleted ? 'ALL SESSIONS COMPLETED' : 'UPCOMING SESSIONS',
+        badge: isCompleted
+          ? 'ALL SESSIONS COMPLETED'
+          : progress.status === CourseProgressStatus.NOT_STARTED
+            ? 'NOT STARTED'
+            : 'UPCOMING SESSIONS',
       },
       schedule,
       sidebar: {
@@ -2882,6 +3227,78 @@ export class WorkshopsService {
                 ticketReference: bookRef,
               }
             : null,
+      },
+    };
+  }
+
+  async startMyCourse(userId: string, courseId: string) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+      relations: ['days'],
+    });
+
+    if (!workshop) {
+      throw new NotFoundException('Workshop not found.');
+    }
+
+    const started = await this.markCourseAsStarted(userId, courseId);
+    const now = new Date();
+
+    const tracking =
+      started.source === 'enrollment'
+        ? await this.enrollmentsRepo.findOne({
+            where: {
+              userId,
+              workshopId: courseId,
+              isActive: true,
+            },
+            order: { createdAt: 'DESC' },
+          })
+        : await this.reservationsRepo.findOne({
+            where: {
+              userId,
+              workshopId: courseId,
+              status: ReservationStatus.CONFIRMED,
+            },
+            order: { createdAt: 'DESC' },
+          });
+
+    if (!tracking) {
+      throw new NotFoundException('Course not found.');
+    }
+
+    const progress = await this.syncCourseProgressTracking(
+      workshop,
+      started.source,
+      tracking,
+      now,
+    );
+    const dayStatuses = this.getCourseDayStatuses(
+      workshop,
+      progress.status,
+      now,
+    );
+
+    return {
+      message: 'Course started successfully',
+      data: {
+        courseId,
+        source: started.source,
+        status: progress.status,
+        statusLabel: progress.statusLabel,
+        startedAt: tracking.courseStartedAt ?? started.startedAt,
+        completedAt: tracking.courseCompletedAt ?? null,
+        totalDays: progress.totalDays,
+        completedDays: progress.completedDays,
+        remainingDays: progress.remainingDays,
+        days: {
+          summary: {
+            totalDays: progress.totalDays,
+            completedDays: progress.completedDays,
+            remainingDays: progress.remainingDays,
+          },
+          data: dayStatuses,
+        },
       },
     };
   }
@@ -3063,9 +3480,14 @@ export class WorkshopsService {
     if (workshop.deliveryMode !== 'online')
       throw new BadRequestException('This is not an online course.');
 
+    const started = await this.markCourseAsStarted(userId, courseId);
+
     return {
       title: 'Join Live Session',
       description: `You are about to join the live session for ${workshop.title}.`,
+      courseStatus: CourseProgressStatus.IN_PROGRESS,
+      courseStatusLabel: 'In Progress',
+      startedAt: started.startedAt,
       meetingDetails: {
         platform: workshop.webinarPlatform || 'Zoom',
         meetingLink: workshop.meetingLink || 'Link will be provided soon',

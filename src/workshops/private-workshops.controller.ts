@@ -49,6 +49,15 @@ export class PrivateWorkshopsController {
     return this.workshopsService.getMyCourseDetails(req.user.id, courseId);
   }
 
+  @Post('my-courses/:courseId/start')
+  @UseGuards(AuthGuard('jwt'))
+  startMyCourse(
+    @Req() req: AuthenticatedRequest,
+    @Param('courseId') courseId: string,
+  ) {
+    return this.workshopsService.startMyCourse(req.user.id, courseId);
+  }
+
   // 1. Get Refund Eligibility & Info
   @Get('my-courses/:courseId/refund-info')
   getRefundEstimation(

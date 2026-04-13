@@ -822,6 +822,11 @@ Returns Module 3 dashboard metrics for the logged-in student:
 - `totalInProgressCourses`
 - `nextLiveSession` date and time
 
+Progress is now based on student course-start tracking:
+- `not_started`: enrolled/reserved but the student has not started the course.
+- `in_progress`: started and there are still upcoming days.
+- `completed`: started and all scheduled days are completed.
+
 ### Request variants
 
 #### Variant A: Valid token (student has enrolled workshops)
@@ -892,7 +897,7 @@ curl --location 'http://localhost:3000/workshops/student/my-courses/summary'
 
 ### Query params
 - `status` (optional, default `active`)
-  - Allowed: `active`, `in_progress`, `completed`, `browse`
+  - Allowed: `active`, `not_started`, `in_progress`, `completed`, `browse`
   - `browse` returns all published workshops that the student is not enrolled in.
 - `search` (optional, string)
   - Searches by course name (`title`).
@@ -916,6 +921,12 @@ curl --location 'http://localhost:3000/workshops/student/my-courses' \
 #### Variant B: Valid token (in-progress only)
 ```bash
 curl --location 'http://localhost:3000/workshops/student/my-courses?status=in_progress&page=1&limit=10' \
+  --header 'Authorization: Bearer <access_token>'
+```
+
+#### Variant B2: Valid token (not started only)
+```bash
+curl --location 'http://localhost:3000/workshops/student/my-courses?status=not_started&page=1&limit=10' \
   --header 'Authorization: Bearer <access_token>'
 ```
 
@@ -953,6 +964,7 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
       "courseType": "online",
       "workshopPhoto": "https://cdn.example.com/workshops/airway.jpg",
       "status": "completed",
+      "statusLabel": "Completed",
       "isEnrolled": true,
       "enrolledAt": "2026-04-01T10:10:00.000Z",
       "startDate": "2026-04-02T00:00:00.000Z",
@@ -960,7 +972,27 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
       "completedOn": "2026-04-03T23:59:59.999Z",
       "totalHours": 6.5,
       "cmeCredits": 6.5,
+      "earnedCmeCredits": 6.5,
       "offersCmeCredits": true,
+      "days": {
+        "summary": {
+          "totalDays": 2,
+          "completedDays": 2,
+          "remainingDays": 0
+        },
+        "data": [
+          {
+            "dayNumber": 1,
+            "date": "2026-04-02",
+            "status": "completed"
+          },
+          {
+            "dayNumber": 2,
+            "date": "2026-04-03",
+            "status": "completed"
+          }
+        ]
+      },
       "reservation": {
         "reservationId": "9f9c6db4-a0c2-4306-a9f2-9f45f034952a",
         "status": "confirmed",
@@ -991,6 +1023,7 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
       "courseType": "in_person",
       "workshopPhoto": null,
       "status": "browse",
+      "statusLabel": "Browse",
       "isEnrolled": false,
       "enrolledAt": null,
       "startDate": "2026-05-01T00:00:00.000Z",
@@ -998,7 +1031,35 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
       "completedOn": null,
       "totalHours": 9,
       "cmeCredits": 0,
+      "earnedCmeCredits": 0,
       "offersCmeCredits": false,
+      "totalDays": 3,
+      "completedDays": 0,
+      "remainingDays": 3,
+      "days": {
+        "summary": {
+          "totalDays": 3,
+          "completedDays": 0,
+          "remainingDays": 3
+        },
+        "data": [
+          {
+            "dayNumber": 1,
+            "date": "2026-05-01",
+            "status": "not_started"
+          },
+          {
+            "dayNumber": 2,
+            "date": "2026-05-02",
+            "status": "not_started"
+          },
+          {
+            "dayNumber": 3,
+            "date": "2026-05-03",
+            "status": "not_started"
+          }
+        ]
+      },
       "reservation": null,
       "createdAt": "2026-03-15T09:30:00.000Z"
     }
@@ -1032,7 +1093,7 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
   "statusCode": 400,
   "path": "/workshops/student/my-courses?status=archived",
   "message": [
-    "status must be one of the following values: active, in_progress, completed, browse"
+    "status must be one of the following values: active, not_started, in_progress, completed, browse"
   ]
 }
 ```
@@ -1043,5 +1104,100 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
   "statusCode": 401,
   "path": "/workshops/student/my-courses",
   "message": "Unauthorized"
+}
+```
+
+---
+
+## 9) Module 3 My Course - Start Course
+
+### Endpoint
+- Method: `POST`
+- Path: `/workshops/student/my-courses/:courseId/start`
+- Auth: Required
+- Request body: None
+
+### Purpose
+Marks the student course as started:
+- Moves status from `not_started` to `in_progress`.
+- Enables day-based completion tracking.
+- If all days are already passed, it auto-transitions to `completed` and awards CME credits when applicable.
+
+### Request variants
+
+#### Variant A: Valid token (start not-started course)
+```bash
+curl --location --request POST 'http://localhost:3000/workshops/student/my-courses/4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d/start' \
+  --header 'Authorization: Bearer <access_token>'
+```
+
+#### Variant B: Valid token (already started course)
+```bash
+curl --location --request POST 'http://localhost:3000/workshops/student/my-courses/4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d/start' \
+  --header 'Authorization: Bearer <access_token>'
+```
+
+#### Variant C: Missing token
+```bash
+curl --location --request POST 'http://localhost:3000/workshops/student/my-courses/4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d/start'
+```
+
+### Success response (200)
+```json
+{
+  "message": "Course started successfully",
+  "data": {
+    "courseId": "4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d",
+    "source": "reservation",
+    "status": "in_progress",
+    "statusLabel": "In Progress",
+    "startedAt": "2026-04-14T10:12:00.000Z",
+    "completedAt": null,
+    "totalDays": 3,
+    "completedDays": 1,
+    "remainingDays": 2,
+    "days": {
+      "summary": {
+        "totalDays": 3,
+        "completedDays": 1,
+        "remainingDays": 2
+      },
+      "data": [
+        {
+          "dayNumber": 1,
+          "date": "2026-04-14",
+          "status": "completed"
+        },
+        {
+          "dayNumber": 2,
+          "date": "2026-04-15",
+          "status": "upcoming"
+        },
+        {
+          "dayNumber": 3,
+          "date": "2026-04-16",
+          "status": "upcoming"
+        }
+      ]
+    }
+  }
+}
+```
+
+### Error response (401) - unauthorized
+```json
+{
+  "statusCode": 401,
+  "path": "/workshops/student/my-courses/4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d/start",
+  "message": "Unauthorized"
+}
+```
+
+### Error response (404) - course not found/not enrolled
+```json
+{
+  "statusCode": 404,
+  "path": "/workshops/student/my-courses/4ef6c01b-8e57-4e59-9d76-b4d0d90b5f0d/start",
+  "message": "Course not found."
 }
 ```
