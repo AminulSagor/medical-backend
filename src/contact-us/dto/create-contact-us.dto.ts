@@ -12,6 +12,7 @@ export enum ContactInquiryType {
   ENROLLMENT = 'enrollment',
   FACILITY_BOOKING = 'facility_booking',
   TECHNICAL_SUPPORT = 'technical_support',
+  ORDER_INQUIRY = 'order_inquiry',
 }
 
 export class CreateContactUsDto {
