@@ -554,6 +554,7 @@ Support Team`,
       [ContactInquiryType.ENROLLMENT]: 'Enrollment',
       [ContactInquiryType.FACILITY_BOOKING]: 'Facility Booking',
       [ContactInquiryType.TECHNICAL_SUPPORT]: 'Technical Support',
+      [ContactInquiryType.ORDER_INQUIRY]: 'Order Inquiry',
     };
 
     return labels[type];
