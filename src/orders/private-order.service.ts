@@ -148,7 +148,7 @@ export class PrivateOrderService {
     };
   }
 
-  // ── 2. GET ORDER HISTORY LIST (With Search, Filter, Pagination) ──
+  // ── 2. GET ORDER HISTORY LIST (With Search, Filter, Pagination & Duration) ──
   async getOrderHistory(userEmail: string, query: any) {
     const limit = Number(query.limit) || 10;
     const page = Number(query.page) || 1;
@@ -160,12 +160,25 @@ export class PrivateOrderService {
       .where('o.customerEmail = :email', { email: userEmail })
       .orderBy('o.createdAt', 'DESC');
 
-    // Apply Status Filter
+    // ✅ 1. Apply Duration Filter (Past 3 Months, 6 Months, 1 Year)
+    if (query.duration) {
+      const startDate = new Date();
+      if (query.duration === '3_months') {
+        startDate.setMonth(startDate.getMonth() - 3);
+      } else if (query.duration === '6_months') {
+        startDate.setMonth(startDate.getMonth() - 6);
+      } else if (query.duration === '1_year') {
+        startDate.setFullYear(startDate.getFullYear() - 1);
+      }
+      qb.andWhere('o.createdAt >= :startDate', { startDate });
+    }
+
+    // ✅ 2. Apply Status Filter
     if (query.status) {
       qb.andWhere('o.fulfillmentStatus = :status', { status: query.status });
     }
 
-    // Apply Search Filter (Order Number, Product Name, SKU)
+    // ✅ 3. Apply Search Filter (Order Number, Product Name, SKU)
     if (query.search) {
       const searchTerm = `%${query.search}%`;
       qb.andWhere(
@@ -220,7 +233,7 @@ export class PrivateOrderService {
         actions: {
           view: `/dashboard/orders/${order.id}`,
           invoice: `/api/orders/${order.id}/invoice`,
-          reorder: `/cart?reorderFrom=${order.id}`,
+          reorder: `/cart?reorderFrom=${order.id}`, // Frontend Route
         },
       };
     });
