@@ -430,6 +430,7 @@ export class OrdersService {
       const firstItem = order.items?.[0];
 
       return {
+        id: order.id,
         orderId: order.orderNumber,
         orderedAt: order.createdAt,
         orderedAtFullDate: order.createdAt.toISOString(),
