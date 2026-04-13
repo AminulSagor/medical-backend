@@ -39,6 +39,10 @@ import {
 } from '../../common/enums/newsletter-constants.enum';
 import { AddCourseAnnouncementAttachmentDto } from './dto/add-course-announcement-attachment.dto';
 import { ToggleRecipientDto } from './dto/toggle-recipient.dto';
+import {
+  ReservationStatus,
+  WorkshopReservation,
+} from 'src/workshops/entities/workshop-reservation.entity';
 
 @Injectable()
 export class CourseAnnouncementsService {
@@ -60,7 +64,8 @@ export class CourseAnnouncementsService {
     private readonly attachmentRepo: Repository<NewsletterBroadcastAttachment>,
     @InjectRepository(NewsletterSubscriber)
     private readonly subscriberRepo: Repository<NewsletterSubscriber>,
-
+    @InjectRepository(WorkshopReservation)
+    private readonly reservationsRepo: Repository<WorkshopReservation>,
     @InjectRepository(NewsletterCourseAnnouncement)
     private readonly courseMetaRepo: Repository<NewsletterCourseAnnouncement>,
     @InjectRepository(NewsletterCourseAnnouncementRecipient)
@@ -529,21 +534,54 @@ export class CourseAnnouncementsService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 24;
 
-    const enrollmentQb = this.enrollmentRepo
-      .createQueryBuilder('e')
-      .innerJoin(User, 'u', 'u.id = e.userId')
-      .where('e.workshopId = :workshopId', { workshopId: meta.workshopId })
-      .andWhere('e.isActive = true');
+    // 1. Fetch User IDs from BOTH Enrollments and Reservations concurrently
+    const [enrollments, reservations] = await Promise.all([
+      this.enrollmentRepo.find({
+        where: { workshopId: meta.workshopId, isActive: true },
+        select: ['userId'],
+      }),
+      this.reservationsRepo.find({
+        where: {
+          workshopId: meta.workshopId,
+          status: ReservationStatus.CONFIRMED,
+        },
+        select: ['userId'],
+      }),
+    ]);
 
+    // 2. Merge and Remove Duplicate User IDs using a Set
+    const uniqueUserIds = [
+      ...new Set([
+        ...enrollments.map((e) => e.userId),
+        ...reservations.map((r) => r.userId),
+      ]),
+    ];
+
+    // Early return if nobody is enrolled/reserved yet
+    if (uniqueUserIds.length === 0) {
+      return {
+        recipientMode: meta.recipientMode,
+        items: [],
+        meta: { page, limit, total: 0 },
+      };
+    }
+
+    // 3. Query the User table directly for those unique IDs
+    const userQb = this.userRepo
+      .createQueryBuilder('u')
+      .whereInIds(uniqueUserIds);
+
+    // Apply Search Filter
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
-      enrollmentQb.andWhere(
+      userQb.andWhere(
         '(LOWER(u.fullLegalName) LIKE :s OR LOWER(u.medicalEmail) LIKE :s)',
         { s },
       );
     }
 
-    enrollmentQb
+    // Pagination and Selection
+    userQb
       .select([
         'u.id as id',
         'u.fullLegalName as name',
@@ -554,20 +592,22 @@ export class CourseAnnouncementsService {
       .offset((page - 1) * limit)
       .limit(limit);
 
+    // Execute query and count
     const [raw, total] = await Promise.all([
-      enrollmentQb.getRawMany<{
+      userQb.getRawMany<{
         id: string;
         name: string;
         email: string;
         role: string;
       }>(),
-      enrollmentQb
+      userQb
         .clone()
         .offset(undefined as any)
         .limit(undefined as any)
         .getCount(),
     ]);
 
+    // 4. Handle "Selected" vs "All" mode
     let selectedSet = new Set<string>();
     if (meta.recipientMode === CourseAnnouncementRecipientMode.SELECTED) {
       const rows = await this.courseRecipientRepo.find({
@@ -577,6 +617,7 @@ export class CourseAnnouncementsService {
       selectedSet = new Set(rows.map((r) => r.userId));
     }
 
+    // Map final output
     const items = raw.map((r) => ({
       id: r.id,
       name: r.name,

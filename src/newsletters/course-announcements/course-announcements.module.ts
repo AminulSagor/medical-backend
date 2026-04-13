@@ -15,6 +15,7 @@ import { NewsletterCourseAnnouncementRecipient } from './entities/newsletter-cou
 import { Workshop } from '../../workshops/entities/workshop.entity';
 import { WorkshopEnrollment } from '../../workshops/entities/workshop-enrollment.entity';
 import { User } from '../../users/entities/user.entity';
+import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation.entity';
 
 @Module({
   imports: [
@@ -29,6 +30,8 @@ import { User } from '../../users/entities/user.entity';
 
       Workshop,
       WorkshopEnrollment,
+      WorkshopReservation,
+
       User,
     ]),
   ],
