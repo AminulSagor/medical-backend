@@ -9,6 +9,7 @@ import { Cart } from './entities/cart.entity';
 import { CartItem } from './entities/cart-item.entity';
 import { Product } from '../products/entities/product.entity';
 import { AddToCartDto } from './dto/add-to-cart.dto';
+import { Order } from 'src/orders/entities/order.entity';
 
 @Injectable()
 export class CartService {
@@ -19,6 +20,7 @@ export class CartService {
     private readonly cartItemRepo: Repository<CartItem>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
   ) {}
 
   private async getOrCreateCart(userId: string): Promise<Cart> {
@@ -157,5 +159,90 @@ export class CartService {
         },
       },
     };
+  }
+
+  async reorderFromPastOrder(
+    userId: string,
+    userEmail: string,
+    orderId: string,
+  ) {
+    // 1. Verify the order exists and belongs to this user
+    const order = await this.orderRepo.findOne({
+      where: { id: orderId, customerEmail: userEmail },
+      relations: ['items'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found or access denied');
+    }
+
+    const cart = await this.getOrCreateCart(userId);
+    let successfullyAddedCount = 0;
+
+    // 2. Loop through past order items and intelligently add them to the cart
+    for (const item of order.items) {
+      if (!item.productId) continue;
+
+      // Check if product is still active/exists
+      const product = await this.productRepo.findOne({
+        where: { id: item.productId, isActive: true },
+      });
+
+      if (!product) continue; // Skip discontinued products silently
+
+      let cartItem = await this.cartItemRepo.findOne({
+        where: { cartId: cart.id, productId: item.productId },
+      });
+
+      const newQuantity = cartItem
+        ? cartItem.quantity + item.quantity
+        : item.quantity;
+
+      // 3. Stock Safety Check (Add as much as possible without failing the whole request)
+      if (!product.backorder && newQuantity > product.stockQuantity) {
+        const currentCartQty = cartItem ? cartItem.quantity : 0;
+        const addableStock = product.stockQuantity - currentCartQty;
+
+        if (addableStock > 0) {
+          if (cartItem) {
+            cartItem.quantity += addableStock;
+            await this.cartItemRepo.save(cartItem);
+          } else {
+            await this.cartItemRepo.save(
+              this.cartItemRepo.create({
+                cartId: cart.id,
+                productId: product.id,
+                quantity: addableStock,
+              }),
+            );
+          }
+          successfullyAddedCount++;
+        }
+      } else {
+        // Full stock available
+        if (cartItem) {
+          cartItem.quantity = newQuantity;
+          await this.cartItemRepo.save(cartItem);
+        } else {
+          await this.cartItemRepo.save(
+            this.cartItemRepo.create({
+              cartId: cart.id,
+              productId: product.id,
+              quantity: item.quantity,
+            }),
+          );
+        }
+        successfullyAddedCount++;
+      }
+    }
+
+    if (successfullyAddedCount === 0 && order.items.length > 0) {
+      throw new BadRequestException(
+        'None of the items from this order are currently available in stock.',
+      );
+    }
+
+    // 4. Return the fully updated cart
+    return this.getCart(userId);
   }
 }

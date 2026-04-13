@@ -8,3 +8,8 @@ export class AddToCartDto {
   @Min(1)
   quantity: number;
 }
+
+export class ReorderDto {
+  @IsUUID()
+  orderId: string;
+}
