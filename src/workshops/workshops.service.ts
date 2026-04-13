@@ -2297,33 +2297,43 @@ export class WorkshopsService {
 
   // ── 1. SUMMARY METRICS API ──
   async getMyCoursesSummary(userId: string) {
+    // 1. Safe query without 'select' to avoid TypeORM mapping issues, and handle case sensitivity
     const [enrollments, reservations] = await Promise.all([
       this.enrollmentsRepo.find({
         where: { userId, isActive: true },
-        select: ['workshopId'],
       }),
       this.reservationsRepo.find({
-        where: { userId, status: ReservationStatus.CONFIRMED as any },
-        select: ['workshopId'],
+        // Handle both uppercase and lowercase to be absolutely safe
+        where: { userId, status: In(['confirmed', 'CONFIRMED']) as any },
       }),
     ]);
 
     const uniqueWorkshopIds = [
       ...new Set([
-        ...enrollments.map((e) => e.workshopId),
-        ...reservations.map((r) => r.workshopId),
+        ...enrollments.map((e) => e.workshopId).filter(Boolean),
+        ...reservations.map((r) => r.workshopId).filter(Boolean),
       ]),
     ];
 
     let activeCount = 0;
     let completedCount = 0;
-    let totalCmeCredits = 0;
+
+    // CME Calculation Variables
+    let totalCmeAllTime = 0;
+    let totalCmeThisYear = 0;
+    let totalCmeLastYear = 0;
+
     let nextSessionDatetime: Date | null = null;
+
     const now = new Date();
+    const startOfThisYear = new Date(now.getFullYear(), 0, 1);
+    const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
+    const startOfNextYear = new Date(now.getFullYear() + 1, 0, 1);
 
     if (uniqueWorkshopIds.length > 0) {
+      // Use TypeORM's In() operator for safety
       const workshops = await this.workshopsRepo.find({
-        where: uniqueWorkshopIds.map((id) => ({ id })),
+        where: { id: In(uniqueWorkshopIds) },
         relations: ['days', 'days.segments'],
       });
 
@@ -2334,11 +2344,29 @@ export class WorkshopsService {
           (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
         );
         const lastDay = sortedDays[sortedDays.length - 1];
-        const isCompleted = new Date(lastDay.date) < now;
+        const lastDayDate = new Date(lastDay.date);
+        const isCompleted = lastDayDate < now;
 
         if (isCompleted) {
           completedCount++;
-          if (w.offersCmeCredits) totalCmeCredits += sortedDays.length * 4;
+
+          if (w.offersCmeCredits) {
+            const earnedCme = sortedDays.length * 4; // Or fetch from a specific column if you have it
+            totalCmeAllTime += earnedCme;
+
+            // Trend calculation grouping
+            if (
+              lastDayDate >= startOfThisYear &&
+              lastDayDate < startOfNextYear
+            ) {
+              totalCmeThisYear += earnedCme;
+            } else if (
+              lastDayDate >= startOfLastYear &&
+              lastDayDate < startOfThisYear
+            ) {
+              totalCmeLastYear += earnedCme;
+            }
+          }
         } else {
           activeCount++;
           for (const day of sortedDays) {
@@ -2361,9 +2389,22 @@ export class WorkshopsService {
       }
     }
 
+    // ── Trend Calculation Math ──
+    let cmeTrend = '0% vs last year';
+    if (totalCmeLastYear === 0) {
+      cmeTrend =
+        totalCmeThisYear > 0 ? '+ 100% vs last year' : '0% vs last year';
+    } else {
+      const percentage =
+        ((totalCmeThisYear - totalCmeLastYear) / totalCmeLastYear) * 100;
+      const sign = percentage > 0 ? '+' : '';
+      cmeTrend = `${sign} ${percentage.toFixed(1)}% vs last year`;
+    }
+
     return {
       totalCmeCredits: {
-        value: totalCmeCredits.toFixed(1),
+        value: totalCmeAllTime.toFixed(1),
+        trend: cmeTrend, // ✅ Trend added dynamically
       },
       coursesInProgress: {
         value: activeCount,
@@ -2387,18 +2428,18 @@ export class WorkshopsService {
     const skip = ((Number(query.page) || 1) - 1) * limit;
     const currentTab = query.tab || 'active';
 
-    // 1. Get ALL workshop IDs the user is part of (Enrollment + Reservation)
+    // 1. Get ALL workshop IDs the user is part of (Safely)
     const [enrollments, reservations] = await Promise.all([
       this.enrollmentsRepo.find({ where: { userId, isActive: true } }),
       this.reservationsRepo.find({
-        where: { userId, status: ReservationStatus.CONFIRMED as any },
+        where: { userId, status: In(['confirmed', 'CONFIRMED']) as any },
       }),
     ]);
 
     const userWorkshopIds = [
       ...new Set([
-        ...enrollments.map((e) => e.workshopId),
-        ...reservations.map((r) => r.workshopId),
+        ...enrollments.map((e) => e.workshopId).filter(Boolean),
+        ...reservations.map((r) => r.workshopId).filter(Boolean),
       ]),
     ];
 
@@ -2410,8 +2451,8 @@ export class WorkshopsService {
         .createQueryBuilder('w')
         .where('w.status = :status', { status: 'published' });
 
-      // Exclude workshops the user is already enrolled in/reserved
       if (userWorkshopIds.length > 0) {
+        // Exclude correctly using IN
         qbBrowse.andWhere('w.id NOT IN (:...userWorkshopIds)', {
           userWorkshopIds,
         });
@@ -2454,8 +2495,9 @@ export class WorkshopsService {
       };
     }
 
+    // Safely query workshops using In operator
     const workshops = await this.workshopsRepo.find({
-      where: userWorkshopIds.map((id) => ({ id })),
+      where: { id: In(userWorkshopIds) },
       relations: ['days', 'days.segments'],
     });
 
@@ -2500,7 +2542,7 @@ export class WorkshopsService {
       const paidAmount = res?.totalPrice || w.standardBaseRate;
 
       return {
-        enrollmentId: enr?.id || res?.id, // Fallback to reservation ID if no formal enrollment row yet
+        enrollmentId: enr?.id || res?.id,
         courseId: w.id,
         isCompleted,
         coverImageUrl: w.coverImageUrl,
@@ -2551,7 +2593,6 @@ export class WorkshopsService {
       };
     });
 
-    // Filter by Active or Completed
     const filtered = mappedCourses.filter((c) =>
       currentTab === 'completed' ? c.isCompleted : !c.isCompleted,
     );
@@ -2562,7 +2603,7 @@ export class WorkshopsService {
         total: filtered.length,
         page: Number(query.page) || 1,
         limit,
-        totalPages: Math.ceil(filtered.length / limit),
+        totalPages: Math.max(Math.ceil(filtered.length / limit), 1), // ✅ Prevent 0 totalPages
       },
     };
   }

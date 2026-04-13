@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
 import { NewsletterBroadcastCustomContent } from '../broadcasts/entities/newsletter-broadcast-custom-content.entity';
@@ -800,51 +800,77 @@ export class CourseAnnouncementsService {
   }
 
   private async applyRecipients(
-    manager: any,
+    manager: EntityManager,
     broadcastId: string,
     workshopId: string,
     mode: CourseAnnouncementRecipientMode,
-    recipientIds: string[],
+    providedIds: string[],
   ): Promise<number> {
+    // 1. Clear existing recipients for this broadcast (FIXED ENTITY NAME)
     await manager.delete(NewsletterCourseAnnouncementRecipient, {
       broadcastId,
     });
 
-    if (mode === CourseAnnouncementRecipientMode.ALL) {
-      const cnt = await manager.count(WorkshopEnrollment, {
+    // 2. Fetch all valid User IDs from BOTH Enrollments and Reservations
+    const [enrollments, reservations] = await Promise.all([
+      manager.find(WorkshopEnrollment, {
         where: { workshopId, isActive: true },
-      });
-      return cnt;
-    }
+        select: ['userId'],
+      }),
+      manager.find(WorkshopReservation, {
+        where: { workshopId, status: ReservationStatus.CONFIRMED },
+        select: ['userId'],
+      }),
+    ]);
 
-    const unique = [...new Set(recipientIds)];
-    if (!unique.length) return 0;
+    // Create a Set of all valid, unique user IDs for this workshop
+    const validUserIds = new Set([
+      ...enrollments.map((e) => e.userId),
+      ...reservations.map((r) => r.userId),
+    ]);
 
-    const enrolled = await manager.find(WorkshopEnrollment, {
-      where: { workshopId, userId: In(unique), isActive: true },
-      select: ['userId'],
-    });
+    // 3. Handle "ALL" mode
+    if (mode === CourseAnnouncementRecipientMode.ALL) {
+      if (validUserIds.size === 0) return 0;
 
-    const enrolledSet = new Set(
-      enrolled.map((e: WorkshopEnrollment) => e.userId),
-    );
-    const invalid = unique.find((id) => !enrolledSet.has(id));
-    if (invalid)
-      throw new BadRequestException(
-        'One or more recipients are not enrolled in this cohort',
-      );
-
-    await manager.save(
-      NewsletterCourseAnnouncementRecipient,
-      unique.map((userId) =>
+      // Insert all valid users into the recipients table (FIXED ENTITY NAME)
+      const entities = Array.from(validUserIds).map((userId) =>
         manager.create(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
           userId,
         }),
-      ),
-    );
+      );
+      await manager.save(NewsletterCourseAnnouncementRecipient, entities);
+      return validUserIds.size;
+    }
 
-    return unique.length;
+    // 4. Handle "SELECTED" mode
+    if (mode === CourseAnnouncementRecipientMode.SELECTED) {
+      if (!providedIds || providedIds.length === 0) {
+        return 0;
+      }
+
+      // Verify that EVERY provided ID actually belongs to the workshop
+      for (const id of providedIds) {
+        if (!validUserIds.has(id)) {
+          throw new BadRequestException(
+            'One or more recipients are not enrolled in this cohort',
+          );
+        }
+      }
+
+      // If all are valid, insert them (FIXED ENTITY NAME)
+      const entities = providedIds.map((userId) =>
+        manager.create(NewsletterCourseAnnouncementRecipient, {
+          broadcastId,
+          userId,
+        }),
+      );
+      await manager.save(NewsletterCourseAnnouncementRecipient, entities);
+      return providedIds.length;
+    }
+
+    return 0;
   }
 
   async toggleRecipient(
