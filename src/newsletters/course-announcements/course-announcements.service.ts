@@ -394,9 +394,25 @@ export class CourseAnnouncementsService {
     });
     if (!workshop) throw new NotFoundException('Cohort not found');
 
-    const totalCohortRecipients = await this.enrollmentRepo.count({
-      where: { workshopId: meta.workshopId, isActive: true },
-    });
+    // ✅ FIXED: Calculate Total Cohort Recipients from BOTH tables
+    const [enrollments, reservations] = await Promise.all([
+      this.enrollmentRepo.find({
+        where: { workshopId: meta.workshopId, isActive: true },
+        select: ['userId'],
+      }),
+      this.reservationsRepo.find({
+        where: {
+          workshopId: meta.workshopId,
+          status: ReservationStatus.CONFIRMED,
+        },
+        select: ['userId'],
+      }),
+    ]);
+
+    const totalCohortRecipients = new Set([
+      ...enrollments.map((e) => e.userId),
+      ...reservations.map((r) => r.userId),
+    ]).size;
 
     const selectedCount =
       meta.recipientMode === CourseAnnouncementRecipientMode.ALL
