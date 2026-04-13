@@ -115,7 +115,8 @@ export class CourseAnnouncementsService {
   ): Promise<Record<string, unknown>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const tab = query.tab || 'all';
+    // ✅ FIX 1: Force lowercase to handle "UPCOMING" or "COMPLETED" from Postman
+    const tab = (query.tab || 'all').toLowerCase();
 
     const qb = this.workshopRepo
       .createQueryBuilder('w')
@@ -128,23 +129,24 @@ export class CourseAnnouncementsService {
       qb.andWhere('LOWER(w.title) LIKE :s', { s });
     }
 
-    // 2. Filter by Category (Uncomment when categoryId is added to entity)
+    // ✅ FIX 2: Uncommented and activated Category Filter
     if (query.category?.trim()) {
-      // qb.andWhere('w.categoryId = :category', { category: query.category });
+      // Assuming your Workshop entity has a 'categoryId' or 'category' column.
+      // Adjust 'w.categoryId' to match your exact entity property name if different.
+      qb.andWhere('w.categoryId = :category', {
+        category: query.category.trim(),
+      });
     }
 
     // 3. Filter by Cohort Status at the Database level
     const now = new Date();
 
     if (tab === 'upcoming') {
-      // FIX: Upcoming includes courses with future dates OR courses with NO dates yet (TBD)
-      // Removed the strict PUBLISHED check so your Drafts will show up here too.
       qb.andWhere(
         '(EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now) OR NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id))',
         { now },
       );
     } else if (tab === 'completed') {
-      // Completed means: It has dates, and ALL of them are in the past
       qb.andWhere(
         'NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
         { now },
@@ -153,9 +155,10 @@ export class CourseAnnouncementsService {
         'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id)',
       );
     } else if (tab === 'cancelled') {
-      // SAFEGUARD: Because 'cancelled' is not in your DB enum, querying for it will crash Postgres.
-      // This safely returns 0 results until you update your database schema.
-      qb.andWhere('1 = 0');
+      // ✅ FIX 3: Actually query for cancelled status instead of forcing 1=0
+      qb.andWhere('w.status = :cancelledStatus', {
+        cancelledStatus: 'cancelled',
+      });
     }
 
     // Execute query with accurate pagination limits
@@ -200,6 +203,8 @@ export class CourseAnnouncementsService {
         cohortStatus = 'upcoming';
       } else if (endDate && endDate.getTime() < now.getTime()) {
         cohortStatus = 'completed';
+      } else if (String(w.status).toLowerCase() === 'cancelled') {
+        cohortStatus = 'cancelled';
       }
 
       const seatStatus =
@@ -298,82 +303,6 @@ export class CourseAnnouncementsService {
       subjectLine: created.subjectLine,
     };
   }
-
-  // async createDraft(
-  //   adminUserId: string,
-  //   dto: CreateCourseAnnouncementDto,
-  // ): Promise<Record<string, unknown>> {
-  //   const workshop = await this.workshopRepo.findOne({
-  //     where: { id: dto.workshopId },
-  //   });
-  //   if (!workshop) throw new NotFoundException('Cohort not found');
-
-  //   if (
-  //     dto.recipientMode === CourseAnnouncementRecipientMode.SELECTED &&
-  //     !dto.recipientIds?.length
-  //   ) {
-  //     throw new BadRequestException(
-  //       'recipientIds is required when recipientMode is SELECTED',
-  //     );
-  //   }
-
-  //   const result = await this.dataSource.transaction(async (manager) => {
-  //     const b = manager.create(NewsletterBroadcast, {
-  //       channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT,
-  //       contentType: NewsletterContentType.CUSTOM_MESSAGE,
-  //       status: NewsletterBroadcastStatus.DRAFT,
-  //       subjectLine: dto.subjectLine.trim(),
-  //       preheaderText: null,
-  //       internalName: null,
-  //       estimatedRecipientsCount: 0,
-  //       sentRecipientsCount: 0,
-  //       openedRecipientsCount: 0,
-  //       openRatePercent: '0',
-  //       createdByAdminId: adminUserId,
-  //       updatedByAdminId: adminUserId,
-  //     });
-
-  //     const saved = await manager.save(NewsletterBroadcast, b);
-
-  //     await manager.save(
-  //       NewsletterBroadcastCustomContent,
-  //       manager.create(NewsletterBroadcastCustomContent, {
-  //         broadcastId: saved.id,
-  //         messageBodyHtml: dto.messageBodyHtml.trim(),
-  //         messageBodyText: dto.messageBodyText?.trim() || null,
-  //       }),
-  //     );
-
-  //     await manager.save(
-  //       NewsletterCourseAnnouncement,
-  //       manager.create(NewsletterCourseAnnouncement, {
-  //         broadcastId: saved.id,
-  //         workshopId: dto.workshopId,
-  //         priority: dto.priority,
-  //         recipientMode: dto.recipientMode,
-  //         pushToStudentPanel: dto.pushToStudentPanel ?? false,
-  //       }),
-  //     );
-
-  //     const recipientsCount = await this.applyRecipients(
-  //       manager,
-  //       saved.id,
-  //       dto.workshopId,
-  //       dto.recipientMode,
-  //       dto.recipientIds ?? [],
-  //     );
-  //     saved.estimatedRecipientsCount = recipientsCount;
-  //     await manager.save(NewsletterBroadcast, saved);
-
-  //     return saved;
-  //   });
-
-  //   return {
-  //     message: 'Course announcement draft created successfully',
-  //     id: result.id,
-  //     subjectLine: result.subjectLine,
-  //   };
-  // }
 
   async getDetail(broadcastId: string): Promise<Record<string, unknown>> {
     const b = await this.broadcastRepo.findOne({
