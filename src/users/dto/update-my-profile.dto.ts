@@ -43,14 +43,10 @@ export class UpdateMyProfileDto {
 
   @IsOptional()
   @IsString()
-  @MinLength(0)
-  @MaxLength(255)
   institutionOrHospital?: string | null;
 
   @IsOptional()
   @IsString()
-  @MinLength(0)
-  @MaxLength(50)
   npiNumber?: string | null;
 }
 
