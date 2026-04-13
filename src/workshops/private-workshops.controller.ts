@@ -19,7 +19,7 @@ import {
 export class PrivateWorkshopsController {
   constructor(private readonly workshopsService: WorkshopsService) {}
 
-  @Get('my-courses/summary')
+  @Get('dashboard/summary')
   @UseGuards(AuthGuard('jwt'))
   getMyCoursesSummary(@Req() req: AuthenticatedRequest) {
     return this.workshopsService.getMyCoursesSummary(req.user.id);

@@ -2295,15 +2295,14 @@ export class WorkshopsService {
     };
   }
 
-  // ── 1. SUMMARY METRICS API ──
+  // ── 1. SUMMARY METRICS API (Dashboard Cards) ──
   async getMyCoursesSummary(userId: string) {
-    // 1. Safe query using standard ENUM
+    // 1. Safe query to get all enrolled/reserved workshop IDs
     const [enrollments, reservations] = await Promise.all([
       this.enrollmentsRepo.find({
         where: { userId, isActive: true },
       }),
       this.reservationsRepo.find({
-        // ✅ FIXED: Use strict enum instead of In() to prevent Postgres Enum Crash
         where: { userId, status: ReservationStatus.CONFIRMED },
       }),
     ]);
@@ -2315,23 +2314,13 @@ export class WorkshopsService {
       ]),
     ];
 
-    let activeCount = 0;
     let completedCount = 0;
-
-    // CME Calculation Variables
-    let totalCmeAllTime = 0;
-    let totalCmeThisYear = 0;
-    let totalCmeLastYear = 0;
-
+    let totalCmeCredits = 0;
     let nextSessionDatetime: Date | null = null;
-
     const now = new Date();
-    const startOfThisYear = new Date(now.getFullYear(), 0, 1);
-    const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
-    const startOfNextYear = new Date(now.getFullYear() + 1, 0, 1);
 
     if (uniqueWorkshopIds.length > 0) {
-      // Use TypeORM's In() operator for safety
+      // Fetch workshops with days and segments
       const workshops = await this.workshopsRepo.find({
         where: { id: In(uniqueWorkshopIds) },
         relations: ['days', 'days.segments'],
@@ -2343,32 +2332,23 @@ export class WorkshopsService {
         const sortedDays = [...w.days].sort(
           (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
         );
+
         const lastDay = sortedDays[sortedDays.length - 1];
         const lastDayDate = new Date(lastDay.date);
+
+        // If the course is fully completed
         const isCompleted = lastDayDate < now;
 
         if (isCompleted) {
-          completedCount++;
+          completedCount++; // ✅ Increment completed courses
 
           if (w.offersCmeCredits) {
-            const earnedCme = sortedDays.length * 4; // Or fetch from a specific column if you have it
-            totalCmeAllTime += earnedCme;
-
-            // Trend calculation grouping
-            if (
-              lastDayDate >= startOfThisYear &&
-              lastDayDate < startOfNextYear
-            ) {
-              totalCmeThisYear += earnedCme;
-            } else if (
-              lastDayDate >= startOfLastYear &&
-              lastDayDate < startOfThisYear
-            ) {
-              totalCmeLastYear += earnedCme;
-            }
+            // Calculate accurate CME credits based on total segment duration
+            const totalMinutes = this.getWorkshopTotalMinutes(w);
+            totalCmeCredits += totalMinutes / 60;
           }
         } else {
-          activeCount++;
+          // If not completed, find the absolute next upcoming class session
           for (const day of sortedDays) {
             const dayDate = new Date(day.date);
             if (dayDate >= new Date(now.toDateString())) {
@@ -2389,35 +2369,22 @@ export class WorkshopsService {
       }
     }
 
-    // ── Trend Calculation Math ──
-    let cmeTrend = '0% vs last year';
-    if (totalCmeLastYear === 0) {
-      cmeTrend =
-        totalCmeThisYear > 0 ? '+ 100% vs last year' : '0% vs last year';
-    } else {
-      const percentage =
-        ((totalCmeThisYear - totalCmeLastYear) / totalCmeLastYear) * 100;
-      const sign = percentage > 0 ? '+' : '';
-      cmeTrend = `${sign} ${percentage.toFixed(1)}% vs last year`;
-    }
-
     return {
-      totalCmeCredits: {
-        value: totalCmeAllTime.toFixed(1),
-        trend: cmeTrend, // ✅ Trend added dynamically
-      },
-      coursesInProgress: {
-        value: activeCount,
-      },
-      nextLiveSession: {
-        value: nextSessionDatetime
+      message: 'Dashboard metrics fetched successfully',
+      data: {
+        // UI: "CME CREDITS"
+        cmeCredits: Number(totalCmeCredits).toFixed(1),
+
+        // UI: "COURSES COMPLETED"
+        coursesCompleted: completedCount,
+
+        // UI: "NEXT CLASS" -> formatted to "Mar 12"
+        nextClass: nextSessionDatetime
           ? nextSessionDatetime.toLocaleDateString('en-US', {
               month: 'short',
               day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            })
-          : 'No upcoming sessions',
+            }) // e.g., "Mar 12"
+          : 'N/A', // If no upcoming classes
       },
     };
   }
