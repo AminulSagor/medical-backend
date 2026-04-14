@@ -409,7 +409,9 @@ export class WorkshopsService {
       if (!enrollment.courseStartedAt) {
         enrollment.courseStartedAt = now;
       }
-      if (enrollment.courseProgressStatus === CourseProgressStatus.NOT_STARTED) {
+      if (
+        enrollment.courseProgressStatus === CourseProgressStatus.NOT_STARTED
+      ) {
         enrollment.courseProgressStatus = CourseProgressStatus.NOT_STARTED; // treat as confirmed until completed
       }
       await this.enrollmentsRepo.save(enrollment);
@@ -1460,7 +1462,12 @@ export class WorkshopsService {
           : latestReservationByWorkshop.get(workshop.id);
 
       const progress = tracking
-        ? await this.syncCourseProgressTracking(workshop, meta.source, tracking, now)
+        ? await this.syncCourseProgressTracking(
+            workshop,
+            meta.source,
+            tracking,
+            now,
+          )
         : this.resolveTrackedCourseProgress(workshop, null, now);
 
       const totalMinutes = this.getWorkshopTotalMinutes(workshop);
@@ -1612,9 +1619,15 @@ export class WorkshopsService {
             : latestReservationByWorkshop.get(workshop.id)
           : null;
 
-        const progress = meta && tracking
-          ? await this.syncCourseProgressTracking(workshop, meta.source, tracking, now)
-          : this.resolveTrackedCourseProgress(workshop, null, now);
+        const progress =
+          meta && tracking
+            ? await this.syncCourseProgressTracking(
+                workshop,
+                meta.source,
+                tracking,
+                now,
+              )
+            : this.resolveTrackedCourseProgress(workshop, null, now);
         const externalStatus = this.toExternalCourseStatus(progress.status);
         const externalStatusLabel = this.toExternalCourseStatusLabel(
           progress.status,
@@ -1622,7 +1635,7 @@ export class WorkshopsService {
 
         const completedOn =
           progress.status === CourseProgressStatus.COMPLETED
-            ? tracking?.courseCompletedAt ?? endDate
+            ? (tracking?.courseCompletedAt ?? endDate)
             : null;
         const dayStatuses = this.getCourseDayStatuses(
           workshop,
@@ -1679,7 +1692,8 @@ export class WorkshopsService {
     if (targetStatus === 'active' || targetStatus === 'confirmed') {
       items = items.filter(
         (item) =>
-          item.status === 'browse' || item._rawStatus !== CourseProgressStatus.COMPLETED,
+          item.status === 'browse' ||
+          item._rawStatus !== CourseProgressStatus.COMPLETED,
       );
     } else if (targetStatus === 'completed') {
       items = items.filter(
@@ -2831,86 +2845,101 @@ export class WorkshopsService {
     const resMap = new Map(reservations.map((r) => [r.workshopId, r]));
     const enrMap = new Map(enrollments.map((e) => [e.workshopId, e]));
 
-    const mappedCourses = await Promise.all(workshops.map(async (w) => {
-      const sortedDays = (w.days || []).sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-      );
-      const firstDate = sortedDays.length ? new Date(sortedDays[0].date) : null;
-      const lastDate = sortedDays.length
-        ? new Date(sortedDays[sortedDays.length - 1].date)
-        : null;
+    const mappedCourses = await Promise.all(
+      workshops.map(async (w) => {
+        const sortedDays = (w.days || []).sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+        );
+        const firstDate = sortedDays.length
+          ? new Date(sortedDays[0].date)
+          : null;
+        const lastDate = sortedDays.length
+          ? new Date(sortedDays[sortedDays.length - 1].date)
+          : null;
 
-      // Get Pricing/Group Size from Reservation (if exists)
-      const res = resMap.get(w.id);
-      const enr = enrMap.get(w.id);
-      const tracking = enr ?? res;
-      const trackingSource: 'enrollment' | 'reservation' = enr
-        ? 'enrollment'
-        : 'reservation';
-      const progress = tracking
-        ? await this.syncCourseProgressTracking(w, trackingSource, tracking, now)
-        : this.resolveTrackedCourseProgress(w, null, now);
-      const isCompleted = progress.status === CourseProgressStatus.COMPLETED;
-      const progressPercent =
-        progress.totalDays > 0
-          ? Math.round((progress.completedDays / progress.totalDays) * 100)
-          : 0;
-      const groupSize = res?.numberOfSeats || 1;
-      const paidAmount = res?.totalPrice || w.standardBaseRate;
+        // Get Pricing/Group Size from Reservation (if exists)
+        const res = resMap.get(w.id);
+        const enr = enrMap.get(w.id);
+        const tracking = enr ?? res;
+        const trackingSource: 'enrollment' | 'reservation' = enr
+          ? 'enrollment'
+          : 'reservation';
+        const progress = tracking
+          ? await this.syncCourseProgressTracking(
+              w,
+              trackingSource,
+              tracking,
+              now,
+            )
+          : this.resolveTrackedCourseProgress(w, null, now);
+        const isCompleted = progress.status === CourseProgressStatus.COMPLETED;
+        const progressPercent =
+          progress.totalDays > 0
+            ? Math.round((progress.completedDays / progress.totalDays) * 100)
+            : 0;
+        const groupSize = res?.numberOfSeats || 1;
+        const paidAmount = res?.totalPrice || w.standardBaseRate;
 
-      return {
-        enrollmentId: enr?.id || res?.id,
-        courseId: w.id,
-        isCompleted,
-        courseStatus: this.toExternalCourseStatus(progress.status),
-        courseStatusLabel: this.toExternalCourseStatusLabel(progress.status),
-        coverImageUrl: w.coverImageUrl,
-        tag:
-          w.deliveryMode === 'online'
-            ? 'ONLINE SELF-PACED COURSE'
-            : 'IN-PERSON WORKSHOP',
-        title: w.title,
-        startDate: firstDate
-          ? firstDate.toLocaleDateString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })
-          : 'TBA',
-        completedDate: isCompleted
-          ? (tracking?.courseCompletedAt ?? lastDate)?.toLocaleDateString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })
-          : null,
-        location:
-          w.deliveryMode === 'online'
-            ? w.webinarPlatform || 'Zoom'
-            : 'Sim Lab B',
-        groupSizeText: groupSize > 1 ? `${groupSize} people` : '1 person',
-        bookingFee: `$${paidAmount}`,
-        progress: `${progressPercent}% Complete`,
-        cmeCreditsBadge: w.offersCmeCredits ? '12.0 CME CREDITS' : null,
-        nextSessionBanner:
-          w.deliveryMode === 'online' && !isCompleted && firstDate
-            ? `Live Online Session Included: A Q&A workshop is scheduled for ${firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`
+        return {
+          enrollmentId: enr?.id || res?.id,
+          courseId: w.id,
+          isCompleted,
+          courseStatus: this.toExternalCourseStatus(progress.status),
+          courseStatusLabel: this.toExternalCourseStatusLabel(progress.status),
+          coverImageUrl: w.coverImageUrl,
+          tag:
+            w.deliveryMode === 'online'
+              ? 'ONLINE SELF-PACED COURSE'
+              : 'IN-PERSON WORKSHOP',
+          title: w.title,
+          startDate: firstDate
+            ? firstDate.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })
+            : 'TBA',
+          completedDate: isCompleted
+            ? (tracking?.courseCompletedAt ?? lastDate)?.toLocaleDateString(
+                'en-US',
+                {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                },
+              )
             : null,
-        actions: {
-          primary: isCompleted
-            ? {
-                label: 'View Course Details',
-                route: `/dashboard/courses/${w.id}/completed`,
-              }
-            : w.deliveryMode === 'online'
-              ? { label: 'Join Live Session', route: w.meetingLink }
-              : { label: 'View Syllabus', route: `/courses/${w.id}/syllabus` },
-          secondary: isCompleted
-            ? null
-            : { label: 'Add to Calendar', route: `/api/calendar/${w.id}` },
-        },
-      };
-    }));
+          location:
+            w.deliveryMode === 'online'
+              ? w.webinarPlatform || 'Zoom'
+              : 'Sim Lab B',
+          groupSizeText: groupSize > 1 ? `${groupSize} people` : '1 person',
+          bookingFee: `$${paidAmount}`,
+          progress: `${progressPercent}% Complete`,
+          cmeCreditsBadge: w.offersCmeCredits ? '12.0 CME CREDITS' : null,
+          nextSessionBanner:
+            w.deliveryMode === 'online' && !isCompleted && firstDate
+              ? `Live Online Session Included: A Q&A workshop is scheduled for ${firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`
+              : null,
+          actions: {
+            primary: isCompleted
+              ? {
+                  label: 'View Course Details',
+                  route: `/dashboard/courses/${w.id}/completed`,
+                }
+              : w.deliveryMode === 'online'
+                ? { label: 'Join Live Session', route: w.meetingLink }
+                : {
+                    label: 'View Syllabus',
+                    route: `/courses/${w.id}/syllabus`,
+                  },
+            secondary: isCompleted
+              ? null
+              : { label: 'Add to Calendar', route: `/api/calendar/${w.id}` },
+          },
+        };
+      }),
+    );
 
     const filtered = mappedCourses.filter((c) =>
       currentTab === 'completed' ? c.isCompleted : !c.isCompleted,
@@ -3104,105 +3133,193 @@ export class WorkshopsService {
 
   // ── 3.2 GENERATE PDF TICKET ──
   async generateTicketPdf(ticketId: string, res: Response) {
-    // Fetch formatted data
     const ticketData = await this.getPublicTicketDetails(ticketId);
     const data = ticketData.data;
 
-    // The URL for the QR code inside the PDF
     const frontendUrl = process.env.FRONTEND_URL || 'https://texasairway.com';
     const verificationUrl = `${frontendUrl}/verify/${ticketId}`;
     const qrBuffer = await QRCode.toBuffer(verificationUrl);
 
-    // Initialize PDF Document
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 0 });
 
-    // Set response headers for PDF download
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename=Ticket-${data.bookingInfo.bookingRef}.pdf`,
     );
 
-    // Pipe PDF to response
     doc.pipe(res);
 
-    // Build PDF Content
+    const primaryColor = '#0F4C75';
+    const accentColor = '#F9A826';
+    const textDark = '#222222';
+
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill('#F4F6F8');
+
+    const cardX = 30;
+    const cardY = 30;
+    const cardWidth = doc.page.width - 60;
+    const cardHeight = doc.page.height - 60;
+
+    doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 20).fill('#FFFFFF');
+
     doc
-      .fontSize(24)
+      .save()
+      .roundedRect(cardX, cardY, cardWidth, 180, 20)
+      .clip()
+      .rect(cardX, cardY, cardWidth, 180)
+      .fill(primaryColor)
+      .restore();
+
+    const logoX = cardX + 40;
+    const logoY = cardY + 50;
+
+    doc.circle(logoX, logoY, 22).fill('#2BB8F0');
+
+    doc.save().lineWidth(3).strokeColor('#FFFFFF');
+
+    doc
+      .moveTo(logoX, logoY - 10)
+      .lineTo(logoX, logoY + 10)
+      .stroke();
+    doc
+      .moveTo(logoX - 10, logoY)
+      .lineTo(logoX + 10, logoY)
+      .stroke();
+
+    doc.restore();
+
+    // Brand Text
+    doc
+      .fillColor('#FFFFFF')
       .font('Helvetica-Bold')
-      .text('WORKSHOP CHECK-IN TICKET', { align: 'center' });
-    doc.moveDown();
+      .fontSize(16)
+      .text('Texas Airway', logoX + 40, logoY - 10);
 
     doc
-      .fontSize(12)
       .font('Helvetica')
-      .text('Present this code at the venue entrance:', { align: 'center' });
-    doc.moveDown();
+      .fontSize(10)
+      .fillColor('#A0D8EF')
+      .text('INSTITUTE', logoX + 40, logoY + 10);
 
-    // Add QR Code Image to PDF
-    doc.image(qrBuffer, (doc.page.width - 150) / 2, doc.y, { fit: [150, 150] });
-    doc.y += 170; // Move cursor below image
-
+    // Website
     doc
+      .fillColor('#FFFFFF')
       .fontSize(14)
       .font('Helvetica-Bold')
-      .fillColor('#00B4D8')
-      .text(`Note: This ticket is valid for ${data.bookingInfo.groupSize}.`, {
+      .text('WWW.TEXASAIRWAY.COM', 0, cardY + 20, { align: 'center' });
+
+    doc.image(qrBuffer, cardX + cardWidth / 2 - 60, cardY + 70, {
+      fit: [120, 120],
+    });
+
+    doc
+      .fillColor('#FFFFFF')
+      .fontSize(32)
+      .font('Helvetica-Bold')
+      .text('E-TICKET', 0, cardY + 190, { align: 'center' });
+
+    doc.fontSize(12).text(data.course.dateRange || 'DATE TBD', {
+      align: 'center',
+    });
+
+    const eventY = cardY + 240;
+
+    doc.rect(cardX, eventY, cardWidth, 140).fill(accentColor);
+
+    doc
+      .fillColor(textDark)
+      .fontSize(24)
+      .font('Helvetica-Bold')
+      .text(data.course.title, cardX, eventY + 20, {
+        width: cardWidth,
         align: 'center',
       });
-    doc.moveDown(2);
 
-    // Details Section
+    doc.fontSize(12).font('Helvetica').text('WORKSHOP / TRAINING PROGRAM', {
+      align: 'center',
+    });
+
+    doc.moveDown(0.5);
+
+    doc.text(data.course.dateRange, {
+      align: 'center',
+    });
+
+    const dashY = eventY + 150;
+
     doc
-      .fillColor('#000000')
-      .fontSize(16)
-      .font('Helvetica-Bold')
-      .text('Ticket Details');
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown();
+      .moveTo(cardX + 10, dashY)
+      .lineTo(cardX + cardWidth - 10, dashY)
+      .dash(5, { space: 5 })
+      .strokeColor('#999')
+      .stroke()
+      .undash();
 
+    const startY = dashY + 30;
+
+    doc.fillColor(textDark);
+
+    // LEFT
     doc
       .fontSize(12)
       .font('Helvetica-Bold')
-      .text(`Ticket Reference: `, { continued: true })
+      .text('Ticket ID:', cardX + 40, startY)
       .font('Helvetica')
       .text(data.bookingInfo.bookingRef);
+
     doc
       .font('Helvetica-Bold')
-      .text(`Name: `, { continued: true })
-      .font('Helvetica')
-      .text(data.attendee.name);
-    doc
-      .font('Helvetica-Bold')
-      .text(`Course: `, { continued: true })
-      .font('Helvetica')
-      .text(data.course.title);
-    doc
-      .font('Helvetica-Bold')
-      .text(`Date: `, { continued: true })
+      .text('Date:', cardX + 40, startY + 40)
       .font('Helvetica')
       .text(data.course.dateRange);
-    doc
-      .font('Helvetica-Bold')
-      .text(`Venue: `, { continued: true })
-      .font('Helvetica')
-      .text(data.venueLogistics.currentLocation);
-    doc
-      .font('Helvetica-Bold')
-      .text(`Payment: `, { continued: true })
-      .font('Helvetica')
-      .text(data.bookingInfo.paymentStatus);
 
-    doc.moveDown(2);
+    doc
+      .font('Helvetica-Bold')
+      .text('Venue:', cardX + 40, startY + 80)
+      .font('Helvetica')
+      .text(data.venueLogistics.currentLocation, {
+        width: 200,
+      });
+
+    // RIGHT
+    doc
+      .font('Helvetica-Bold')
+      .text('Name:', cardX + 300, startY)
+      .font('Helvetica')
+      .text(data.attendee.name);
+
+    doc
+      .font('Helvetica-Bold')
+      .text('Time:', cardX + 300, startY + 40)
+      .font('Helvetica')
+      .text(data.course.dateRange || 'TBA');
+
+    doc
+      .font('Helvetica-Bold')
+      .text('Seats:', cardX + 300, startY + 80)
+      .font('Helvetica')
+      .text(`${data.bookingInfo.groupSize}`);
+
+    doc.moveDown(6);
+
+    doc
+      .fontSize(11)
+      .fillColor('#444')
+      .text(
+        `Note: This ticket is valid for ${data.bookingInfo.groupSize} attendee(s). Please present this QR code at entry.`,
+        cardX,
+        startY + 150,
+        { align: 'center', width: cardWidth },
+      );
+
+    doc.moveDown();
+
     doc
       .fontSize(10)
       .fillColor('gray')
-      .text(
-        'If you have trouble finding the venue, please email our coordinator at support@texasairway.com',
-        { align: 'center' },
-      );
+      .text('Need help? support@texasairway.com', { align: 'center' });
 
-    // Finalize PDF
     doc.end();
   }
 
@@ -3305,12 +3422,11 @@ export class WorkshopsService {
             const startDt = new Date(`${day.date}T${seg.startTime}`);
             const segmentCompleted = hasStarted && endDt < now;
             const segmentCurrent = hasStarted && startDt <= now && endDt >= now;
-            let statusText =
-              segmentCompleted
-                ? '(COMPLETED)'
-                : segmentCurrent
-                  ? '(CURRENT)'
-                  : '';
+            let statusText = segmentCompleted
+              ? '(COMPLETED)'
+              : segmentCurrent
+                ? '(CURRENT)'
+                : '';
 
             return {
               id: seg.id,
@@ -3398,16 +3514,16 @@ export class WorkshopsService {
             ? isOnline
               ? 'ONLINE REGISTRATION CONFIRMED'
               : 'Registration Confirmed'
-          : isOnline
-            ? 'ONLINE REGISTRATION CONFIRMED'
-            : 'Registration Confirmed',
+            : isOnline
+              ? 'ONLINE REGISTRATION CONFIRMED'
+              : 'Registration Confirmed',
         badgeSecondary: cme,
         title: w.title,
         description: isCompleted
           ? 'You have successfully completed this intensive simulation training.'
           : progress.status === CourseProgressStatus.NOT_STARTED
             ? 'Your registration is confirmed. Course progress will auto-update by schedule date.'
-          : w.shortBlurb,
+            : w.shortBlurb,
         dateBox: {
           dateRange: dateRangeStr,
           locationOrPlatform: isOnline
@@ -3437,9 +3553,7 @@ export class WorkshopsService {
       },
       scheduleHeader: {
         title: 'COURSE SCHEDULE',
-        badge: isCompleted
-          ? 'ALL SESSIONS COMPLETED'
-          : 'UPCOMING SESSIONS',
+        badge: isCompleted ? 'ALL SESSIONS COMPLETED' : 'UPCOMING SESSIONS',
       },
       schedule,
       sidebar: {
