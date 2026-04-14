@@ -3107,9 +3107,11 @@ export class WorkshopsService {
     // Verify ticket exists first
     await this.getPublicTicketDetails(ticketId);
 
-    // The URL the QR code will point to (e.g., your frontend validation page)
-    const frontendUrl = process.env.FRONTEND_URL || 'https://texasairway.com';
-    const verificationUrl = `${frontendUrl}/verify/${ticketId}`;
+    // The URL the QR code will point to
+    const frontendUrl =
+      process.env.FRONTEND_URL || 'https://medical-frontend-eta.vercel.app';
+
+    const verificationUrl = `${frontendUrl}/dashboard/user/ticket/${ticketId}`;
 
     try {
       // Generate QR Code as Base64 Data URL
@@ -3136,11 +3138,21 @@ export class WorkshopsService {
     const ticketData = await this.getPublicTicketDetails(ticketId);
     const data = ticketData.data;
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://texasairway.com';
-    const verificationUrl = `${frontendUrl}/verify/${ticketId}`;
-    const qrBuffer = await QRCode.toBuffer(verificationUrl);
+    const frontendUrl =
+      process.env.FRONTEND_URL || 'https://medical-frontend-eta.vercel.app';
 
-    const doc = new PDFDocument({ size: 'A4', margin: 0 });
+    // ✅ Correct QR URL
+    const verificationUrl = `${frontendUrl}/dashboard/user/ticket/${ticketId}`;
+    const qrBuffer = await QRCode.toBuffer(verificationUrl, {
+      width: 200,
+      margin: 1,
+    });
+
+    // ✅ 4x6 inches (288 x 432 points)
+    const doc = new PDFDocument({
+      size: [288, 432],
+      margin: 0,
+    });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
@@ -3150,175 +3162,172 @@ export class WorkshopsService {
 
     doc.pipe(res);
 
-    const primaryColor = '#0F4C75';
-    const accentColor = '#F9A826';
-    const textDark = '#222222';
+    // ===============================
+    // 🎨 COLORS
+    // ===============================
+    const headerBg = '#F4F6F8';
+    const eventColor = '#0F4C75';
+    const detailsColor = '#F9A826';
+    const textDark = '#222';
 
-    doc.rect(0, 0, doc.page.width, doc.page.height).fill('#F4F6F8');
+    // ===============================
+    // 🧾 PAGE BACKGROUND
+    // ===============================
+    doc.rect(0, 0, 288, 432).fill(headerBg);
 
-    const cardX = 30;
-    const cardY = 30;
-    const cardWidth = doc.page.width - 60;
-    const cardHeight = doc.page.height - 60;
+    // ===============================
+    // 🔝 HEADER (LIGHT BG)
+    // ===============================
+    const headerHeight = 120;
 
-    doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 20).fill('#FFFFFF');
+    // LOGO
+    const logoX = 30;
+    const logoY = 40;
 
+    doc.circle(logoX, logoY, 14).fill('#2BB8F0');
+
+    doc.save().lineWidth(2).strokeColor('#FFFFFF');
     doc
-      .save()
-      .roundedRect(cardX, cardY, cardWidth, 180, 20)
-      .clip()
-      .rect(cardX, cardY, cardWidth, 180)
-      .fill(primaryColor)
-      .restore();
-
-    const logoX = cardX + 40;
-    const logoY = cardY + 50;
-
-    doc.circle(logoX, logoY, 22).fill('#2BB8F0');
-
-    doc.save().lineWidth(3).strokeColor('#FFFFFF');
-
-    doc
-      .moveTo(logoX, logoY - 10)
-      .lineTo(logoX, logoY + 10)
+      .moveTo(logoX, logoY - 6)
+      .lineTo(logoX, logoY + 6)
       .stroke();
     doc
-      .moveTo(logoX - 10, logoY)
-      .lineTo(logoX + 10, logoY)
+      .moveTo(logoX - 6, logoY)
+      .lineTo(logoX + 6, logoY)
       .stroke();
-
     doc.restore();
 
-    // Brand Text
+    // TEXT
     doc
-      .fillColor('#FFFFFF')
+      .fillColor(textDark)
       .font('Helvetica-Bold')
-      .fontSize(16)
-      .text('Texas Airway', logoX + 40, logoY - 10);
+      .fontSize(10)
+      .text('Texas Airway', logoX + 25, logoY - 6);
 
     doc
       .font('Helvetica')
-      .fontSize(10)
-      .fillColor('#A0D8EF')
-      .text('INSTITUTE', logoX + 40, logoY + 10);
+      .fontSize(7)
+      .fillColor('#666')
+      .text('INSTITUTE', logoX + 25, logoY + 6);
 
-    // Website
-    doc
-      .fillColor('#FFFFFF')
-      .fontSize(14)
-      .font('Helvetica-Bold')
-      .text('WWW.TEXASAIRWAY.COM', 0, cardY + 20, { align: 'center' });
-
-    doc.image(qrBuffer, cardX + cardWidth / 2 - 60, cardY + 70, {
-      fit: [120, 120],
-    });
-
-    doc
-      .fillColor('#FFFFFF')
-      .fontSize(32)
-      .font('Helvetica-Bold')
-      .text('E-TICKET', 0, cardY + 190, { align: 'center' });
-
-    doc.fontSize(12).text(data.course.dateRange || 'DATE TBD', {
+    // WEBSITE
+    doc.fontSize(8).fillColor('#333').text('WWW.TEXASAIRWAY.COM', 0, 15, {
       align: 'center',
     });
 
-    const eventY = cardY + 240;
+    // ===============================
+    // 📱 QR CODE (FIXED POSITION)
+    // ===============================
+    doc.image(qrBuffer, 94, 60, {
+      fit: [100, 100],
+    });
 
-    doc.rect(cardX, eventY, cardWidth, 140).fill(accentColor);
+    // ===============================
+    // 🔵 EVENT SECTION (BLUE)
+    // ===============================
+    const eventY = 160;
+
+    doc.rect(0, eventY, 288, 100).fill(eventColor);
 
     doc
-      .fillColor(textDark)
-      .fontSize(24)
+      .fillColor('#FFFFFF')
       .font('Helvetica-Bold')
-      .text(data.course.title, cardX, eventY + 20, {
-        width: cardWidth,
+      .fontSize(14)
+      .text(data.course.title, 0, eventY + 20, {
         align: 'center',
       });
 
-    doc.fontSize(12).font('Helvetica').text('WORKSHOP / TRAINING PROGRAM', {
+    doc.fontSize(8).font('Helvetica').text('WORKSHOP / TRAINING PROGRAM', {
       align: 'center',
     });
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.3);
 
-    doc.text(data.course.dateRange, {
+    doc.fontSize(9).text(data.course.dateRange, {
       align: 'center',
     });
 
-    const dashY = eventY + 150;
+    // ===============================
+    // 🟧 DETAILS SECTION (ORANGE)
+    // ===============================
+    const detailsY = eventY + 100;
 
-    doc
-      .moveTo(cardX + 10, dashY)
-      .lineTo(cardX + cardWidth - 10, dashY)
-      .dash(5, { space: 5 })
-      .strokeColor('#999')
-      .stroke()
-      .undash();
-
-    const startY = dashY + 30;
+    doc.rect(0, detailsY, 288, 140).fill(detailsColor);
 
     doc.fillColor(textDark);
 
+    // ✂️ DASHED LINE
+    doc
+      .moveTo(20, detailsY + 10)
+      .lineTo(268, detailsY + 10)
+      .dash(3, { space: 3 })
+      .strokeColor('#888')
+      .stroke()
+      .undash();
+
+    const startY = detailsY + 20;
+
     // LEFT
     doc
-      .fontSize(12)
+      .fontSize(8)
       .font('Helvetica-Bold')
-      .text('Ticket ID:', cardX + 40, startY)
+      .text('Ticket ID:', 20, startY)
       .font('Helvetica')
       .text(data.bookingInfo.bookingRef);
 
     doc
       .font('Helvetica-Bold')
-      .text('Date:', cardX + 40, startY + 40)
+      .text('Date:', 20, startY + 25)
       .font('Helvetica')
       .text(data.course.dateRange);
 
     doc
       .font('Helvetica-Bold')
-      .text('Venue:', cardX + 40, startY + 80)
+      .text('Venue:', 20, startY + 50)
       .font('Helvetica')
       .text(data.venueLogistics.currentLocation, {
-        width: 200,
+        width: 100,
       });
 
     // RIGHT
     doc
       .font('Helvetica-Bold')
-      .text('Name:', cardX + 300, startY)
+      .text('Name:', 150, startY)
       .font('Helvetica')
       .text(data.attendee.name);
 
     doc
       .font('Helvetica-Bold')
-      .text('Time:', cardX + 300, startY + 40)
+      .text('Time:', 150, startY + 25)
       .font('Helvetica')
       .text(data.course.dateRange || 'TBA');
 
     doc
       .font('Helvetica-Bold')
-      .text('Seats:', cardX + 300, startY + 80)
+      .text('Seats:', 150, startY + 50)
       .font('Helvetica')
-      .text(`${data.bookingInfo.groupSize}`);
+      .text(`${data.bookingInfo.groupSize} People`);
 
-    doc.moveDown(6);
-
+    // ===============================
+    // 📌 NOTE
+    // ===============================
     doc
-      .fontSize(11)
-      .fillColor('#444')
+      .fontSize(7)
+      .fillColor('#333')
       .text(
-        `Note: This ticket is valid for ${data.bookingInfo.groupSize} attendee(s). Please present this QR code at entry.`,
-        cardX,
-        startY + 150,
-        { align: 'center', width: cardWidth },
+        `Note: This ticket is valid for ${data.bookingInfo.groupSize} attendee(s).`,
+        20,
+        detailsY + 110,
+        { align: 'center', width: 248 },
       );
 
-    doc.moveDown();
-
     doc
-      .fontSize(10)
-      .fillColor('gray')
-      .text('Need help? support@texasairway.com', { align: 'center' });
+      .fontSize(6)
+      .fillColor('#555')
+      .text('Need help? support@texasairway.com', 20, detailsY + 125, {
+        align: 'center',
+        width: 248,
+      });
 
     doc.end();
   }
