@@ -5,6 +5,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { WorkshopsService } from './workshops.service';
@@ -14,6 +15,7 @@ import {
   ListMyCoursesLoggedQueryDto,
   ListMyCoursesQueryDto,
 } from './dto/list-my-courses.query.dto';
+import type { Response } from 'express';
 
 @Controller('workshops/private')
 export class PrivateWorkshopsController {
@@ -35,9 +37,22 @@ export class PrivateWorkshopsController {
     return this.workshopsService.getMyCoursesLogged(req.user.id, query);
   }
 
-  @Get('tickets/:ticketId')
-  getPublicTicketDetails(@Param('ticketId') ticketId: string) {
-    return this.workshopsService.getPublicTicketDetails(ticketId);
+  // @Get('tickets/:ticketId')
+  // getPublicTicketDetails(@Param('ticketId') ticketId: string) {
+  //   return this.workshopsService.getPublicTicketDetails(ticketId);
+  // }
+
+  // 2. Get QR Code Data URL
+  @Get('tickets/:id/qr')
+  getTicketQrCode(@Param('id') ticketId: string) {
+    return this.workshopsService.getTicketQrCode(ticketId);
+  }
+
+  // 3. Download PDF Ticket
+  @Get('tickets/:id/download')
+  downloadTicketPdf(@Param('id') ticketId: string, @Res() res: Response) {
+    // Note: We don't return anything directly here because the service pipes the PDF buffer to the response stream.
+    this.workshopsService.generateTicketPdf(ticketId, res);
   }
 
   @Get('my-courses/:courseId')
