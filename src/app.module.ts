@@ -25,6 +25,7 @@ import { ContactUsModule } from './contact-us/contact-us.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CartModule } from './cart/cart.module';
+import { WishlistModule } from './wishlist/wishlist.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { CartModule } from './cart/cart.module';
     DashboardModule,
     NotificationsModule,
     CartModule,
+    WishlistModule,
   ],
 })
 export class AppModule {}
