@@ -1398,6 +1398,9 @@ curl --location 'http://localhost:3000/workshops/student/my-courses?status=archi
 }
 ```
 
+
+
+
 ### Success response (200) - browse courses (unenrolled)
 ```json
 {
