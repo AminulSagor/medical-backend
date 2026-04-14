@@ -42,17 +42,22 @@ export class PublicWorkshopsController {
     return this.service.getMyCourses(userId, query);
   }
 
-    @Post('student/my-courses/:courseId/start')
-    @UseGuards(AuthGuard('jwt'))
-    startMyCourse(@Request() req: any, @Param('courseId') courseId: string) {
-        const userId = req.user.id;
-        return this.service.startMyCourse(userId, courseId);
-    }
+  @Get('public/featured')
+  getFeaturedCourse() {
+    return this.service.getFeaturedCourse();
+  }
 
-    @Get()
-    listPublic(@Query() query: PublicListWorkshopsQueryDto) {
-        return this.service.listPublic(query);
-    }
+  @Post('student/my-courses/:courseId/start')
+  @UseGuards(AuthGuard('jwt'))
+  startMyCourse(@Request() req: any, @Param('courseId') courseId: string) {
+    const userId = req.user.id;
+    return this.service.startMyCourse(userId, courseId);
+  }
+
+  @Get()
+  listPublic(@Query() query: PublicListWorkshopsQueryDto) {
+    return this.service.listPublic(query);
+  }
 
   @Get(':id')
   getWorkshopById(@Param('id') id: string) {
