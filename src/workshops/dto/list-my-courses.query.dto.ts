@@ -30,8 +30,8 @@ export enum CourseSort {
 
 export class ListMyCoursesQueryDto {
   @IsOptional()
-  @IsIn(['active', 'not_started', 'in_progress', 'completed', 'browse'])
-  status?: 'active' | 'not_started' | 'in_progress' | 'completed' | 'browse' =
+  @IsIn(['active', 'confirmed', 'completed', 'browse'])
+  status?: 'active' | 'confirmed' | 'completed' | 'browse' =
     'active';
 
   @IsOptional()
