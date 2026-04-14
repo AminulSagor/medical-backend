@@ -53,6 +53,7 @@ import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
 import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
 import { User } from 'src/users/entities/user.entity';
+import * as path from 'path';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -3298,45 +3299,59 @@ export class WorkshopsService {
     const detailsColor = '#F9A826';
     const textDark = '#222';
 
+    // File path for your logo
+    // Note: If PDFKit fails on the SVG, convert your logo to a PNG and update this extension.
+    const logoPath = path.join(
+      process.cwd(),
+      'src',
+      'common',
+      'assets',
+      'Texas_Airway.svg',
+    );
+
+    // Page Background
     doc.rect(0, 0, 288, 432).fill(headerBg);
 
-    const logoX = 30;
-    const logoY = 40;
+    // ==========================================
+    // LOGO
+    // ==========================================
+    const logoY = 20;
 
-    doc.circle(logoX, logoY, 14).fill('#2BB8F0');
+    try {
+      // Center the image: (PageWidth / 2) - (ImageWidth / 2)
+      // 288 / 2 = 144. If image width is 120, x = 144 - 60 = 84
+      doc.image(logoPath, 84, logoY, { width: 120 });
+    } catch (err) {
+      // Fallback text if image loading fails
+      doc
+        .fillColor(eventColor)
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .text('Texas Airway', 0, logoY + 10, { align: 'center', width: 288 });
+      doc
+        .fillColor('#666666')
+        .font('Helvetica')
+        .fontSize(8)
+        .text('INSTITUTE', 0, logoY + 25, {
+          align: 'center',
+          width: 288,
+          characterSpacing: 2,
+        });
+    }
 
-    doc.save().lineWidth(2).strokeColor('#FFFFFF');
-    doc
-      .moveTo(logoX, logoY - 6)
-      .lineTo(logoX, logoY + 6)
-      .stroke();
-    doc
-      .moveTo(logoX - 6, logoY)
-      .lineTo(logoX + 6, logoY)
-      .stroke();
-    doc.restore();
-
-    doc
-      .fillColor(textDark)
-      .font('Helvetica-Bold')
-      .fontSize(10)
-      .text('Texas Airway', logoX + 25, logoY - 6);
-
-    doc
-      .font('Helvetica')
-      .fontSize(7)
-      .fillColor('#666')
-      .text('INSTITUTE', logoX + 25, logoY + 6);
-
-    doc.fontSize(8).fillColor('#333').text('WWW.TEXASAIRWAY.COM', 0, 15, {
-      align: 'center',
-    });
-
-    doc.image(qrBuffer, 94, 60, {
+    // ==========================================
+    // QR CODE
+    // ==========================================
+    // Pushed down slightly to accommodate the logo
+    doc.image(qrBuffer, 94, 70, {
       fit: [100, 100],
     });
 
-    const eventY = 160;
+    // ==========================================
+    // EVENT SECTION
+    // ==========================================
+    // Pushed down slightly to give the QR code breathing room
+    const eventY = 175;
 
     doc.rect(0, eventY, 288, 100).fill(eventColor);
 
@@ -3346,21 +3361,28 @@ export class WorkshopsService {
       .fontSize(14)
       .text(data.course.title, 0, eventY + 20, {
         align: 'center',
+        width: 288,
       });
 
     doc.fontSize(8).font('Helvetica').text('WORKSHOP / TRAINING PROGRAM', {
       align: 'center',
+      width: 288,
     });
 
     doc.moveDown(0.3);
 
     doc.fontSize(9).text(data.course.dateRange, {
       align: 'center',
+      width: 288,
     });
 
+    // ==========================================
+    // DETAILS SECTION
+    // ==========================================
     const detailsY = eventY + 100;
 
-    doc.rect(0, detailsY, 288, 140).fill(detailsColor);
+    // Extend the details box a bit lower to reach the bottom of the ticket nicely
+    doc.rect(0, detailsY, 288, 157).fill(detailsColor);
     doc.fillColor(textDark);
 
     doc
@@ -3395,7 +3417,7 @@ export class WorkshopsService {
         width: 100,
       });
 
-    // RIGHT COLUMN - Group Attendees Instead of Single Booker
+    // RIGHT COLUMN - Group Attendees
     doc.font('Helvetica-Bold').text('Attendees:', 150, startY);
 
     doc.font('Helvetica');
@@ -4227,11 +4249,6 @@ export class WorkshopsService {
     const data = ticketData.data;
 
     const courseTitle = data.course.title;
-    const completionDate = new Date().toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
 
     const attendeesToCertify = [data.attendee.name];
     if (data.groupAttendees && data.groupAttendees.length > 0) {
@@ -4258,6 +4275,23 @@ export class WorkshopsService {
     const primaryColor = '#0F4C75';
     const secondaryColor = '#F9A826';
     const textColor = '#333333';
+
+    // File paths for your assets
+    // Note: If PDFKit fails on the SVG, convert your logo to a PNG and update this extension.
+    const logoPath = path.join(
+      process.cwd(),
+      'src',
+      'common',
+      'assets',
+      'Texas_Airway.svg',
+    );
+    const signaturePath = path.join(
+      process.cwd(),
+      'src',
+      'common',
+      'assets',
+      'Dr_Sarah_Jenkins.png',
+    );
 
     for (const attendeeName of attendeesToCertify) {
       doc.addPage({
@@ -4303,50 +4337,59 @@ export class WorkshopsService {
         )
         .fill(secondaryColor);
 
+      // ==========================================
       // LOGO / HEADER
+      // ==========================================
       const logoY = 60;
-      doc.circle(pageWidth / 2, logoY + 15, 20).fill('#2BB8F0');
-      doc.save().lineWidth(3).strokeColor('#FFFFFF');
-      doc
-        .moveTo(pageWidth / 2, logoY + 5)
-        .lineTo(pageWidth / 2, logoY + 25)
-        .stroke();
-      doc
-        .moveTo(pageWidth / 2 - 10, logoY + 15)
-        .lineTo(pageWidth / 2 + 10, logoY + 15)
-        .stroke();
-      doc.restore();
 
-      doc
-        .fillColor(primaryColor)
-        .font('Helvetica-Bold')
-        .fontSize(20)
-        .text('Texas Airway', 0, logoY + 45, { align: 'center' });
-      doc
-        .fillColor('#666666')
-        .font('Helvetica')
-        .fontSize(10)
-        .text('INSTITUTE', 0, logoY + 68, {
-          align: 'center',
-          characterSpacing: 4,
-        });
+      try {
+        // Center the image: (PageWidth / 2) - (ImageWidth / 2)
+        doc.image(logoPath, pageWidth / 2 - 75, logoY, { width: 150 });
+      } catch (err) {
+        // Fallback text if image loading fails
+        doc
+          .fillColor(primaryColor)
+          .font('Helvetica-Bold')
+          .fontSize(20)
+          .text('Texas Airway', 0, logoY + 20, {
+            align: 'center',
+            width: pageWidth,
+          });
+        doc
+          .fillColor('#666666')
+          .font('Helvetica')
+          .fontSize(10)
+          .text('INSTITUTE', 0, logoY + 45, {
+            align: 'center',
+            width: pageWidth,
+            characterSpacing: 4,
+          });
+      }
+
+      // ==========================================
+      // CENTERED TEXT BLOCK
+      // ==========================================
+      // By starting X at 0 and setting width to pageWidth, PDFKit perfectly centers the text.
 
       // TITLE
       doc
         .fillColor(textColor)
         .font('Helvetica-Bold')
         .fontSize(36)
-        .text('CERTIFICATE', 0, 180, { align: 'center', characterSpacing: 2 });
-      doc
-        .font('Helvetica')
-        .fontSize(18)
-        .text('OF COMPLETION', 0, 220, {
+        .text('CERTIFICATE', 0, 160, {
           align: 'center',
-          characterSpacing: 1,
+          width: pageWidth,
+          characterSpacing: 2,
         });
+      doc.font('Helvetica').fontSize(18).text('OF COMPLETION', 0, 200, {
+        align: 'center',
+        width: pageWidth,
+        characterSpacing: 1,
+      });
+
       doc
-        .moveTo(pageWidth / 2 - 50, 250)
-        .lineTo(pageWidth / 2 + 50, 250)
+        .moveTo(pageWidth / 2 - 50, 230)
+        .lineTo(pageWidth / 2 + 50, 230)
         .lineWidth(2)
         .strokeColor(secondaryColor)
         .stroke();
@@ -4356,12 +4399,15 @@ export class WorkshopsService {
         .fillColor('#555555')
         .font('Times-Italic')
         .fontSize(16)
-        .text('This is to certify that', 0, 280, { align: 'center' });
+        .text('This is to certify that', 0, 260, {
+          align: 'center',
+          width: pageWidth,
+        });
       doc
         .fillColor(primaryColor)
         .font('Times-BoldItalic')
         .fontSize(42)
-        .text(attendeeName, 0, 310, { align: 'center' });
+        .text(attendeeName, 0, 290, { align: 'center', width: pageWidth });
 
       // COURSE INFO
       doc
@@ -4371,35 +4417,39 @@ export class WorkshopsService {
         .text(
           'has successfully completed the intensive training course on',
           0,
-          380,
-          { align: 'center' },
+          360,
+          { align: 'center', width: pageWidth },
         );
       doc
         .fillColor(textColor)
         .font('Helvetica-Bold')
         .fontSize(22)
-        .text(courseTitle, 60, 415, {
-          align: 'center',
-          width: pageWidth - 120,
-        });
+        .text(courseTitle, 0, 395, { align: 'center', width: pageWidth });
 
-      // ✅ FIX: FOOTER - Moved up by decreasing footerY and unchained the signature texts
-      const footerY = pageHeight - 140;
+      // ==========================================
+      // FOOTER
+      // ==========================================
+      const footerY = pageHeight - 120;
 
+      // Left Side: Removed Date Issued
       doc
         .fillColor('#777777')
         .font('Helvetica-Bold')
         .fontSize(10)
-        .text('Certificate ID:', 80, footerY)
+        .text('Certificate ID:', 80, footerY + 20) // adjusted Y slightly to align better with right side
         .font('Helvetica')
-        .text(data.bookingInfo.bookingRef, 80, footerY + 15)
-        .font('Helvetica-Bold')
-        .text('Date Issued:', 80, footerY + 35)
-        .font('Helvetica')
-        .text(completionDate, 80, footerY + 50);
+        .text(data.bookingInfo.bookingRef, 80, footerY + 35);
 
-      // SIGNATURE
+      // Right Side: Signature
       const signatureX = pageWidth - 250;
+
+      try {
+        // Place signature image above the line
+        doc.image(signaturePath, signatureX + 10, footerY - 20, { width: 150 });
+      } catch (err) {
+        // Ignore if signature image doesn't exist
+      }
+
       doc
         .moveTo(signatureX, footerY + 35)
         .lineTo(signatureX + 170, footerY + 35)
@@ -4407,7 +4457,6 @@ export class WorkshopsService {
         .strokeColor(textColor)
         .stroke();
 
-      // Placed explicitly without chaining to avoid auto-margin pushdowns
       doc
         .fillColor(textColor)
         .font('Helvetica-Bold')
