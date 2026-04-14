@@ -1585,6 +1585,7 @@ export class WorkshopsService {
       });
 
       const enrolledSet = new Set(enrolledWorkshopIds);
+      // Ensure browse ONLY shows workshops not enrolled by the user
       workshops = workshops.filter((workshop) => !enrolledSet.has(workshop.id));
     } else {
       if (enrolledWorkshopIds.length === 0) {
@@ -1614,11 +1615,15 @@ export class WorkshopsService {
         const reservation = latestReservationByWorkshop.get(workshop.id);
         const enrolledAt = workshopMeta.get(workshop.id)?.enrolledAt ?? null;
 
-        // Fetch full facility details dynamically
+        // ✅ FIX: Filter out 'online' or invalid UUIDs to prevent Postgres crash
+        const validFacilityIds = (workshop.facilityIds || []).filter(
+          (id) => id && id.toLowerCase() !== 'online' && id.length === 36, // basic UUID length check
+        );
+
         const facilities =
-          workshop.facilityIds?.length > 0
+          validFacilityIds.length > 0
             ? await this.facilitiesRepo.find({
-                where: { id: In(workshop.facilityIds) },
+                where: { id: In(validFacilityIds) },
               })
             : [];
 
@@ -1632,8 +1637,8 @@ export class WorkshopsService {
           return {
             workshopId: workshop.id,
             title: workshop.title,
-            shortBlurb: workshop.shortBlurb ?? null, // Added
-            standardBaseRate: workshop.standardBaseRate, // Added
+            shortBlurb: workshop.shortBlurb ?? null,
+            standardBaseRate: workshop.standardBaseRate,
             courseType: workshop.deliveryMode,
             workshopPhoto: workshop.coverImageUrl ?? null,
             status: 'browse',
@@ -1659,7 +1664,7 @@ export class WorkshopsService {
               data: browseDayStatuses,
             },
             reservation: null,
-            facilities, // Added full facility details
+            facilities,
             createdAt: workshop.createdAt,
           };
         }
@@ -1680,6 +1685,7 @@ export class WorkshopsService {
                 now,
               )
             : this.resolveTrackedCourseProgress(workshop, null, now);
+
         const externalStatus = this.toExternalCourseStatus(progress.status);
         const externalStatusLabel = this.toExternalCourseStatusLabel(
           progress.status,
@@ -1689,6 +1695,7 @@ export class WorkshopsService {
           progress.status === CourseProgressStatus.COMPLETED
             ? (tracking?.courseCompletedAt ?? endDate)
             : null;
+
         const dayStatuses = this.getCourseDayStatuses(
           workshop,
           progress.status,
@@ -1698,8 +1705,8 @@ export class WorkshopsService {
         return {
           workshopId: workshop.id,
           title: workshop.title,
-          shortBlurb: workshop.shortBlurb ?? null, // Added
-          standardBaseRate: workshop.standardBaseRate, // Added
+          shortBlurb: workshop.shortBlurb ?? null,
+          standardBaseRate: workshop.standardBaseRate,
           courseType: workshop.deliveryMode,
           workshopPhoto: workshop.coverImageUrl ?? null,
           status: externalStatus,
@@ -1737,7 +1744,7 @@ export class WorkshopsService {
                 totalPrice: reservation.totalPrice,
               }
             : null,
-          facilities, // Added full facility details
+          facilities,
           createdAt: workshop.createdAt,
           _rawStatus: progress.status,
         };
@@ -1805,6 +1812,76 @@ export class WorkshopsService {
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // ── 6. GET FEATURED COURSE API ──
+  async getFeaturedCourse() {
+    // Find the single latest published workshop
+    const workshop = await this.workshopsRepo.findOne({
+      where: { status: WorkshopStatus.PUBLISHED },
+      order: { createdAt: 'DESC' }, // Last created
+      relations: ['days', 'days.segments'],
+    });
+
+    if (!workshop) {
+      return {
+        message: 'No featured course available.',
+        data: null,
+      };
+    }
+
+    // Calculate dates
+    const { startDate, endDate } = this.getWorkshopDateRange(workshop);
+
+    let dateRangeStr = 'TBA';
+    if (startDate && endDate) {
+      const firstMonth = startDate.toLocaleDateString('en-US', {
+        month: 'short',
+      });
+      const lastMonth = endDate.toLocaleDateString('en-US', { month: 'short' });
+      dateRangeStr =
+        firstMonth === lastMonth
+          ? `${firstMonth} ${startDate.getDate()} - ${endDate.getDate()}`
+          : `${firstMonth} ${startDate.getDate()} - ${lastMonth} ${endDate.getDate()}`;
+    }
+
+    // Safely fetch facility to show location name
+    const validFacilityIds = (workshop.facilityIds || []).filter(
+      (id) => id && id.toLowerCase() !== 'online' && id.length === 36,
+    );
+
+    let locationName =
+      workshop.deliveryMode === 'online' ? 'Online Course' : 'Venue TBA';
+
+    if (validFacilityIds.length > 0) {
+      const facilities = await this.facilitiesRepo.find({
+        where: { id: In(validFacilityIds) },
+        take: 1,
+      });
+      if (facilities.length > 0) {
+        locationName = facilities[0].name;
+      }
+    }
+
+    // Calculate total hours
+    const totalMinutes = this.getWorkshopTotalMinutes(workshop);
+    const totalHours = Number((totalMinutes / 60).toFixed(1));
+
+    return {
+      message: 'Featured course fetched successfully',
+      data: {
+        id: workshop.id,
+        title: workshop.title,
+        shortBlurb: workshop.shortBlurb,
+        courseType: workshop.deliveryMode,
+        coverImageUrl: workshop.coverImageUrl,
+        dateRange: dateRangeStr,
+        location: locationName,
+        cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
+        offersCmeCredits: workshop.offersCmeCredits,
+        isFeatured: true,
       },
     };
   }
@@ -4099,7 +4176,7 @@ export class WorkshopsService {
         google: `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startDateStr}T090000Z/${endDateStr}T170000Z&details=${details}&location=${location}`,
         outlook: `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${title}&startdt=${firstDay.date}T09:00:00&enddt=${lastDay.date}T17:00:00&body=${details}&location=${location}`,
         yahoo: `https://calendar.yahoo.com/?v=60&view=d&type=20&title=${title}&st=${startDateStr}T090000Z&et=${endDateStr}T170000Z&desc=${details}&in_loc=${location}`,
-        appleOrIcs: `/api/workshops/${courseId}/download-ics`,
+        appleOrIcs: `/workshops/private/my-courses/${courseId}/calendar/download-ics`,
       },
     };
   }
