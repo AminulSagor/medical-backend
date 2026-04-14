@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Workshop } from './workshop.entity';
 import { User } from 'src/users/entities/user.entity';
+import { CourseProgressStatus } from './course-progress-status.enum';
 
 @Entity('workshop_enrollments')
 @Index(['workshopId', 'userId'], { unique: true })
@@ -25,6 +26,25 @@ export class WorkshopEnrollment {
 
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: CourseProgressStatus,
+    default: CourseProgressStatus.NOT_STARTED,
+  })
+  courseProgressStatus: CourseProgressStatus;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  courseStartedAt?: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  courseCompletedAt?: Date;
+
+  @Column({ type: 'boolean', default: false })
+  cmeCreditsAwarded: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cmeCreditsAwardedAt?: Date;
 
   @ManyToOne(() => Workshop, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'workshopId' })

@@ -134,22 +134,26 @@ Write-Host "13. Reset Password [$($r.statusCode)]: $($r.body.message)"
 Write-Host "`n--- PHASE 2: ADMIN ENDPOINTS ---" -ForegroundColor Yellow
 
 # 14. Create Category 
-$r = Api "POST" "$base/admin/categories" "{`"name`":`"Surgical Instruments $ts`"}" $adminJwt
+$r = Api "POST" "$base/admin/product-categories" "{`"name`":`"Surgical Instruments $ts`"}" $adminJwt
 $allResults["14_create_category"] = $r
 $categoryId = if ($r.body.id) { $r.body.id } elseif ($r.body.data.id) { $r.body.data.id } else { $null }
 Write-Host "14. Create Category [$($r.statusCode)]: ID=$categoryId"
 
 # 15. List Categories
-$r = Api "GET" "$base/admin/categories" $null $adminJwt
+$r = Api "GET" "$base/admin/product-categories" $null $adminJwt
 $allResults["15_list_categories"] = $r
 if (-not $categoryId) {
-    $cats = if ($r.body -is [array]) { $r.body } else { $r.body.data }
+    $cats = $null
+    if ($r.body -is [array]) { $cats = $r.body }
+    elseif ($r.body.data -is [array]) { $cats = $r.body.data }
+    elseif ($r.body.items) { $cats = $r.body.items }
+    elseif ($r.body.data.items) { $cats = $r.body.data.items }
     if ($cats -and $cats.Count -gt 0) { $categoryId = $cats[0].id }
 }
 Write-Host "15. List Categories [$($r.statusCode)]: Using=$categoryId"
 
 # 16. Create Facility
-$r = Api "POST" "$base/admin/facilities" "{`"name`":`"City Medical Hospital $ts`",`"address`":`"123 Main St, Medical City, MC 12345`"}" $adminJwt
+$r = Api "POST" "$base/admin/facilities" "{`"name`":`"City Medical Hospital $ts`",`"roomNumber`":`"OR-12`",`"physicalAddress`":`"123 Main St, Medical City, MC 12345`",`"capacity`":40}" $adminJwt
 $allResults["16_create_facility"] = $r
 $facilityId = if ($r.body.id) { $r.body.id } elseif ($r.body.data.id) { $r.body.data.id } else { $null }
 Write-Host "16. Create Facility [$($r.statusCode)]: ID=$facilityId"
@@ -158,7 +162,11 @@ Write-Host "16. Create Facility [$($r.statusCode)]: ID=$facilityId"
 $r = Api "GET" "$base/admin/facilities" $null $adminJwt
 $allResults["17_list_facilities"] = $r
 if (-not $facilityId) {
-    $facs = if ($r.body -is [array]) { $r.body } else { $r.body.data }
+    $facs = $null
+    if ($r.body -is [array]) { $facs = $r.body }
+    elseif ($r.body.data -is [array]) { $facs = $r.body.data }
+    elseif ($r.body.items) { $facs = $r.body.items }
+    elseif ($r.body.data.items) { $facs = $r.body.data.items }
     if ($facs -and $facs.Count -gt 0) { $facilityId = $facs[0].id }
 }
 Write-Host "17. List Facilities [$($r.statusCode)]: Using=$facilityId"
@@ -720,7 +728,7 @@ foreach ($key in ($allResults.Keys | Sort-Object)) {
         response = $r.body
     }
 }
-$outputData | ConvertTo-Json -Depth 15 | Out-File -FilePath "e:\ShafaCode\medical_backend\test_results.json" -Encoding UTF8
+$outputData | ConvertTo-Json -Depth 15 | Out-File -FilePath "e:\ShafaCode\Backend\medical_backend\test_results.json" -Encoding UTF8
 
 # Save IDs
 [ordered]@{
@@ -744,6 +752,6 @@ $outputData | ConvertTo-Json -Depth 15 | Out-File -FilePath "e:\ShafaCode\medica
     workshopId = $workshopId
     onlineWorkshopId = $onlineWsId
     orderSummaryId = $orderSummaryId
-} | ConvertTo-Json -Depth 5 | Out-File -FilePath "e:\ShafaCode\medical_backend\test_ids.json" -Encoding UTF8
+} | ConvertTo-Json -Depth 5 | Out-File -FilePath "e:\ShafaCode\Backend\medical_backend\test_ids.json" -Encoding UTF8
 
 Write-Host "`nResults saved to test_results.json and test_ids.json" -ForegroundColor Green

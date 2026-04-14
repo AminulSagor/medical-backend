@@ -79,6 +79,7 @@ import {
 import { Workshop } from './workshop.entity';
 import { User } from './../../users/entities/user.entity';
 import { WorkshopAttendee } from './workshop-attendee.entity';
+import { CourseProgressStatus } from './course-progress-status.enum';
 
 export enum ReservationStatus {
   PENDING = 'pending',
@@ -117,6 +118,25 @@ export class WorkshopReservation {
 
   @Column({ type: 'text', nullable: true })
   notes?: string;
+
+  @Column({
+    type: 'enum',
+    enum: CourseProgressStatus,
+    default: CourseProgressStatus.NOT_STARTED,
+  })
+  courseProgressStatus: CourseProgressStatus;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  courseStartedAt?: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  courseCompletedAt?: Date;
+
+  @Column({ type: 'boolean', default: false })
+  cmeCreditsAwarded: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cmeCreditsAwardedAt?: Date;
 
   @Column({ type: 'varchar', length: 20, default: 'single' })
   bookingType: 'single' | 'group';
