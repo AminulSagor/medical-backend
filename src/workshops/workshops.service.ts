@@ -2189,8 +2189,12 @@ export class WorkshopsService {
 
     const stripe = Stripe(stripeSecretKey);
 
+    // Use first attendee's email for Stripe checkout pre-fill
+    const customerEmail = orderSummary.attendees?.[0]?.email || undefined;
+
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
+      customer_email: customerEmail,
       line_items: [
         {
           quantity: orderSummary.numberOfSeats,

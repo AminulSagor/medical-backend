@@ -40,6 +40,47 @@ export class CartService {
     }
   }
 
+  async updateCartItem(userId: string, productId: string, quantity: number) {
+    const cart = await this.getOrCreateCart(userId);
+
+    const cartItem = await this.cartItemRepo.findOne({
+      where: { cartId: cart.id, productId },
+    });
+
+    if (!cartItem) {
+      throw new NotFoundException('Item not found in cart');
+    }
+
+    const product = await this.productRepo.findOne({
+      where: { id: productId, isActive: true },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found or inactive');
+    }
+
+    if (!product.backorder && quantity > product.stockQuantity) {
+      throw new BadRequestException(
+        `Only ${product.stockQuantity} items available in stock.`,
+      );
+    }
+
+    cartItem.quantity = quantity;
+    await this.cartItemRepo.save(cartItem);
+
+    return this.getCart(userId);
+  }
+
+  async removeCartItem(userId: string, productId: string) {
+    const cart = await this.cartRepo.findOne({ where: { userId } });
+
+    if (cart) {
+      await this.cartItemRepo.delete({ cartId: cart.id, productId });
+    }
+
+    return this.getCart(userId);
+  }
+
   async addToCart(userId: string, dto: AddToCartDto) {
     // 1. Verify the product exists and is active
     const product = await this.productRepo.findOne({
