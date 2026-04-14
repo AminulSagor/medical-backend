@@ -260,7 +260,6 @@ export class WorkshopsService {
     const hasStarted =
       Boolean(tracking?.courseStartedAt) ||
       hasCalendarStarted ||
-      initialStatus === CourseProgressStatus.IN_PROGRESS ||
       initialStatus === CourseProgressStatus.COMPLETED;
 
     if (!hasStarted && initialStatus === CourseProgressStatus.NOT_STARTED) {
@@ -286,7 +285,7 @@ export class WorkshopsService {
     }
 
     return {
-      status: CourseProgressStatus.IN_PROGRESS,
+      status: CourseProgressStatus.NOT_STARTED, // treat as confirmed until completed
       statusLabel: 'Registration Confirmed',
       totalDays,
       completedDays,
@@ -408,7 +407,7 @@ export class WorkshopsService {
         enrollment.courseStartedAt = now;
       }
       if (enrollment.courseProgressStatus === CourseProgressStatus.NOT_STARTED) {
-        enrollment.courseProgressStatus = CourseProgressStatus.IN_PROGRESS;
+        enrollment.courseProgressStatus = CourseProgressStatus.NOT_STARTED; // treat as confirmed until completed
       }
       await this.enrollmentsRepo.save(enrollment);
       return { source: 'enrollment', startedAt: enrollment.courseStartedAt };
@@ -422,7 +421,7 @@ export class WorkshopsService {
       reservation.courseStartedAt = now;
     }
     if (reservation.courseProgressStatus === CourseProgressStatus.NOT_STARTED) {
-      reservation.courseProgressStatus = CourseProgressStatus.IN_PROGRESS;
+      reservation.courseProgressStatus = CourseProgressStatus.NOT_STARTED; // treat as confirmed until completed
     }
     await this.reservationsRepo.save(reservation);
     return { source: 'reservation', startedAt: reservation.courseStartedAt };
@@ -3211,11 +3210,14 @@ export class WorkshopsService {
         })),
         faculty: (w.faculty ?? []).map((f) => ({
           id: f.id,
-          fullName: f.fullName,
-          title: f.title,
-          role: f.role,
-          expertise: f.expertise,
-          profilePhotoUrl: f.profilePhotoUrl,
+          firstName: f.firstName,
+          lastName: f.lastName,
+          primaryClinicalRole: f.primaryClinicalRole,
+          medicalDesignation: f.medicalDesignation,
+          institutionOrHospital: f.institutionOrHospital,
+          npiNumber: f.npiNumber,
+          assignedRole: f.assignedRole,
+          imageUrl: f.imageUrl,
         })),
         days: (w.days ?? []).map((day) => ({
           id: day.id,
