@@ -19,6 +19,7 @@ import { UsersModule } from '../users/users.module';
 import { WorkshopRefund } from './entities/workshop-refund.entity';
 import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
 import { PrivateWorkshopsController } from './private-workshops.controller';
+import { User } from 'src/users/entities/user.entity';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { PrivateWorkshopsController } from './private-workshops.controller';
       WorkshopEnrollment,
       Facility,
       Faculty,
+      User,
     ]),
   ],
   controllers: [

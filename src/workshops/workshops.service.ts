@@ -46,6 +46,13 @@ import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { Response } from 'express';
 import { CourseProgressStatus } from './entities/course-progress-status.enum';
+import * as ics from 'ics';
+import { EventAttributes } from 'ics';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { ConfigService } from '@nestjs/config';
+import { Logger } from '@nestjs/common';
+import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
+import { User } from 'src/users/entities/user.entity';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -77,6 +84,8 @@ function parse12hToTime(v: string): string {
 
 @Injectable()
 export class WorkshopsService {
+  private readonly logger = new Logger(WorkshopsService.name);
+  private readonly ses: SESv2Client;
   constructor(
     @InjectRepository(Workshop) private workshopsRepo: Repository<Workshop>,
     @InjectRepository(WorkshopReservation)
@@ -95,7 +104,33 @@ export class WorkshopsService {
     private enrollmentsRepo: Repository<WorkshopEnrollment>,
     @InjectRepository(Facility) private facilitiesRepo: Repository<Facility>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
-  ) {}
+    @InjectRepository(User) private userRepo: Repository<User>,
+    private readonly configService: ConfigService,
+  ) {
+    // Initialize SES Client
+    const region =
+      this.configService.get<string>('AWS_REGION') ||
+      this.configService.get<string>('AWS_S3_REGION');
+
+    const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
+    const secretAccessKey = this.configService.get<string>(
+      'AWS_SECRET_ACCESS_KEY',
+    );
+
+    if (region && accessKeyId && secretAccessKey) {
+      this.ses = new SESv2Client({
+        region,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+        },
+      });
+    } else {
+      this.logger.warn(
+        'AWS SES configuration is missing. Emails will not be sent.',
+      );
+    }
+  }
 
   private toMoney(value: string | number): number {
     const n = Number(value ?? 0);
@@ -1222,8 +1257,13 @@ export class WorkshopsService {
         ? sortedDiscounts[0].groupRatePerPerson
         : null;
 
-    // Get facilities
-    const facilityNames = workshop.facilityIds?.join(', ') || '';
+    // ✅ FIX: Fetch full facility details dynamically
+    const facilities =
+      workshop.facilityIds?.length > 0
+        ? await this.facilitiesRepo.find({
+            where: { id: In(workshop.facilityIds) },
+          })
+        : [];
 
     return {
       message: 'Workshop details fetched successfully',
@@ -1241,7 +1281,8 @@ export class WorkshopsService {
         numberOfDays: workshop.days?.length || 0,
 
         // Location / Online details
-        facility: facilityNames,
+        facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
+        facilities, // ✅ Full facility objects returned here
         facilityIds: workshop.facilityIds,
         webinarPlatform: workshop.webinarPlatform,
         meetingLink: workshop.meetingLink,
@@ -1573,6 +1614,14 @@ export class WorkshopsService {
         const reservation = latestReservationByWorkshop.get(workshop.id);
         const enrolledAt = workshopMeta.get(workshop.id)?.enrolledAt ?? null;
 
+        // Fetch full facility details dynamically
+        const facilities =
+          workshop.facilityIds?.length > 0
+            ? await this.facilitiesRepo.find({
+                where: { id: In(workshop.facilityIds) },
+              })
+            : [];
+
         if (targetStatus === 'browse') {
           const browseDayStatuses = this.getCourseDayStatuses(
             workshop,
@@ -1583,6 +1632,8 @@ export class WorkshopsService {
           return {
             workshopId: workshop.id,
             title: workshop.title,
+            shortBlurb: workshop.shortBlurb ?? null, // Added
+            standardBaseRate: workshop.standardBaseRate, // Added
             courseType: workshop.deliveryMode,
             workshopPhoto: workshop.coverImageUrl ?? null,
             status: 'browse',
@@ -1608,6 +1659,7 @@ export class WorkshopsService {
               data: browseDayStatuses,
             },
             reservation: null,
+            facilities, // Added full facility details
             createdAt: workshop.createdAt,
           };
         }
@@ -1646,6 +1698,8 @@ export class WorkshopsService {
         return {
           workshopId: workshop.id,
           title: workshop.title,
+          shortBlurb: workshop.shortBlurb ?? null, // Added
+          standardBaseRate: workshop.standardBaseRate, // Added
           courseType: workshop.deliveryMode,
           workshopPhoto: workshop.coverImageUrl ?? null,
           status: externalStatus,
@@ -1683,6 +1737,7 @@ export class WorkshopsService {
                 totalPrice: reservation.totalPrice,
               }
             : null,
+          facilities, // Added full facility details
           createdAt: workshop.createdAt,
           _rawStatus: progress.status,
         };
@@ -3006,8 +3061,14 @@ export class WorkshopsService {
 
     if (!w) throw new NotFoundException('Workshop details not found.');
 
-    // Get User Details (Assuming you have usersRepo injected, or fallback to relations)
-    const user = enrollment?.user; // If accessed via enrollment
+    // Fetch full facility details dynamically
+    const facilities =
+      w.facilityIds?.length > 0
+        ? await this.facilitiesRepo.find({ where: { id: In(w.facilityIds) } })
+        : [];
+
+    // Get User Details
+    const user = enrollment?.user;
 
     const bookerName =
       reservation?.bookerFullName || user?.fullLegalName || 'Verified Attendee';
@@ -3048,7 +3109,7 @@ export class WorkshopsService {
         progressBadge = `Day ${completedDays} Complete`;
     }
 
-    // Generate formatted Ref ID (e.g., #8829-AC)
+    // Generate formatted Ref ID
     const formattedRef = `#${bookingRef.split('-')[0].substring(0, 4).toUpperCase()}-AC`;
 
     return {
@@ -3058,12 +3119,12 @@ export class WorkshopsService {
           name: bookerName,
           department:
             user?.professionalRole ||
-            'Department of Anesthesiology • Resident PGY-4', // Dynamic or fallback
+            'Department of Anesthesiology • Resident PGY-4',
           roleInfo: user?.npiNumber
             ? `ID: #${user.npiNumber}`
             : 'Primary Registrant',
           isVerified: true,
-          avatarUrl: null, // Add user profile image URL here if available
+          avatarUrl: null,
         },
         groupAttendees: otherAttendees.map((a, index) => ({
           id: a.id,
@@ -3089,14 +3150,9 @@ export class WorkshopsService {
         },
         venueLogistics: {
           currentLocation:
-            w.facilityIds && w.facilityIds.length > 0
-              ? w.facilityIds[0]
-              : 'Room 4B (Sim Lab)', // Fallback to match UI if empty
-          assignedEquipment: [
-            'Fiberoptic Scope A-01',
-            'High-Fidelity Manikin #4',
-            'Video Laryngoscope Kit',
-          ], // Mocked array to match the UI perfectly
+            facilities.length > 0 ? facilities[0].name : 'Venue TBA',
+          facilities, // Added full facility details
+          assignedEquipment: [], // DB does not hold equipment yet
         },
       },
     };
@@ -3141,14 +3197,12 @@ export class WorkshopsService {
     const frontendUrl =
       process.env.FRONTEND_URL || 'https://medical-frontend-eta.vercel.app';
 
-    // ✅ Correct QR URL
     const verificationUrl = `${frontendUrl}/dashboard/user/ticket/${ticketId}`;
     const qrBuffer = await QRCode.toBuffer(verificationUrl, {
       width: 200,
       margin: 1,
     });
 
-    // ✅ 4x6 inches (288 x 432 points)
     const doc = new PDFDocument({
       size: [288, 432],
       margin: 0,
@@ -3162,25 +3216,13 @@ export class WorkshopsService {
 
     doc.pipe(res);
 
-    // ===============================
-    // 🎨 COLORS
-    // ===============================
     const headerBg = '#F4F6F8';
     const eventColor = '#0F4C75';
     const detailsColor = '#F9A826';
     const textDark = '#222';
 
-    // ===============================
-    // 🧾 PAGE BACKGROUND
-    // ===============================
     doc.rect(0, 0, 288, 432).fill(headerBg);
 
-    // ===============================
-    // 🔝 HEADER (LIGHT BG)
-    // ===============================
-    const headerHeight = 120;
-
-    // LOGO
     const logoX = 30;
     const logoY = 40;
 
@@ -3197,7 +3239,6 @@ export class WorkshopsService {
       .stroke();
     doc.restore();
 
-    // TEXT
     doc
       .fillColor(textDark)
       .font('Helvetica-Bold')
@@ -3210,21 +3251,14 @@ export class WorkshopsService {
       .fillColor('#666')
       .text('INSTITUTE', logoX + 25, logoY + 6);
 
-    // WEBSITE
     doc.fontSize(8).fillColor('#333').text('WWW.TEXASAIRWAY.COM', 0, 15, {
       align: 'center',
     });
 
-    // ===============================
-    // 📱 QR CODE (FIXED POSITION)
-    // ===============================
     doc.image(qrBuffer, 94, 60, {
       fit: [100, 100],
     });
 
-    // ===============================
-    // 🔵 EVENT SECTION (BLUE)
-    // ===============================
     const eventY = 160;
 
     doc.rect(0, eventY, 288, 100).fill(eventColor);
@@ -3247,16 +3281,11 @@ export class WorkshopsService {
       align: 'center',
     });
 
-    // ===============================
-    // 🟧 DETAILS SECTION (ORANGE)
-    // ===============================
     const detailsY = eventY + 100;
 
     doc.rect(0, detailsY, 288, 140).fill(detailsColor);
-
     doc.fillColor(textDark);
 
-    // ✂️ DASHED LINE
     doc
       .moveTo(20, detailsY + 10)
       .lineTo(268, detailsY + 10)
@@ -3267,7 +3296,7 @@ export class WorkshopsService {
 
     const startY = detailsY + 20;
 
-    // LEFT
+    // LEFT COLUMN
     doc
       .fontSize(8)
       .font('Helvetica-Bold')
@@ -3289,33 +3318,49 @@ export class WorkshopsService {
         width: 100,
       });
 
-    // RIGHT
-    doc
-      .font('Helvetica-Bold')
-      .text('Name:', 150, startY)
-      .font('Helvetica')
-      .text(data.attendee.name);
+    // RIGHT COLUMN - Group Attendees Instead of Single Booker
+    doc.font('Helvetica-Bold').text('Attendees:', 150, startY);
 
-    doc
-      .font('Helvetica-Bold')
-      .text('Time:', 150, startY + 25)
-      .font('Helvetica')
-      .text(data.course.dateRange || 'TBA');
+    doc.font('Helvetica');
+    let attendeeY = startY + 10;
+
+    // Print Primary Booker
+    doc.text(`1. ${data.attendee.name}`, 150, attendeeY, {
+      width: 120,
+      lineBreak: false,
+    });
+    attendeeY += 10;
+
+    // Print Group Attendees
+    data.groupAttendees.forEach((att, idx) => {
+      if (attendeeY < startY + 45) {
+        // Prevent overflowing into seats section
+        doc.text(
+          `${idx + 2}. ${att.name.replace(`Attendee ${idx + 2}: `, '')}`,
+          150,
+          attendeeY,
+          { width: 120, lineBreak: false },
+        );
+        attendeeY += 10;
+      }
+    });
+
+    if (data.groupAttendees.length > 3) {
+      doc.text('...', 150, attendeeY);
+    }
 
     doc
       .font('Helvetica-Bold')
       .text('Seats:', 150, startY + 50)
       .font('Helvetica')
-      .text(`${data.bookingInfo.groupSize} People`);
+      .text(data.bookingInfo.groupSize);
 
-    // ===============================
-    // 📌 NOTE
-    // ===============================
+    // NOTE
     doc
       .fontSize(7)
       .fillColor('#333')
       .text(
-        `Note: This ticket is valid for ${data.bookingInfo.groupSize} attendee(s).`,
+        `Note: This ticket is valid for ${data.bookingInfo.groupSize}.`,
         20,
         detailsY + 110,
         { align: 'center', width: 248 },
@@ -3350,6 +3395,12 @@ export class WorkshopsService {
     });
 
     if (!w) throw new NotFoundException('Workshop not found.');
+
+    // Fetch full facility details dynamically
+    const facilities =
+      w.facilityIds?.length > 0
+        ? await this.facilitiesRepo.find({ where: { id: In(w.facilityIds) } })
+        : [];
 
     const order = await this.orderSummariesRepo.findOne({
       where: { userId, workshopId: courseId, status: 'completed' as any },
@@ -3456,7 +3507,6 @@ export class WorkshopsService {
     const isOnline = w.deliveryMode === 'online';
     const cme = w.offersCmeCredits ? '12.0 CME CREDITS' : null;
 
-    // ✅ FIX: Define the exact ticketId (Reservation ID or Enrollment ID)
     const ticketId = reservation?.id || e?.id;
     const bookRef = ticketId
       ? `#${ticketId.split('-')[0].toUpperCase()}-AC`
@@ -3474,6 +3524,7 @@ export class WorkshopsService {
         learningObjectives: w.learningObjectives ?? null,
         offersCmeCredits: w.offersCmeCredits,
         facilityIds: w.facilityIds ?? [],
+        facilities, // Added full facility details
         webinarPlatform: w.webinarPlatform ?? null,
         meetingLink: w.meetingLink ?? null,
         meetingPassword: w.meetingPassword ?? null,
@@ -3535,10 +3586,11 @@ export class WorkshopsService {
             : w.shortBlurb,
         dateBox: {
           dateRange: dateRangeStr,
+          // ✅ FIX: Use the actual facility name instead of the raw UUID
           locationOrPlatform: isOnline
             ? w.webinarPlatform || 'Zoom'
-            : w.facilityIds && w.facilityIds.length > 0
-              ? w.facilityIds[0]
+            : facilities.length > 0
+              ? facilities[0].name
               : 'Location TBA',
           time: timeRangeStr,
         },
@@ -3573,7 +3625,7 @@ export class WorkshopsService {
                 message:
                   "Congratulations! You've successfully mastered the curriculum.",
                 certId: `CERT-${bookRef}`,
-                downloadUrl: `/api/certs/${ticketId}`, // Certificate download
+                downloadUrl: `/api/certs/${ticketId}`,
               }
             : null,
         onlineDetails:
@@ -3584,15 +3636,13 @@ export class WorkshopsService {
                 prepMaterials: [],
               }
             : null,
-
-        // ✅ FIX: Provide exact URLs and Ticket ID for the frontend UI
         inPersonDetails:
           !isCompleted && !isOnline && ticketId
             ? {
-                ticketId: ticketId, // The frontend can use this to generate the QR page link (e.g., /verify/{ticketId})
+                ticketId: ticketId,
                 qrNote: `Note: This ticket is valid for ${reservation?.numberOfSeats || 1} persons only.`,
-                qrDataUrl: `/api/workshops/public/tickets/${ticketId}/qr`, // API to fetch QR Image Base64
-                downloadPdfUrl: `/api/workshops/public/tickets/${ticketId}/download`, // API to download PDF
+                qrDataUrl: `/api/workshops/public/tickets/${ticketId}/qr`,
+                downloadPdfUrl: `/api/workshops/public/tickets/${ticketId}/download`,
                 ticketReference: bookRef,
               }
             : null,
@@ -3696,8 +3746,9 @@ export class WorkshopsService {
       order: { id: 'DESC' },
     });
 
+    // Use total price for group bookings, or base rate
     const amountPaid = order
-      ? parseFloat(order.pricePerSeat)
+      ? parseFloat(order.totalPrice || order.pricePerSeat)
       : parseFloat(workshop.standardBaseRate);
 
     if (!workshop.days || workshop.days.length === 0) {
@@ -3707,59 +3758,98 @@ export class WorkshopsService {
     const sortedDays = [...workshop.days].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
     );
-    const courseStartDate = new Date(sortedDays[0].date);
+
+    // Set the exact start time. If no segment start time exists, assume 00:00:00
+    const firstDayStr = sortedDays[0].date;
+    // Assuming you have segments, ideally we get the earliest start time.
+    // Without segments loaded here, we default to midnight or a safe 9 AM start.
+    const courseStartDate = new Date(`${firstDayStr}T09:00:00`);
     const currentDate = new Date();
 
-    const timeDiff = courseStartDate.getTime() - currentDate.getTime();
-    const daysBeforeStart = Math.ceil(timeDiff / (1000 * 3600 * 24));
+    const timeDiffMs = courseStartDate.getTime() - currentDate.getTime();
+    const hoursBeforeStart = timeDiffMs / (1000 * 3600);
 
-    let refundPercentage = 0;
+    // ✅ NEW POLICY: Up to 48 hours before the event. $50 processing fee applies.
     let isEligible = true;
+    let refundFee = 50.0;
 
-    if (daysBeforeStart >= 14) {
-      refundPercentage = 100;
-    } else if (daysBeforeStart >= 7 && daysBeforeStart <= 13) {
-      refundPercentage = 50;
-    } else {
-      refundPercentage = 0;
+    if (hoursBeforeStart < 48) {
       isEligible = false;
+      refundFee = 0; // Not eligible, so no fee applied to calculation
     }
 
-    const estimatedRefund = (amountPaid * (refundPercentage / 100)).toFixed(2);
+    // Calculate Estimated Refund
+    const estimatedRefund = isEligible
+      ? Math.max(0, amountPaid - refundFee).toFixed(2)
+      : '0.00';
+
+    // Calculate exact remaining window for the UI (e.g., "2d 4h remaining")
+    let windowRemainingStr = 'Expired';
+    if (isEligible) {
+      // The deadline is exactly 48 hours before the course starts
+      const deadlineTimeMs = courseStartDate.getTime() - 48 * 60 * 60 * 1000;
+      const msRemaining = deadlineTimeMs - currentDate.getTime();
+
+      const d = Math.floor(msRemaining / (1000 * 60 * 60 * 24));
+      const h = Math.floor((msRemaining / (1000 * 60 * 60)) % 24);
+
+      if (d > 0) {
+        windowRemainingStr = `${d}d ${h}h remaining`;
+      } else {
+        windowRemainingStr = `${h}h remaining`;
+      }
+    }
+
+    // Get group size from reservation
+    const groupSize = reservation?.numberOfSeats || 1;
+    const dateRangeStr = this.getWorkshopDateRangeString(sortedDays); // Fallback helper if needed, or simple string below
 
     return {
       isEligible,
-      daysBeforeStart,
+      hoursBeforeStart: Math.floor(hoursBeforeStart),
       policy: {
-        fullRefundDays: 14,
-        partialRefundDaysMin: 7,
-        partialRefundDaysMax: 13,
-        partialRefundPercentage: 50,
+        deadlineHours: 48,
+        processingFee: 50.0,
       },
       courseDetails: {
         title: workshop.title,
-        startDate: courseStartDate.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        }),
+        dateRange: `${new Date(sortedDays[0].date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(sortedDays[sortedDays.length - 1].date).getDate()}`,
+        bookedFor: `${groupSize} Attendee${groupSize > 1 ? 's' : ''}`,
+        refundWindowRemaining: windowRemainingStr,
       },
       financials: {
         amountPaid: amountPaid.toFixed(2),
+        processingFee: refundFee.toFixed(2),
         estimatedRefund: estimatedRefund,
         currency: 'USD',
       },
       uiMessages: {
-        title: isEligible ? 'Request Refund' : 'Refund Period Expired',
-        description: isEligible
-          ? 'Are you sure you want to request a refund for this course? Please review our refund policy before proceeding.'
-          : "We're sorry, but the refund period for this course has expired. As per our policy, refunds must be requested at least 7 days before the course start date.",
+        title: 'Request Refund',
+        policyWarning: isEligible
+          ? 'Refund Policy: Full refunds are available up to 48 hours before the event. Requests made within 48 hours are subject to a $50 processing fee.'
+          : 'Refund Window Expired: Our policy allows for refunds up to 48 hours before the event. As this workshop starts in less than 48 hours, an automated refund cannot be processed.',
       },
     };
   }
 
+  // Helper method if you don't already have one
+  private getWorkshopDateRangeString(sortedDays: any[]) {
+    if (!sortedDays || sortedDays.length === 0) return 'TBA';
+    const firstDay = new Date(sortedDays[0].date);
+    const lastDay = new Date(sortedDays[sortedDays.length - 1].date);
+    const firstMonth = firstDay.toLocaleDateString('en-US', { month: 'short' });
+    const lastMonth = lastDay.toLocaleDateString('en-US', { month: 'short' });
+    return firstMonth === lastMonth
+      ? `${firstMonth} ${firstDay.getDate()} - ${lastDay.getDate()}`
+      : `${firstMonth} ${firstDay.getDate()} - ${lastMonth} ${lastDay.getDate()}`;
+  }
+
   // ── 4. SUBMIT REFUND REQUEST API ──
-  async submitRefundRequest(userId: string, courseId: string) {
+  async submitRefundRequest(
+    userId: string,
+    courseId: string,
+    dto: SubmitRefundRequestDto,
+  ) {
     const estimation = await this.getRefundEstimation(userId, courseId);
 
     if (!estimation.isEligible) {
@@ -3768,16 +3858,200 @@ export class WorkshopsService {
       );
     }
 
-    // Here you would normally insert into a `refund_requests` table or send an email to Admin.
-    // For now, we return the exact success response required by the UI.
+    if (!dto.confirmedTerms) {
+      throw new BadRequestException(
+        'You must confirm that you understand this action cannot be undone.',
+      );
+    }
+
+    const estimatedMax = parseFloat(
+      estimation.financials.estimatedRefund.replace('$', ''),
+    );
+    if (dto.refundAmount > estimatedMax) {
+      throw new BadRequestException(
+        `Requested amount ($${dto.refundAmount}) exceeds eligible refund amount ($${estimatedMax}).`,
+      );
+    }
+
+    // 1. Fetch User and Workshop details for the email
+    // Assuming you have usersRepo injected. If not, fetch from enrollment/reservation.
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+    });
+
+    if (!user || !workshop) {
+      throw new NotFoundException('User or Workshop not found.');
+    }
+
+    const userFullName = user.fullLegalName || 'Student';
+    const userEmail = user.medicalEmail || user.medicalEmail; // Use appropriate email field
+    const courseTitle = workshop.title;
+
+    // 2. Prepare SES variables
+    const fromEmail = this.configService.get<string>('SES_FROM_EMAIL');
+    const adminEmail = this.configService.get<string>(
+      'SES_CONTACT_RECEIVER_EMAIL',
+    );
+
+    if (this.ses && fromEmail && adminEmail) {
+      const escapeHtml = (unsafe: string) => {
+        return unsafe
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      };
+
+      const safeReason = escapeHtml(dto.reason);
+      const safeAmount = `$${dto.refundAmount.toFixed(2)}`;
+
+      // --- Admin Notification Email HTML ---
+      const adminHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #1d4ed8; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">New Refund Request</h2>
+          <p>A new refund request has been submitted by a student. Please review the details below:</p>
+          
+          <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+            <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Student Name:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userFullName)}</td></tr>
+            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Email:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userEmail)}</td></tr>
+            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Course:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(courseTitle)}</td></tr>
+            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Requested Amount:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold;">${safeAmount}</td></tr>
+            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">System Estimated Max:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">$${estimatedMax.toFixed(2)}</td></tr>
+          </table>
+
+          <div style="margin-top: 20px; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
+            <p style="margin-top: 0; font-weight: bold; color: #475569;">Reason for Refund:</p>
+            <p style="margin-bottom: 0; color: #1e293b; white-space: pre-line;">${safeReason}</p>
+          </div>
+          
+          <p style="margin-top: 30px; font-size: 12px; color: #64748b;">This request needs to be manually processed from the Admin Dashboard.</p>
+        </div>
+      `;
+
+      // --- User Confirmation Email HTML ---
+      const userHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h2 style="color: #0ea5e9;">Refund Request Received</h2>
+          <p>Hello ${escapeHtml(userFullName)},</p>
+          <p>We have successfully received your refund request for the course <strong>${escapeHtml(courseTitle)}</strong>.</p>
+          
+          <div style="margin: 20px 0; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
+            <p style="margin: 0 0 10px 0;"><strong>Requested Amount:</strong> ${safeAmount}</p>
+            <p style="margin: 0;"><strong>Reason:</strong> ${safeReason}</p>
+          </div>
+
+          <p>Our team will review your request and process it within <strong>3-5 business days</strong>. You will receive another notification once the refund has been processed to your original payment method.</p>
+          <p>If you have any questions, please reply to this email or contact our support team.</p>
+          
+          <p style="margin-top: 30px; margin-bottom: 0;">Best regards,</p>
+          <p style="margin-top: 5px; font-weight: bold;">The Texas Airway Team</p>
+        </div>
+      `;
+
+      try {
+        // Send to Admin
+        await this.ses.send(
+          new SendEmailCommand({
+            FromEmailAddress: fromEmail,
+            ReplyToAddresses: [userEmail],
+            Destination: { ToAddresses: [adminEmail] },
+            Content: {
+              Simple: {
+                Subject: {
+                  Data: `[Refund Request] ${courseTitle} - ${userFullName}`,
+                },
+                Body: { Html: { Data: adminHtml } },
+              },
+            },
+          }),
+        );
+
+        // Send Confirmation to User
+        await this.ses.send(
+          new SendEmailCommand({
+            FromEmailAddress: fromEmail,
+            Destination: { ToAddresses: [userEmail] },
+            Content: {
+              Simple: {
+                Subject: {
+                  Data: `Refund Request Confirmation - ${courseTitle}`,
+                },
+                Body: { Html: { Data: userHtml } },
+              },
+            },
+          }),
+        );
+      } catch (error) {
+        this.logger.error(
+          'Failed to send refund emails via SES',
+          error instanceof Error ? error.stack : String(error),
+        );
+        // We don't throw an error here because the refund request itself is valid.
+        // We just log it so we know the email failed.
+      }
+    }
 
     return {
       success: true,
       title: 'Refund Request Submitted',
       message:
         'Your refund request has been successfully submitted. Our team will review it and process it within 3-5 business days. You will receive an email confirmation shortly.',
-      refundAmountRequested: estimation.financials.estimatedRefund,
+      refundAmountRequested: `$${dto.refundAmount.toFixed(2)}`,
+      reasonRecorded: dto.reason,
     };
+  }
+
+  async generateIcsFile(courseId: string): Promise<string> {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id: courseId },
+      relations: ['days', 'days.segments'],
+    });
+
+    if (!workshop || !workshop.days || workshop.days.length === 0) {
+      throw new NotFoundException('Course schedule not found.');
+    }
+
+    const sortedDays = [...workshop.days].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+
+    const firstDay = sortedDays[0];
+    const lastDay = sortedDays[sortedDays.length - 1];
+
+    // Convert string 'YYYY-MM-DD' to number array [YYYY, MM, DD, HH, mm] required by 'ics'
+    const startYear = parseInt(firstDay.date.split('-')[0]);
+    const startMonth = parseInt(firstDay.date.split('-')[1]);
+    const startDay = parseInt(firstDay.date.split('-')[2]);
+
+    const endYear = parseInt(lastDay.date.split('-')[0]);
+    const endMonth = parseInt(lastDay.date.split('-')[1]);
+    const endDay = parseInt(lastDay.date.split('-')[2]);
+
+    const event: EventAttributes = {
+      start: [startYear, startMonth, startDay, 9, 0], // Assuming 9:00 AM start
+      end: [endYear, endMonth, endDay, 17, 0], // Assuming 5:00 PM end
+      title: workshop.title,
+      description: workshop.shortBlurb || 'Course session',
+      location:
+        workshop.deliveryMode === 'online'
+          ? workshop.meetingLink || 'Online/Zoom'
+          : 'Dallas Training Center',
+      url:
+        process.env.FRONTEND_URL || 'https://medical-frontend-eta.vercel.app',
+      status: 'CONFIRMED',
+      busyStatus: 'BUSY',
+    };
+
+    return new Promise((resolve, reject) => {
+      ics.createEvent(event, (error, value) => {
+        if (error) {
+          reject(new Error('Failed to generate calendar file'));
+        }
+        resolve(value);
+      });
+    });
   }
 
   // ── 5. ADD TO CALENDAR LINKS API ──

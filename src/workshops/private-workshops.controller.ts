@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -16,6 +17,7 @@ import {
   ListMyCoursesQueryDto,
 } from './dto/list-my-courses.query.dto';
 import type { Response } from 'express';
+import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
 
 @Controller('workshops/private')
 export class PrivateWorkshopsController {
@@ -89,8 +91,28 @@ export class PrivateWorkshopsController {
   submitRefundRequest(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
+    @Body() dto: SubmitRefundRequestDto, // ✅ Added Body
   ) {
-    return this.workshopsService.submitRefundRequest(req.user.id, courseId);
+    return this.workshopsService.submitRefundRequest(
+      req.user.id,
+      courseId,
+      dto,
+    );
+  }
+
+  @Get('my-courses/:courseId/calendar/download-ics')
+  async downloadIcsFile(
+    @Param('courseId') courseId: string,
+    @Res() res: Response,
+  ) {
+    const icsString = await this.workshopsService.generateIcsFile(courseId);
+
+    res.set({
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `attachment; filename="workshop-${courseId}.ics"`,
+    });
+
+    res.send(icsString);
   }
 
   // 3. Get Calendar Links
