@@ -3306,7 +3306,7 @@ export class WorkshopsService {
       'src',
       'common',
       'assets',
-      'Texas_Airway.svg',
+      'Texas_Airway.png',
     );
 
     // Page Background
@@ -4277,13 +4277,12 @@ export class WorkshopsService {
     const textColor = '#333333';
 
     // File paths for your assets
-    // Note: If PDFKit fails on the SVG, convert your logo to a PNG and update this extension.
     const logoPath = path.join(
       process.cwd(),
       'src',
       'common',
       'assets',
-      'Texas_Airway.svg',
+      'Texas_Airway.png',
     );
     const signaturePath = path.join(
       process.cwd(),
@@ -4369,8 +4368,6 @@ export class WorkshopsService {
       // ==========================================
       // CENTERED TEXT BLOCK
       // ==========================================
-      // By starting X at 0 and setting width to pageWidth, PDFKit perfectly centers the text.
-
       // TITLE
       doc
         .fillColor(textColor)
@@ -4429,14 +4426,15 @@ export class WorkshopsService {
       // ==========================================
       // FOOTER
       // ==========================================
-      const footerY = pageHeight - 120;
+      // ✅ FIX: Lifted footer from 120 to 140 to prevent bottom boundary overflow
+      const footerY = pageHeight - 140;
 
       // Left Side: Removed Date Issued
       doc
         .fillColor('#777777')
         .font('Helvetica-Bold')
         .fontSize(10)
-        .text('Certificate ID:', 80, footerY + 20) // adjusted Y slightly to align better with right side
+        .text('Certificate ID:', 80, footerY + 20)
         .font('Helvetica')
         .text(data.bookingInfo.bookingRef, 80, footerY + 35);
 
