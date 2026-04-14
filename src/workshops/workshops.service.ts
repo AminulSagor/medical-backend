@@ -3104,7 +3104,6 @@ export class WorkshopsService {
     let workshopId: string;
     let bookingRef = ticketId;
 
-    // Fetch Enrollment or Reservation
     const enrollment = await this.enrollmentsRepo.findOne({
       where: { id: ticketId },
       relations: ['user'],
@@ -3138,24 +3137,28 @@ export class WorkshopsService {
 
     if (!w) throw new NotFoundException('Workshop details not found.');
 
-    // Fetch full facility details dynamically
     const facilities =
       w.facilityIds?.length > 0
         ? await this.facilitiesRepo.find({ where: { id: In(w.facilityIds) } })
         : [];
 
-    // Get User Details
     const user = enrollment?.user;
 
-    const bookerName =
-      reservation?.bookerFullName || user?.fullLegalName || 'Verified Attendee';
-    const bookerEmail = reservation?.bookerEmail || user?.medicalEmail || '';
+    const dbAttendees = reservation?.attendees || [];
 
-    // Group Attendees (excluding the primary booker)
-    const otherAttendees =
-      reservation?.attendees?.filter((a) => a.email !== bookerEmail) || [];
+    let primaryAttendeeName = user?.fullLegalName || 'Verified Attendee';
+    let primaryAttendeeRole = user?.professionalRole || 'Medical Professional';
 
-    // Dynamic Date Range Calculation
+    // ✅ FIX: Explicitly set type to any[] to fix the 'never' type error
+    let otherAttendees: any[] = [];
+
+    if (dbAttendees.length > 0) {
+      primaryAttendeeName = dbAttendees[0].fullName;
+      primaryAttendeeRole =
+        dbAttendees[0].professionalRole || 'Medical Professional';
+      otherAttendees = dbAttendees.slice(1);
+    }
+
     const sortedDays = (w.days || []).sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
     );
@@ -3186,17 +3189,14 @@ export class WorkshopsService {
         progressBadge = `Day ${completedDays} Complete`;
     }
 
-    // Generate formatted Ref ID
     const formattedRef = `#${bookingRef.split('-')[0].substring(0, 4).toUpperCase()}-AC`;
 
     return {
       message: 'Ticket details fetched successfully',
       data: {
         attendee: {
-          name: bookerName,
-          department:
-            user?.professionalRole ||
-            'Department of Anesthesiology • Resident PGY-4',
+          name: primaryAttendeeName,
+          department: primaryAttendeeRole,
           roleInfo: user?.npiNumber
             ? `ID: #${user.npiNumber}`
             : 'Primary Registrant',
@@ -3228,8 +3228,8 @@ export class WorkshopsService {
         venueLogistics: {
           currentLocation:
             facilities.length > 0 ? facilities[0].name : 'Venue TBA',
-          facilities, // Added full facility details
-          assignedEquipment: [], // DB does not hold equipment yet
+          facilities,
+          assignedEquipment: [],
         },
       },
     };
@@ -4223,241 +4223,209 @@ export class WorkshopsService {
 
   // ── 7. GENERATE CERTIFICATE PDF ──
   async generateCertificatePdf(ticketId: string, res: Response) {
-    // 1. Fetch details to ensure the ticket exists and to get user/course info
     const ticketData = await this.getPublicTicketDetails(ticketId);
     const data = ticketData.data;
 
-    // Optional: Add a strict check to ensure the course is actually completed
-    // if (data.course.progressBadge !== 'Course Completed') {
-    //   throw new BadRequestException('Certificate not available. Course not yet completed.');
-    // }
-
-    const attendeeName = data.attendee.name;
     const courseTitle = data.course.title;
-
-    // Format current date for the certificate issuance
     const completionDate = new Date().toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     });
 
-    // 2. Set up PDF Document (Landscape orientation for certificates)
-    // standard letter size landscape: 792 x 612 points
+    const attendeesToCertify = [data.attendee.name];
+    if (data.groupAttendees && data.groupAttendees.length > 0) {
+      data.groupAttendees.forEach((a) => {
+        const cleanName = a.name.includes(': ')
+          ? a.name.split(': ')[1]
+          : a.name;
+        attendeesToCertify.push(cleanName);
+      });
+    }
+
     const doc = new PDFDocument({
-      size: 'LETTER',
-      layout: 'landscape',
-      margin: 50,
+      autoFirstPage: false,
     });
 
-    // 3. Set Response Headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename=Certificate-${data.bookingInfo.bookingRef}.pdf`,
     );
 
-    // Pipe document to the HTTP response
     doc.pipe(res);
 
-    // ==========================================
-    // 🎨 DESIGN SETTINGS & COLORS
-    // ==========================================
-    const primaryColor = '#0F4C75'; // Deep Blue
-    const secondaryColor = '#F9A826'; // Gold/Orange
+    const primaryColor = '#0F4C75';
+    const secondaryColor = '#F9A826';
     const textColor = '#333333';
-    const lightGray = '#F4F6F8';
 
-    // Width and Height of the page
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-
-    // ==========================================
-    // 🖼️ BACKGROUND ELEMENTS
-    // ==========================================
-
-    // Light background fill
-    doc.rect(0, 0, pageWidth, pageHeight).fill('#FCFDFD');
-
-    // Outer Border
-    doc
-      .lineWidth(10)
-      .strokeColor(primaryColor)
-      .rect(20, 20, pageWidth - 40, pageHeight - 40)
-      .stroke();
-
-    // Inner Border
-    doc
-      .lineWidth(2)
-      .strokeColor(secondaryColor)
-      .rect(28, 28, pageWidth - 56, pageHeight - 56)
-      .stroke();
-
-    // Decorative Corner Elements (Top Left & Bottom Right)
-    doc.polygon([20, 20], [100, 20], [20, 100]).fill(primaryColor);
-    doc
-      .polygon(
-        [pageWidth - 20, pageHeight - 20],
-        [pageWidth - 100, pageHeight - 20],
-        [pageWidth - 20, pageHeight - 100],
-      )
-      .fill(primaryColor);
-
-    // Secondary Color Accents
-    doc
-      .polygon([20, 100], [100, 20], [120, 20], [20, 120])
-      .fill(secondaryColor);
-    doc
-      .polygon(
-        [pageWidth - 20, pageHeight - 100],
-        [pageWidth - 100, pageHeight - 20],
-        [pageWidth - 120, pageHeight - 20],
-        [pageWidth - 20, pageHeight - 120],
-      )
-      .fill(secondaryColor);
-
-    // ==========================================
-    // 🏢 LOGO / HEADER
-    // ==========================================
-    const logoY = 60;
-
-    // Simulated Logo (Blue Circle)
-    doc.circle(pageWidth / 2, logoY + 15, 20).fill('#2BB8F0');
-    // Simple white cross inside logo
-    doc.save().lineWidth(3).strokeColor('#FFFFFF');
-    doc
-      .moveTo(pageWidth / 2, logoY + 5)
-      .lineTo(pageWidth / 2, logoY + 25)
-      .stroke();
-    doc
-      .moveTo(pageWidth / 2 - 10, logoY + 15)
-      .lineTo(pageWidth / 2 + 10, logoY + 15)
-      .stroke();
-    doc.restore();
-
-    // Institute Name
-    doc
-      .fillColor(primaryColor)
-      .font('Helvetica-Bold')
-      .fontSize(20)
-      .text('Texas Airway', 0, logoY + 45, { align: 'center' });
-
-    doc
-      .fillColor('#666666')
-      .font('Helvetica')
-      .fontSize(10)
-      .text('INSTITUTE', 0, logoY + 68, {
-        align: 'center',
-        characterSpacing: 4,
+    for (const attendeeName of attendeesToCertify) {
+      doc.addPage({
+        size: 'LETTER',
+        layout: 'landscape',
+        margin: 50,
       });
 
-    // ==========================================
-    // 📜 TITLE
-    // ==========================================
-    doc
-      .fillColor(textColor)
-      .font('Helvetica-Bold')
-      .fontSize(36)
-      .text('CERTIFICATE', 0, 180, { align: 'center', characterSpacing: 2 });
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
 
-    doc
-      .font('Helvetica')
-      .fontSize(18)
-      .text('OF COMPLETION', 0, 220, { align: 'center', characterSpacing: 1 });
+      // BACKGROUND
+      doc.rect(0, 0, pageWidth, pageHeight).fill('#FCFDFD');
+      doc
+        .lineWidth(10)
+        .strokeColor(primaryColor)
+        .rect(20, 20, pageWidth - 40, pageHeight - 40)
+        .stroke();
+      doc
+        .lineWidth(2)
+        .strokeColor(secondaryColor)
+        .rect(28, 28, pageWidth - 56, pageHeight - 56)
+        .stroke();
 
-    // Small divider line
-    doc
-      .moveTo(pageWidth / 2 - 50, 250)
-      .lineTo(pageWidth / 2 + 50, 250)
-      .lineWidth(2)
-      .strokeColor(secondaryColor)
-      .stroke();
+      // Corners
+      doc.polygon([20, 20], [100, 20], [20, 100]).fill(primaryColor);
+      doc
+        .polygon(
+          [pageWidth - 20, pageHeight - 20],
+          [pageWidth - 100, pageHeight - 20],
+          [pageWidth - 20, pageHeight - 100],
+        )
+        .fill(primaryColor);
+      doc
+        .polygon([20, 100], [100, 20], [120, 20], [20, 120])
+        .fill(secondaryColor);
+      doc
+        .polygon(
+          [pageWidth - 20, pageHeight - 100],
+          [pageWidth - 100, pageHeight - 20],
+          [pageWidth - 120, pageHeight - 20],
+          [pageWidth - 20, pageHeight - 120],
+        )
+        .fill(secondaryColor);
 
-    // ==========================================
-    // 👤 RECIPIENT INFO
-    // ==========================================
-    doc
-      .fillColor('#555555')
-      .font('Times-Italic')
-      .fontSize(16)
-      .text('This is to certify that', 0, 280, { align: 'center' });
+      // LOGO / HEADER
+      const logoY = 60;
+      doc.circle(pageWidth / 2, logoY + 15, 20).fill('#2BB8F0');
+      doc.save().lineWidth(3).strokeColor('#FFFFFF');
+      doc
+        .moveTo(pageWidth / 2, logoY + 5)
+        .lineTo(pageWidth / 2, logoY + 25)
+        .stroke();
+      doc
+        .moveTo(pageWidth / 2 - 10, logoY + 15)
+        .lineTo(pageWidth / 2 + 10, logoY + 15)
+        .stroke();
+      doc.restore();
 
-    // The Attendee Name (Using Times-BoldItalic for a formal, traditional look without needing custom cursive fonts)
-    doc
-      .fillColor(primaryColor)
-      .font('Times-BoldItalic')
-      .fontSize(42)
-      .text(attendeeName, 0, 310, { align: 'center' });
+      doc
+        .fillColor(primaryColor)
+        .font('Helvetica-Bold')
+        .fontSize(20)
+        .text('Texas Airway', 0, logoY + 45, { align: 'center' });
+      doc
+        .fillColor('#666666')
+        .font('Helvetica')
+        .fontSize(10)
+        .text('INSTITUTE', 0, logoY + 68, {
+          align: 'center',
+          characterSpacing: 4,
+        });
 
-    // ==========================================
-    // 📚 COURSE INFO
-    // ==========================================
-    doc
-      .fillColor('#555555')
-      .font('Times-Italic')
-      .fontSize(16)
-      .text(
-        'has successfully completed the intensive training course on',
-        0,
-        380,
-        { align: 'center' },
-      );
+      // TITLE
+      doc
+        .fillColor(textColor)
+        .font('Helvetica-Bold')
+        .fontSize(36)
+        .text('CERTIFICATE', 0, 180, { align: 'center', characterSpacing: 2 });
+      doc
+        .font('Helvetica')
+        .fontSize(18)
+        .text('OF COMPLETION', 0, 220, {
+          align: 'center',
+          characterSpacing: 1,
+        });
+      doc
+        .moveTo(pageWidth / 2 - 50, 250)
+        .lineTo(pageWidth / 2 + 50, 250)
+        .lineWidth(2)
+        .strokeColor(secondaryColor)
+        .stroke();
 
-    doc
-      .fillColor(textColor)
-      .font('Helvetica-Bold')
-      .fontSize(22)
-      .text(courseTitle, 60, 415, { align: 'center', width: pageWidth - 120 });
+      // RECIPIENT
+      doc
+        .fillColor('#555555')
+        .font('Times-Italic')
+        .fontSize(16)
+        .text('This is to certify that', 0, 280, { align: 'center' });
+      doc
+        .fillColor(primaryColor)
+        .font('Times-BoldItalic')
+        .fontSize(42)
+        .text(attendeeName, 0, 310, { align: 'center' });
 
-    // ==========================================
-    // ✍️ FOOTER / SIGNATURES
-    // ==========================================
-    const footerY = pageHeight - 120;
+      // COURSE INFO
+      doc
+        .fillColor('#555555')
+        .font('Times-Italic')
+        .fontSize(16)
+        .text(
+          'has successfully completed the intensive training course on',
+          0,
+          380,
+          { align: 'center' },
+        );
+      doc
+        .fillColor(textColor)
+        .font('Helvetica-Bold')
+        .fontSize(22)
+        .text(courseTitle, 60, 415, {
+          align: 'center',
+          width: pageWidth - 120,
+        });
 
-    // Left Side: Certificate Details
-    doc
-      .fillColor('#777777')
-      .font('Helvetica-Bold')
-      .fontSize(10)
-      .text('Certificate ID:', 80, footerY)
-      .font('Helvetica')
-      .text(data.bookingInfo.bookingRef, 80, footerY + 15)
-      .font('Helvetica-Bold')
-      .text('Date Issued:', 80, footerY + 35)
-      .font('Helvetica')
-      .text(completionDate, 80, footerY + 50);
+      // ✅ FIX: FOOTER - Moved up by decreasing footerY and unchained the signature texts
+      const footerY = pageHeight - 140;
 
-    // Right Side: Signature Line
-    const signatureX = pageWidth - 250;
+      doc
+        .fillColor('#777777')
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .text('Certificate ID:', 80, footerY)
+        .font('Helvetica')
+        .text(data.bookingInfo.bookingRef, 80, footerY + 15)
+        .font('Helvetica-Bold')
+        .text('Date Issued:', 80, footerY + 35)
+        .font('Helvetica')
+        .text(completionDate, 80, footerY + 50);
 
-    // Draw a line for the signature
-    doc
-      .moveTo(signatureX, footerY + 45)
-      .lineTo(signatureX + 170, footerY + 45)
-      .lineWidth(1)
-      .strokeColor(textColor)
-      .stroke();
+      // SIGNATURE
+      const signatureX = pageWidth - 250;
+      doc
+        .moveTo(signatureX, footerY + 35)
+        .lineTo(signatureX + 170, footerY + 35)
+        .lineWidth(1)
+        .strokeColor(textColor)
+        .stroke();
 
-    doc
-      .fillColor(textColor)
-      .font('Helvetica-Bold')
-      .fontSize(12)
-      .text('Dr. Sarah Jenkins', signatureX, footerY + 55, {
-        width: 170,
-        align: 'center',
-      })
-      .font('Helvetica')
-      .fontSize(10)
-      .fillColor('#666666')
-      .text('Program Director', signatureX, footerY + 70, {
-        width: 170,
-        align: 'center',
-      });
+      // Placed explicitly without chaining to avoid auto-margin pushdowns
+      doc
+        .fillColor(textColor)
+        .font('Helvetica-Bold')
+        .fontSize(12)
+        .text('Dr. Sarah Jenkins', signatureX, footerY + 45, {
+          width: 170,
+          align: 'center',
+        });
+      doc
+        .font('Helvetica')
+        .fontSize(10)
+        .fillColor('#666666')
+        .text('Program Director', signatureX, footerY + 60, {
+          width: 170,
+          align: 'center',
+        });
+    }
 
-    // (Optional) You can add an image signature here instead of just the line
-    // doc.image('path/to/signature.png', signatureX + 10, footerY - 20, { width: 150 });
-
-    // Finalize the PDF
     doc.end();
   }
 }
