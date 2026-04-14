@@ -134,4 +134,13 @@ export class PrivateWorkshopsController {
   ) {
     return this.workshopsService.getMeetingDetails(req.user.id, courseId);
   }
+
+  @Get('my-course/certificate/:ticketId/download')
+  async downloadCertificate(
+    @Param('ticketId') ticketId: string,
+    @Res() res: Response,
+  ) {
+    // Note: We don't return JSON. The service pipes the PDF buffer to the response stream.
+    await this.workshopsService.generateCertificatePdf(ticketId, res);
+  }
 }
