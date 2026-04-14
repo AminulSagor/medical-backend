@@ -4220,4 +4220,244 @@ export class WorkshopsService {
       },
     };
   }
+
+  // ── 7. GENERATE CERTIFICATE PDF ──
+  async generateCertificatePdf(ticketId: string, res: Response) {
+    // 1. Fetch details to ensure the ticket exists and to get user/course info
+    const ticketData = await this.getPublicTicketDetails(ticketId);
+    const data = ticketData.data;
+
+    // Optional: Add a strict check to ensure the course is actually completed
+    // if (data.course.progressBadge !== 'Course Completed') {
+    //   throw new BadRequestException('Certificate not available. Course not yet completed.');
+    // }
+
+    const attendeeName = data.attendee.name;
+    const courseTitle = data.course.title;
+
+    // Format current date for the certificate issuance
+    const completionDate = new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    // 2. Set up PDF Document (Landscape orientation for certificates)
+    // standard letter size landscape: 792 x 612 points
+    const doc = new PDFDocument({
+      size: 'LETTER',
+      layout: 'landscape',
+      margin: 50,
+    });
+
+    // 3. Set Response Headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=Certificate-${data.bookingInfo.bookingRef}.pdf`,
+    );
+
+    // Pipe document to the HTTP response
+    doc.pipe(res);
+
+    // ==========================================
+    // 🎨 DESIGN SETTINGS & COLORS
+    // ==========================================
+    const primaryColor = '#0F4C75'; // Deep Blue
+    const secondaryColor = '#F9A826'; // Gold/Orange
+    const textColor = '#333333';
+    const lightGray = '#F4F6F8';
+
+    // Width and Height of the page
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+
+    // ==========================================
+    // 🖼️ BACKGROUND ELEMENTS
+    // ==========================================
+
+    // Light background fill
+    doc.rect(0, 0, pageWidth, pageHeight).fill('#FCFDFD');
+
+    // Outer Border
+    doc
+      .lineWidth(10)
+      .strokeColor(primaryColor)
+      .rect(20, 20, pageWidth - 40, pageHeight - 40)
+      .stroke();
+
+    // Inner Border
+    doc
+      .lineWidth(2)
+      .strokeColor(secondaryColor)
+      .rect(28, 28, pageWidth - 56, pageHeight - 56)
+      .stroke();
+
+    // Decorative Corner Elements (Top Left & Bottom Right)
+    doc.polygon([20, 20], [100, 20], [20, 100]).fill(primaryColor);
+    doc
+      .polygon(
+        [pageWidth - 20, pageHeight - 20],
+        [pageWidth - 100, pageHeight - 20],
+        [pageWidth - 20, pageHeight - 100],
+      )
+      .fill(primaryColor);
+
+    // Secondary Color Accents
+    doc
+      .polygon([20, 100], [100, 20], [120, 20], [20, 120])
+      .fill(secondaryColor);
+    doc
+      .polygon(
+        [pageWidth - 20, pageHeight - 100],
+        [pageWidth - 100, pageHeight - 20],
+        [pageWidth - 120, pageHeight - 20],
+        [pageWidth - 20, pageHeight - 120],
+      )
+      .fill(secondaryColor);
+
+    // ==========================================
+    // 🏢 LOGO / HEADER
+    // ==========================================
+    const logoY = 60;
+
+    // Simulated Logo (Blue Circle)
+    doc.circle(pageWidth / 2, logoY + 15, 20).fill('#2BB8F0');
+    // Simple white cross inside logo
+    doc.save().lineWidth(3).strokeColor('#FFFFFF');
+    doc
+      .moveTo(pageWidth / 2, logoY + 5)
+      .lineTo(pageWidth / 2, logoY + 25)
+      .stroke();
+    doc
+      .moveTo(pageWidth / 2 - 10, logoY + 15)
+      .lineTo(pageWidth / 2 + 10, logoY + 15)
+      .stroke();
+    doc.restore();
+
+    // Institute Name
+    doc
+      .fillColor(primaryColor)
+      .font('Helvetica-Bold')
+      .fontSize(20)
+      .text('Texas Airway', 0, logoY + 45, { align: 'center' });
+
+    doc
+      .fillColor('#666666')
+      .font('Helvetica')
+      .fontSize(10)
+      .text('INSTITUTE', 0, logoY + 68, {
+        align: 'center',
+        characterSpacing: 4,
+      });
+
+    // ==========================================
+    // 📜 TITLE
+    // ==========================================
+    doc
+      .fillColor(textColor)
+      .font('Helvetica-Bold')
+      .fontSize(36)
+      .text('CERTIFICATE', 0, 180, { align: 'center', characterSpacing: 2 });
+
+    doc
+      .font('Helvetica')
+      .fontSize(18)
+      .text('OF COMPLETION', 0, 220, { align: 'center', characterSpacing: 1 });
+
+    // Small divider line
+    doc
+      .moveTo(pageWidth / 2 - 50, 250)
+      .lineTo(pageWidth / 2 + 50, 250)
+      .lineWidth(2)
+      .strokeColor(secondaryColor)
+      .stroke();
+
+    // ==========================================
+    // 👤 RECIPIENT INFO
+    // ==========================================
+    doc
+      .fillColor('#555555')
+      .font('Times-Italic')
+      .fontSize(16)
+      .text('This is to certify that', 0, 280, { align: 'center' });
+
+    // The Attendee Name (Using Times-BoldItalic for a formal, traditional look without needing custom cursive fonts)
+    doc
+      .fillColor(primaryColor)
+      .font('Times-BoldItalic')
+      .fontSize(42)
+      .text(attendeeName, 0, 310, { align: 'center' });
+
+    // ==========================================
+    // 📚 COURSE INFO
+    // ==========================================
+    doc
+      .fillColor('#555555')
+      .font('Times-Italic')
+      .fontSize(16)
+      .text(
+        'has successfully completed the intensive training course on',
+        0,
+        380,
+        { align: 'center' },
+      );
+
+    doc
+      .fillColor(textColor)
+      .font('Helvetica-Bold')
+      .fontSize(22)
+      .text(courseTitle, 60, 415, { align: 'center', width: pageWidth - 120 });
+
+    // ==========================================
+    // ✍️ FOOTER / SIGNATURES
+    // ==========================================
+    const footerY = pageHeight - 120;
+
+    // Left Side: Certificate Details
+    doc
+      .fillColor('#777777')
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .text('Certificate ID:', 80, footerY)
+      .font('Helvetica')
+      .text(data.bookingInfo.bookingRef, 80, footerY + 15)
+      .font('Helvetica-Bold')
+      .text('Date Issued:', 80, footerY + 35)
+      .font('Helvetica')
+      .text(completionDate, 80, footerY + 50);
+
+    // Right Side: Signature Line
+    const signatureX = pageWidth - 250;
+
+    // Draw a line for the signature
+    doc
+      .moveTo(signatureX, footerY + 45)
+      .lineTo(signatureX + 170, footerY + 45)
+      .lineWidth(1)
+      .strokeColor(textColor)
+      .stroke();
+
+    doc
+      .fillColor(textColor)
+      .font('Helvetica-Bold')
+      .fontSize(12)
+      .text('Dr. Sarah Jenkins', signatureX, footerY + 55, {
+        width: 170,
+        align: 'center',
+      })
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor('#666666')
+      .text('Program Director', signatureX, footerY + 70, {
+        width: 170,
+        align: 'center',
+      });
+
+    // (Optional) You can add an image signature here instead of just the line
+    // doc.image('path/to/signature.png', signatureX + 10, footerY - 20, { width: 150 });
+
+    // Finalize the PDF
+    doc.end();
+  }
 }
