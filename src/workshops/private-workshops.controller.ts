@@ -75,6 +75,7 @@ export class PrivateWorkshopsController {
 
   // 1. Get Refund Eligibility & Info
   @Get('my-courses/:courseId/refund-info')
+  @UseGuards(AuthGuard('jwt'))
   getRefundEstimation(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
@@ -84,6 +85,7 @@ export class PrivateWorkshopsController {
 
   // 2. Submit Refund Request
   @Post('my-courses/:courseId/refund')
+  @UseGuards(AuthGuard('jwt'))
   submitRefundRequest(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
@@ -93,6 +95,7 @@ export class PrivateWorkshopsController {
 
   // 3. Get Calendar Links
   @Get('my-courses/:courseId/calendar')
+  @UseGuards(AuthGuard('jwt'))
   getCalendarLinks(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
@@ -102,6 +105,7 @@ export class PrivateWorkshopsController {
 
   // 4. Get Live Meeting Info
   @Get('my-courses/:courseId/meeting')
+  @UseGuards(AuthGuard('jwt'))
   getMeetingDetails(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
