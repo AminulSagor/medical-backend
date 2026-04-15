@@ -238,7 +238,6 @@ export class AnalyticsService {
     };
   }
 
-  // ────────────────── MOST POPULAR COURSES ──────────────────
   async getPopularCoursesMetrics(
     query: PopularCoursesQueryDto,
   ): Promise<PopularCoursesMetricsResponse> {
@@ -259,8 +258,8 @@ export class AnalyticsService {
 
     const activeInstructors = await this.usersRepo
       .createQueryBuilder('user')
-      .where('LOWER(user.role) = :role', { role: 'instructor' })
-      .andWhere('user.isActive = :isActive', { isActive: true })
+      .where('LOWER("user"."role") = :role', { role: 'instructor' })
+      .andWhere('"user"."isActive" = :isActive', { isActive: true })
       .getCount();
 
     return {
