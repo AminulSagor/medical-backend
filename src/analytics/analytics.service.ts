@@ -22,6 +22,11 @@ import {
 import { Product } from 'src/products/entities/product.entity';
 import { Workshop } from 'src/workshops/entities/workshop.entity';
 import { PopularCoursesMetricsResponse } from 'src/common/interfaces/response.interface';
+import { CourseProgressStatus } from 'src/workshops/entities/course-progress-status.enum';
+import {
+  ReservationStatus,
+  WorkshopReservation,
+} from 'src/workshops/entities/workshop-reservation.entity';
 
 @Injectable()
 export class AnalyticsService {
@@ -39,6 +44,8 @@ export class AnalyticsService {
     private readonly workshopRepo: Repository<Workshop>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @InjectRepository(WorkshopReservation)
+    private readonly workshopReservationRepo: Repository<WorkshopReservation>,
   ) {}
 
   private getDateRanges(query: AnalyticsQueryDto) {
@@ -241,19 +248,32 @@ export class AnalyticsService {
   async getPopularCoursesMetrics(
     query: PopularCoursesQueryDto,
   ): Promise<PopularCoursesMetricsResponse> {
-    const totalEnrollments = await this.enrollmentRepo.count();
+    const totalEnrollmentsRaw = await this.workshopReservationRepo
+      .createQueryBuilder('reservation')
+      .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
+      .where('reservation.status = :status', {
+        status: ReservationStatus.CONFIRMED,
+      })
+      .getRawOne();
 
-    const totalCompletedEnrollments = await this.enrollmentRepo.count({
-      where: {
-        isActive: true,
-      },
-    });
+    const totalEnrollments = Number(totalEnrollmentsRaw?.total || 0);
+
+    const completedEnrollmentsRaw = await this.workshopReservationRepo
+      .createQueryBuilder('reservation')
+      .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
+      .where('reservation.status = :status', {
+        status: ReservationStatus.CONFIRMED,
+      })
+      .andWhere('reservation.courseProgressStatus = :progressStatus', {
+        progressStatus: CourseProgressStatus.COMPLETED,
+      })
+      .getRawOne();
+
+    const completedEnrollments = Number(completedEnrollmentsRaw?.total || 0);
 
     const completionRate =
       totalEnrollments > 0
-        ? Number(
-            ((totalCompletedEnrollments / totalEnrollments) * 100).toFixed(1),
-          )
+        ? Number(((completedEnrollments / totalEnrollments) * 100).toFixed(1))
         : 0;
 
     const activeInstructors = await this.usersRepo

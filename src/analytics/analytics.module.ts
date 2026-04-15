@@ -9,6 +9,7 @@ import { AnalyticsController } from './analytics.controller';
 import { WorkshopOrderSummary } from 'src/workshops/entities/workshop-order-summary.entity';
 import { Product } from 'src/products/entities/product.entity';
 import { Workshop } from 'src/workshops/entities/workshop.entity';
+import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation.entity';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { Workshop } from 'src/workshops/entities/workshop.entity';
       Product,
       Workshop,
       User,
+      WorkshopReservation,
     ]),
   ],
   providers: [AnalyticsService],
