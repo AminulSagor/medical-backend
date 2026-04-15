@@ -986,6 +986,60 @@ export class WorkshopsService {
 
     const [workshops, total] = await qb.getManyAndCount();
 
+    // ── Reservation counts (for totalEnrolled / available seats) ──────────────
+    const workshopIds = workshops.map((w) => w.id);
+    const reservationCounts =
+      workshopIds.length > 0
+        ? await this.reservationsRepo
+            .createQueryBuilder('r')
+            .select('r.workshopId', 'workshopId')
+            .addSelect('SUM(r.numberOfSeats)', 'reservedSeats')
+            .where('r.workshopId IN (:...workshopIds)', { workshopIds })
+            .andWhere('r.status != :cancelledStatus', {
+              cancelledStatus: 'cancelled',
+            })
+            .groupBy('r.workshopId')
+            .getRawMany()
+        : [];
+
+    const reservationMap = new Map(
+      reservationCounts.map((r) => [
+        r.workshopId,
+        parseInt(r.reservedSeats, 10),
+      ]),
+    );
+
+    // ── Refund stats per workshop ────────────────────────────────────────────
+    const refundStats =
+      workshopIds.length > 0
+        ? await this.refundsRepo
+            .createQueryBuilder('ref')
+            .select('ref.workshopId', 'workshopId')
+            .addSelect('ref.refundType', 'refundType')
+            .addSelect('COUNT(ref.id)', 'count')
+            .where('ref.workshopId IN (:...workshopIds)', { workshopIds })
+            .groupBy('ref.workshopId')
+            .addGroupBy('ref.refundType')
+            .getRawMany()
+        : [];
+
+    const refundStatsMap = new Map<
+      string,
+      { partialRefund: number; refunded: number }
+    >();
+    for (const row of refundStats) {
+      const existing = refundStatsMap.get(row.workshopId) || {
+        partialRefund: 0,
+        refunded: 0,
+      };
+      if (row.refundType === 'FULL') {
+        existing.refunded = parseInt(row.count, 10);
+      } else if (row.refundType === 'PARTIAL') {
+        existing.partialRefund = parseInt(row.count, 10);
+      }
+      refundStatsMap.set(row.workshopId, existing);
+    }
+
     // ── Resolve full facility details in one batch query ──────────────────────
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const allFacilityIds = [
@@ -1001,30 +1055,45 @@ export class WorkshopsService {
         : [];
     const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
 
-    const data = workshops.map((w) => ({
-      ...w,
-      // ✅ Full faculty objects
-      faculty: (w.faculty ?? []).map((f) => ({
-        id: f.id,
-        firstName: f.firstName,
-        lastName: f.lastName,
-        fullName: `${f.firstName} ${f.lastName}`,
-        primaryClinicalRole: f.primaryClinicalRole,
-        medicalDesignation: f.medicalDesignation,
-        institutionOrHospital: f.institutionOrHospital,
-        assignedRole: f.assignedRole,
-        imageUrl: f.imageUrl,
-        npiNumber: f.npiNumber,
-        phoneNumber: f.phoneNumber,
-        email: f.email,
-      })),
-      // ✅ Full facility objects
-      facilityIds: w.facilityIds,
-      facilities: (w.facilityIds ?? [])
-        .filter((id) => uuidRegex.test(id))
-        .map((id) => facilityMap.get(id))
-        .filter(Boolean),
-    }));
+    const data = workshops.map((w) => {
+      const reservedSeats = reservationMap.get(w.id) || 0;
+      const refundInfo = refundStatsMap.get(w.id) || {
+        partialRefund: 0,
+        refunded: 0,
+      };
+
+      return {
+        ...w,
+        // ✅ Full faculty objects
+        faculty: (w.faculty ?? []).map((f) => ({
+          id: f.id,
+          firstName: f.firstName,
+          lastName: f.lastName,
+          fullName: `${f.firstName} ${f.lastName}`,
+          primaryClinicalRole: f.primaryClinicalRole,
+          medicalDesignation: f.medicalDesignation,
+          institutionOrHospital: f.institutionOrHospital,
+          assignedRole: f.assignedRole,
+          imageUrl: f.imageUrl,
+          npiNumber: f.npiNumber,
+          phoneNumber: f.phoneNumber,
+          email: f.email,
+        })),
+        // ✅ Full facility objects
+        facilityIds: w.facilityIds,
+        facilities: (w.facilityIds ?? [])
+          .filter((id) => uuidRegex.test(id))
+          .map((id) => facilityMap.get(id))
+          .filter(Boolean),
+        // ✅ Enrollment & refund overview
+        overview: {
+          totalEnrolled: reservedSeats,
+          refundRequested: 0,
+          partialRefund: refundInfo.partialRefund,
+          refunded: refundInfo.refunded,
+        },
+      };
+    });
 
     return {
       message: 'Workshops fetched successfully',
