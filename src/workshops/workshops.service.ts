@@ -2407,8 +2407,118 @@ export class WorkshopsService {
       );
     }
 
-    const numberOfSeats = attendees.length;
+    const numberOfSeatsBeingAdded = attendees.length;
 
+    // ✅ NEW: Check if user already has an active reservation for this workshop
+    const existingReservation = await this.reservationsRepo.findOne({
+      where: {
+        workshopId: dto.workshopId,
+        userId,
+        status: ReservationStatus.CONFIRMED,
+      },
+      relations: ['attendees'],
+    });
+
+    // If existing reservation found, MERGE the attendees instead of creating new
+    if (existingReservation) {
+      // Get current reserved seats count (excluding this user's existing reservation for accurate calculation)
+      const reservedSeatsResult = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .select('SUM(r.numberOfSeats)', 'total')
+        .where('r.workshopId = :workshopId', { workshopId: dto.workshopId })
+        .andWhere('r.status != :cancelledStatus', {
+          cancelledStatus: 'cancelled',
+        })
+        .andWhere('r.id != :reservationId', { reservationId: existingReservation.id })
+        .getRawOne();
+
+      const otherReservedSeats = parseInt(
+        reservedSeatsResult?.total || '0',
+        10,
+      );
+      const totalCapacity = workshop.capacity;
+      const availableSeatsForMerge = totalCapacity - otherReservedSeats;
+
+      // Check if we have enough seats to add new attendees
+      if (availableSeatsForMerge < numberOfSeatsBeingAdded) {
+        throw new BadRequestException(
+          `Only ${availableSeatsForMerge} seats available. You are trying to add ${numberOfSeatsBeingAdded} more attendees.`,
+        );
+      }
+
+      // ✅ MERGE: Add new attendees to existing reservation
+      const newAttendees = attendees.map((att) =>
+        this.attendeesRepo.create({
+          fullName: att.fullName,
+          professionalRole: att.professionalRole,
+          npiNumber: att.npiNumber,
+          email: att.email,
+        }),
+      );
+
+      existingReservation.attendees = [
+        ...existingReservation.attendees,
+        ...newAttendees,
+      ];
+
+      // Update seat count and price
+      const updatedNumberOfSeats =
+        existingReservation.numberOfSeats + numberOfSeatsBeingAdded;
+
+      // Recalculate price with group discount if applicable
+      let pricePerSeat = Number(workshop.standardBaseRate);
+
+      if (
+        workshop.groupDiscountEnabled &&
+        workshop.groupDiscounts?.length > 0
+      ) {
+        const applicableDiscounts = workshop.groupDiscounts
+          .filter((d) => updatedNumberOfSeats >= d.minimumAttendees)
+          .sort(
+            (a, b) =>
+              Number(a.groupRatePerPerson) - Number(b.groupRatePerPerson),
+          );
+
+        if (applicableDiscounts.length > 0) {
+          pricePerSeat = Number(applicableDiscounts[0].groupRatePerPerson);
+        }
+      }
+
+      const totalPrice = pricePerSeat * updatedNumberOfSeats;
+
+      // Update the existing reservation
+      existingReservation.numberOfSeats = updatedNumberOfSeats;
+      existingReservation.pricePerSeat = pricePerSeat.toString();
+      existingReservation.totalPrice = totalPrice.toString();
+
+      const updated = await this.reservationsRepo.save(existingReservation);
+
+      // Mark order summary as consumed
+      await this.orderSummariesRepo.update(
+        { id: attendees[0].orderSummary.id },
+        { status: OrderSummaryStatus.EXPIRED },
+      );
+
+      return {
+        message:
+          'New attendees added to existing workshop booking successfully (merged)',
+        data: {
+          reservationId: updated.id,
+          workshopId: updated.workshopId,
+          numberOfSeats: updated.numberOfSeats,
+          pricePerSeat: updated.pricePerSeat,
+          totalPrice: updated.totalPrice,
+          status: updated.status,
+          attendeesCount: updated.attendees.length,
+          attendees: updated.attendees,
+          action: 'merged_with_existing',
+          createdAt: updated.createdAt,
+          updatedAt: updated.updatedAt,
+        },
+      };
+    }
+
+    // Original logic: No existing reservation, create new one
     // Check available seats
     const reservedSeatsResult = await this.reservationsRepo
       .createQueryBuilder('r')
@@ -2422,9 +2532,9 @@ export class WorkshopsService {
     const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
     const availableSeats = workshop.capacity - reservedSeats;
 
-    if (availableSeats < numberOfSeats) {
+    if (availableSeats < numberOfSeatsBeingAdded) {
       throw new BadRequestException(
-        `Only ${availableSeats} seats available. You are trying to book ${numberOfSeats} seats.`,
+        `Only ${availableSeats} seats available. You are trying to book ${numberOfSeatsBeingAdded} seats.`,
       );
     }
 
@@ -2433,7 +2543,7 @@ export class WorkshopsService {
 
     if (workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0) {
       const applicableDiscounts = workshop.groupDiscounts
-        .filter((d) => numberOfSeats >= d.minimumAttendees)
+        .filter((d) => numberOfSeatsBeingAdded >= d.minimumAttendees)
         .sort(
           (a, b) => Number(a.groupRatePerPerson) - Number(b.groupRatePerPerson),
         );
@@ -2443,13 +2553,13 @@ export class WorkshopsService {
       }
     }
 
-    const totalPrice = pricePerSeat * numberOfSeats;
+    const totalPrice = pricePerSeat * numberOfSeatsBeingAdded;
 
     // Create reservation with attendees mapped from order summary
     const reservation = this.reservationsRepo.create({
       workshopId: dto.workshopId,
       userId,
-      numberOfSeats,
+      numberOfSeats: numberOfSeatsBeingAdded,
       pricePerSeat: pricePerSeat.toString(),
       totalPrice: totalPrice.toString(),
       status: ReservationStatus.CONFIRMED,
@@ -2481,7 +2591,8 @@ export class WorkshopsService {
         totalPrice: saved.totalPrice,
         status: saved.status,
         attendees: saved.attendees,
-        availableSeatsRemaining: availableSeats - numberOfSeats,
+        action: 'new_reservation_created',
+        availableSeatsRemaining: availableSeats - numberOfSeatsBeingAdded,
         createdAt: saved.createdAt,
       },
     };
