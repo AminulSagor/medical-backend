@@ -252,7 +252,7 @@ export class AnalyticsService {
       .createQueryBuilder('reservation')
       .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
       .where('reservation.status = :status', {
-        status: ReservationStatus.CONFIRMED,
+        status: ReservationStatus.CONFIRMED, // Or 'confirmed'
       })
       .getRawOne();
 
@@ -265,7 +265,7 @@ export class AnalyticsService {
         status: ReservationStatus.CONFIRMED,
       })
       .andWhere('reservation.courseProgressStatus = :progressStatus', {
-        progressStatus: CourseProgressStatus.COMPLETED,
+        progressStatus: CourseProgressStatus.COMPLETED, // Or 'completed'
       })
       .getRawOne();
 
@@ -276,11 +276,12 @@ export class AnalyticsService {
         ? Number(((completedEnrollments / totalEnrollments) * 100).toFixed(1))
         : 0;
 
-    // ✅ FIX: Cast the enum to text using ::text before applying LOWER()
+    // ✅ FIX: Removed LOWER() entirely.
+    // TypeORM and Postgres handle exact enum string matches perfectly without SQL functions.
     const activeInstructors = await this.usersRepo
       .createQueryBuilder('user')
-      .where('LOWER("user"."role"::text) = :role', { role: 'instructor' })
-      .andWhere('"user"."isActive" = :isActive', { isActive: true })
+      .where('user.role = :role', { role: 'instructor' })
+      .andWhere('user.status = :status', { status: 'active' })
       .getCount();
 
     return {
