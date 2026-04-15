@@ -1289,11 +1289,16 @@ export class WorkshopsService {
           ? sortedDiscounts[0].groupRatePerPerson
           : null;
 
-      // ✅ FIX: Fetch full facility details dynamically
+      // ✅ FIX: Fetch full facility details dynamically with UUID validation
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validFacilityIds = workshop.facilityIds?.filter((id) =>
+        uuidRegex.test(id),
+      ) || [];
+
       const facilities =
-        workshop.facilityIds?.length > 0
+        validFacilityIds.length > 0
           ? await this.facilitiesRepo.find({
-              where: { id: In(workshop.facilityIds) },
+              where: { id: In(validFacilityIds) },
             })
           : [];
 
