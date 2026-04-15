@@ -919,7 +919,12 @@ export class WorkshopsService {
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.workshopsRepo.createQueryBuilder('w');
+    const qb = this.workshopsRepo
+      .createQueryBuilder('w')
+      .leftJoinAndSelect('w.faculty', 'faculty')
+      .leftJoinAndSelect('w.days', 'days')
+      .leftJoinAndSelect('days.segments', 'segments')
+      .leftJoinAndSelect('w.groupDiscounts', 'groupDiscounts');
 
     // filters
     if (query.q?.trim()) {
@@ -929,7 +934,6 @@ export class WorkshopsService {
     }
 
     if (query.facilityId) {
-      // Check if facilityId is contained in the facilityIds array (stored as comma-separated)
       qb.andWhere('w.facilityIds LIKE :facilityId', {
         facilityId: `%${query.facilityId}%`,
       });
@@ -957,29 +961,63 @@ export class WorkshopsService {
       });
     }
 
-    // filter by faculty (workshop_faculty join table)
     if (query.facultyId) {
-      qb.innerJoin(
-        'workshop_faculty',
-        'wf',
-        'wf.workshopId = w.id AND wf.facultyId = :facultyId',
-        {
-          facultyId: query.facultyId,
-        },
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM workshop_faculty wf
+          WHERE wf."workshopId" = w.id AND wf."facultyId" = :facultyId
+        )`,
+        { facultyId: query.facultyId },
       );
     }
 
-    // sorting
     const sortBy = query.sortBy ?? 'createdAt';
-    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
     qb.orderBy(`w.${sortBy}`, sortOrder);
 
-    // pagination
     qb.skip(skip).take(limit);
 
-    const [data, total] = await qb.getManyAndCount();
+    const [workshops, total] = await qb.getManyAndCount();
+
+    // ── Resolve full facility details in one batch query ──────────────────────
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allFacilityIds = [
+      ...new Set(
+        workshops.flatMap((w) =>
+          (w.facilityIds ?? []).filter((id) => uuidRegex.test(id)),
+        ),
+      ),
+    ];
+    const allFacilities =
+      allFacilityIds.length > 0
+        ? await this.facilitiesRepo.find({ where: { id: In(allFacilityIds) } })
+        : [];
+    const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
+
+    const data = workshops.map((w) => ({
+      ...w,
+      // ✅ Full faculty objects
+      faculty: (w.faculty ?? []).map((f) => ({
+        id: f.id,
+        firstName: f.firstName,
+        lastName: f.lastName,
+        fullName: `${f.firstName} ${f.lastName}`,
+        primaryClinicalRole: f.primaryClinicalRole,
+        medicalDesignation: f.medicalDesignation,
+        institutionOrHospital: f.institutionOrHospital,
+        assignedRole: f.assignedRole,
+        imageUrl: f.imageUrl,
+        npiNumber: f.npiNumber,
+        phoneNumber: f.phoneNumber,
+        email: f.email,
+      })),
+      // ✅ Full facility objects
+      facilityIds: w.facilityIds,
+      facilities: (w.facilityIds ?? [])
+        .filter((id) => uuidRegex.test(id))
+        .map((id) => facilityMap.get(id))
+        .filter(Boolean),
+    }));
 
     return {
       message: 'Workshops fetched successfully',
@@ -1117,6 +1155,23 @@ export class WorkshopsService {
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
+    // ── Resolve full facility details for all workshops in one batch query ────
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allFacilityIds = [
+      ...new Set(
+        workshops.flatMap((w) =>
+          (w.facilityIds ?? []).filter((id) => uuidRegex.test(id)),
+        ),
+      ),
+    ];
+    const allFacilities =
+      allFacilityIds.length > 0
+        ? await this.facilitiesRepo.find({
+            where: { id: In(allFacilityIds) },
+          })
+        : [];
+    const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
+
     // ── Transform workshops ──────────────────────────────────────────────────
     const transformedData = workshops.map((workshop) => {
       const reservedSeats = reservationMap.get(workshop.id) || 0;
@@ -1165,14 +1220,18 @@ export class WorkshopsService {
       ];
 
       const isUpcoming = workshopDate ? workshopDate >= todayStr : false;
-      const facilityNames = workshop.facilityIds?.join(', ') || '';
+
+      // Resolve full facility objects
+      const facilities = (workshop.facilityIds ?? [])
+        .filter((id) => uuidRegex.test(id))
+        .map((id) => facilityMap.get(id))
+        .filter(Boolean);
 
       return {
         id: workshop.id,
         date: workshopDate,
         title: workshop.title,
         description: workshop.shortBlurb,
-        facility: facilityNames,
         deliveryMode: workshop.deliveryMode,
         workshopPhoto: workshop.coverImageUrl,
         totalHours: `${totalHours} hours`,
@@ -1187,11 +1246,21 @@ export class WorkshopsService {
         topics,
         learningObjectives: workshop.learningObjectives,
         groupDiscountEnabled: workshop.groupDiscountEnabled,
+        // ✅ Full facility objects
+        facilityIds: workshop.facilityIds,
+        facilities,
+        // ✅ Full faculty objects
         faculty: workshop.faculty?.map((f) => ({
           id: f.id,
-          name: `${f.firstName} ${f.lastName}`,
-          title: f.primaryClinicalRole,
-          profileImageUrl: f.imageUrl,
+          firstName: f.firstName,
+          lastName: f.lastName,
+          fullName: `${f.firstName} ${f.lastName}`,
+          primaryClinicalRole: f.primaryClinicalRole,
+          medicalDesignation: f.medicalDesignation,
+          institutionOrHospital: f.institutionOrHospital,
+          assignedRole: f.assignedRole,
+          imageUrl: f.imageUrl,
+          npiNumber: f.npiNumber,
         })),
         webinarPlatform: workshop.webinarPlatform,
       };
