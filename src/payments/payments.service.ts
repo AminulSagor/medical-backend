@@ -560,29 +560,22 @@ export class PaymentsService {
       this.getStripeConfig(dto);
     const stripe = Stripe(stripeSecretKey);
 
-    const existingPending = await this.paymentsRepo.findOne({
+    // Expire any stale pending payments for this order summary so a fresh
+    // Stripe session is always created (old Stripe URLs may have expired).
+    const existingPending = await this.paymentsRepo.find({
       where: {
         userId: user.id,
         domainType: PaymentDomainType.PRODUCT,
         domainRefId: productSummary.id,
         status: PaymentTransactionStatus.PENDING,
       },
-      order: { createdAt: 'DESC' },
     });
 
-    if (existingPending?.providerSessionId) {
-      return {
-        message: 'Checkout session already exists for this order summary',
-        data: {
-          paymentId: existingPending.id,
-          domainType: PaymentDomainType.PRODUCT,
-          sessionId: existingPending.providerSessionId,
-          checkoutUrl: existingPending.metadata?.checkoutUrl ?? null,
-          orderSummaryId: productSummary.id,
-          shippingAddress,
-          orderSummary: this.toProductSummaryPayload(summary),
-        },
-      };
+    if (existingPending.length > 0) {
+      for (const old of existingPending) {
+        old.status = PaymentTransactionStatus.EXPIRED;
+        await this.paymentsRepo.save(old);
+      }
     }
 
     const payment = this.paymentsRepo.create({
@@ -655,7 +648,7 @@ export class PaymentsService {
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      customer_email: user.medicalEmail,
+      customer_email: user.medicalEmail?.trim() || undefined,
       line_items: lineItems,
       success_url: successUrl,
       cancel_url: cancelUrl,
@@ -1076,7 +1069,7 @@ export class PaymentsService {
       type: OrderType.PRODUCT,
       customerName:
         shippingAddress.fullName || user.fullLegalName || 'Guest Customer',
-      customerEmail: user.medicalEmail,
+      customerEmail: user.medicalEmail?.trim() || `user-${user.id}@checkout.local`,
       customerPhone: user.phoneNumber,
       shippingAddressLine1: shippingAddress.addressLine1,
       shippingAddressLine2: shippingAddress.addressLine2,
@@ -1176,7 +1169,7 @@ export class PaymentsService {
   }
 
   async getSessionStatus(userId: string, sessionId: string) {
-    const payment = await this.paymentsRepo.findOne({
+    let payment = await this.paymentsRepo.findOne({
       where: {
         userId,
         providerSessionId: sessionId,
@@ -1185,6 +1178,59 @@ export class PaymentsService {
 
     if (!payment) {
       throw new NotFoundException('Payment session not found');
+    }
+
+    // If the payment hasn't been finalized yet, actively check with Stripe
+    // as a fallback for delayed/missed webhooks.
+    if (
+      !payment.finalizedRefId &&
+      (payment.status === PaymentTransactionStatus.PENDING ||
+        payment.status === PaymentTransactionStatus.CREATED)
+    ) {
+      try {
+        const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+        if (stripeSecretKey) {
+          const stripe = Stripe(stripeSecretKey);
+          const stripeSession = await stripe.checkout.sessions.retrieve(
+            sessionId,
+          );
+
+          if (
+            stripeSession.payment_status === 'paid'
+          ) {
+            payment.providerPaymentIntentId =
+              typeof stripeSession.payment_intent === 'string'
+                ? stripeSession.payment_intent
+                : payment.providerPaymentIntentId;
+            payment.status = PaymentTransactionStatus.PAID;
+            payment.paidAt = new Date();
+            await this.paymentsRepo.save(payment);
+
+            if (!payment.finalizedRefId) {
+              if (payment.domainType === PaymentDomainType.PRODUCT) {
+                const orderId = await this.finalizeProductPayment(
+                  payment,
+                  stripeSession,
+                );
+                payment.finalizedRefId = orderId;
+              }
+
+              if (payment.domainType === PaymentDomainType.WORKSHOP) {
+                const summaryId =
+                  await this.finalizeWorkshopPayment(payment);
+                payment.finalizedRefId = summaryId;
+              }
+
+              await this.paymentsRepo.save(payment);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(
+          `Fallback Stripe verification failed for session ${sessionId}:`,
+          err,
+        );
+      }
     }
 
     return {

@@ -1071,72 +1071,102 @@ export class WorkshopsService {
       ]),
     );
 
-    // Transform data for public view
-    const transformedData = workshops.map((workshop) => {
-      const reservedSeats = reservationMap.get(workshop.id) || 0;
-      const availableSeats = workshop.capacity - reservedSeats;
+    // Get current date and time
+    const now = new Date();
 
-      // Calculate total hours
-      let totalMinutes = 0;
-      workshop.days?.forEach((day) => {
-        day.segments?.forEach((segment) => {
-          const start = segment.startTime.split(':');
-          const end = segment.endTime.split(':');
-          const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-          const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-          totalMinutes += endMinutes - startMinutes;
+    // Transform data for public view and filter out past workshops
+    const transformedData = workshops
+      .map((workshop) => {
+        const reservedSeats = reservationMap.get(workshop.id) || 0;
+        const availableSeats = workshop.capacity - reservedSeats;
+
+        // Calculate total hours
+        let totalMinutes = 0;
+        workshop.days?.forEach((day) => {
+          day.segments?.forEach((segment) => {
+            const start = segment.startTime.split(':');
+            const end = segment.endTime.split(':');
+            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+            totalMinutes += endMinutes - startMinutes;
+          });
         });
-      });
-      const totalHours = (totalMinutes / 60).toFixed(1);
+        const totalHours = (totalMinutes / 60).toFixed(1);
 
-      // Total number of modules (segments)
-      const totalModules =
-        workshop.days?.reduce(
-          (sum, day) => sum + (day.segments?.length || 0),
-          0,
-        ) || 0;
+        // Total number of modules (segments)
+        const totalModules =
+          workshop.days?.reduce(
+            (sum, day) => sum + (day.segments?.length || 0),
+            0,
+          ) || 0;
 
-      // Get workshop date (first day)
-      const workshopDate = workshop.days?.[0]?.date || null;
+        // Get workshop date (first day)
+        const workshopDate = workshop.days?.[0]?.date || null;
 
-      // Calculate offer price (group discount for minimum attendees)
-      const offerPrice =
-        workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
-          ? workshop.groupDiscounts.sort(
-              (a, b) => a.minimumAttendees - b.minimumAttendees,
-            )[0].groupRatePerPerson
-          : null;
+        // ✅ Check if workshop has started (compare first day date and first segment time)
+        if (workshopDate) {
+          const workshopStartDate = new Date(workshopDate);
+          
+          // Check if first day has already passed
+          if (workshopStartDate < now) {
+            return null; // Filter out past workshops
+          }
 
-      // Get facility names
-      const facilityNames = workshop.facilityIds?.join(', ') || '';
+          // Check if workshop starts today - verify the exact start time
+          if (workshopStartDate.toDateString() === now.toDateString()) {
+            const firstSegment = workshop.days?.[0]?.segments?.[0];
+            if (firstSegment) {
+              const [startHour, startMinute] = firstSegment.startTime.split(':').map(Number);
+              const workshopStartTime = new Date(workshopStartDate);
+              workshopStartTime.setHours(startHour, startMinute, 0);
 
-      return {
-        id: workshop.id,
-        date: workshopDate,
-        title: workshop.title,
-        description: workshop.shortBlurb,
-        facility: facilityNames,
-        deliveryMode: workshop.deliveryMode,
-        workshopPhoto: workshop.coverImageUrl,
-        totalHours: `${totalHours} hours`,
-        cmeFredits: workshop.offersCmeCredits,
-        availableSeats,
-        totalCapacity: workshop.capacity,
-        price: workshop.standardBaseRate,
-        offerPrice: offerPrice,
-        totalModules,
-        learningObjectives: workshop.learningObjectives,
-        groupDiscountEnabled: workshop.groupDiscountEnabled,
-        faculty: workshop.faculty?.map((f) => ({
-          id: f.id,
-          name: `${f.firstName} ${f.lastName}`,
-          title: f.primaryClinicalRole,
-          profileImageUrl: f.imageUrl,
-        })),
-        // Online workshop details
-        webinarPlatform: workshop.webinarPlatform,
-      };
-    });
+              // If workshop start time has already passed today, filter it out
+              if (workshopStartTime <= now) {
+                return null;
+              }
+            }
+          }
+        }
+
+        // Calculate offer price (group discount for minimum attendees)
+        const offerPrice =
+          workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
+            ? workshop.groupDiscounts.sort(
+                (a, b) => a.minimumAttendees - b.minimumAttendees,
+              )[0].groupRatePerPerson
+            : null;
+
+        // Get facility names
+        const facilityNames = workshop.facilityIds?.join(', ') || '';
+
+        return {
+          id: workshop.id,
+          date: workshopDate,
+          title: workshop.title,
+          description: workshop.shortBlurb,
+          facility: facilityNames,
+          deliveryMode: workshop.deliveryMode,
+          workshopPhoto: workshop.coverImageUrl,
+          totalHours: `${totalHours} hours`,
+          cmeFredits: workshop.offersCmeCredits,
+          availableSeats,
+          totalCapacity: workshop.capacity,
+          price: workshop.standardBaseRate,
+          offerPrice: offerPrice,
+          totalModules,
+          learningObjectives: workshop.learningObjectives,
+          groupDiscountEnabled: workshop.groupDiscountEnabled,
+          faculty: workshop.faculty?.map((f) => ({
+            id: f.id,
+            name: `${f.firstName} ${f.lastName}`,
+            title: f.primaryClinicalRole,
+            profileImageUrl: f.imageUrl,
+          })),
+          // Online workshop details
+          webinarPlatform: workshop.webinarPlatform,
+        };
+      })
+      .filter((item) => item !== null);
 
     // Apply availability filter after transformation
     let filteredData = transformedData;
@@ -1175,167 +1205,197 @@ export class WorkshopsService {
   }
 
   async getPublicWorkshopById(id: string) {
-    // Find workshop with all relations
-    const workshop = await this.workshopsRepo.findOne({
-      where: { id, status: WorkshopStatus.PUBLISHED },
-      relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
-      order: {
-        days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
-      },
-    });
+    try {
+      // Find workshop with all relations
+      const workshop = await this.workshopsRepo.findOne({
+        where: { id, status: WorkshopStatus.PUBLISHED },
+        relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
+        order: {
+          days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
+        },
+      });
 
-    if (!workshop) {
-      throw new NotFoundException('Workshop not found or not available');
-    }
+      if (!workshop) {
+        throw new NotFoundException('Workshop not found or not available');
+      }
 
-    // Get reserved seats count
-    const reservedSeatsResult = await this.reservationsRepo
-      .createQueryBuilder('r')
-      .select('SUM(r.numberOfSeats)', 'total')
-      .where('r.workshopId = :workshopId', { workshopId: id })
-      .andWhere('r.status != :cancelledStatus', {
-        cancelledStatus: 'cancelled',
-      })
-      .getRawOne();
+      // Get reserved seats count
+      const reservedSeatsResult = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .select('SUM(r.numberOfSeats)', 'total')
+        .where('r.workshopId = :workshopId', { workshopId: id })
+        .andWhere('r.status != :cancelledStatus', {
+          cancelledStatus: 'cancelled',
+        })
+        .getRawOne();
 
-    const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
-    const availableSeats = workshop.capacity - reservedSeats;
+      const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
+      const availableSeats = workshop.capacity - reservedSeats;
 
-    // Calculate total hours and duration for each day
-    let totalMinutes = 0;
-    const daysWithDetails =
-      workshop.days?.map((day) => {
-        let dayMinutes = 0;
-        const segmentsWithDetails =
-          day.segments?.map((segment) => {
-            const start = segment.startTime.split(':');
-            const end = segment.endTime.split(':');
-            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-            const duration = endMinutes - startMinutes;
-            dayMinutes += duration;
+      // Calculate total hours and duration for each day
+      let totalMinutes = 0;
+      const daysWithDetails =
+        workshop.days?.map((day) => {
+          let dayMinutes = 0;
+          const segmentsWithDetails =
+            day.segments?.map((segment) => {
+              const start = segment.startTime.split(':');
+              const end = segment.endTime.split(':');
+              const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+              const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+              const duration = endMinutes - startMinutes;
+              dayMinutes += duration;
 
-            return {
-              segmentNumber: segment.segmentNumber,
-              courseTopic: segment.courseTopic,
-              topicDetails: segment.topicDetails,
-              startTime: segment.startTime,
-              endTime: segment.endTime,
-              durationMinutes: duration,
-              durationHours: (duration / 60).toFixed(1),
-            };
-          }) || [];
+              return {
+                segmentNumber: segment.segmentNumber,
+                courseTopic: segment.courseTopic,
+                topicDetails: segment.topicDetails,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                durationMinutes: duration,
+                durationHours: (duration / 60).toFixed(1),
+              };
+            }) || [];
 
-        totalMinutes += dayMinutes;
+          totalMinutes += dayMinutes;
 
-        return {
-          dayNumber: day.dayNumber,
-          date: day.date,
-          totalDayHours: (dayMinutes / 60).toFixed(1),
-          segments: segmentsWithDetails,
-        };
-      }) || [];
+          return {
+            dayNumber: day.dayNumber,
+            date: day.date,
+            totalDayHours: (dayMinutes / 60).toFixed(1),
+            segments: segmentsWithDetails,
+          };
+        }) || [];
 
-    const totalHours = (totalMinutes / 60).toFixed(1);
-    const totalModules =
-      workshop.days?.reduce(
-        (sum, day) => sum + (day.segments?.length || 0),
-        0,
-      ) || 0;
+      const totalHours = (totalMinutes / 60).toFixed(1);
+      const totalModules =
+        workshop.days?.reduce(
+          (sum, day) => sum + (day.segments?.length || 0),
+          0,
+        ) || 0;
 
-    // Get workshop dates
-    const workshopStartDate = workshop.days?.[0]?.date || null;
-    const workshopEndDate =
-      workshop.days?.[workshop.days.length - 1]?.date || null;
+      // Get workshop dates
+      const workshopStartDate = workshop.days?.[0]?.date || null;
+      const workshopEndDate =
+        workshop.days?.[workshop.days.length - 1]?.date || null;
 
-    // Calculate offer price (group discount for minimum attendees)
-    const sortedDiscounts =
-      workshop.groupDiscounts?.sort(
-        (a, b) => a.minimumAttendees - b.minimumAttendees,
+      // Calculate offer price (group discount for minimum attendees)
+      const sortedDiscounts =
+        workshop.groupDiscounts?.sort(
+          (a, b) => a.minimumAttendees - b.minimumAttendees,
+        ) || [];
+      const offerPrice =
+        workshop.groupDiscountEnabled && sortedDiscounts.length > 0
+          ? sortedDiscounts[0].groupRatePerPerson
+          : null;
+
+      // ✅ FIX: Fetch full facility details dynamically with UUID validation
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validFacilityIds = workshop.facilityIds?.filter((id) =>
+        uuidRegex.test(id),
       ) || [];
-    const offerPrice =
-      workshop.groupDiscountEnabled && sortedDiscounts.length > 0
-        ? sortedDiscounts[0].groupRatePerPerson
-        : null;
 
-    // ✅ FIX: Fetch full facility details dynamically
-    const facilities =
-      workshop.facilityIds?.length > 0
-        ? await this.facilitiesRepo.find({
-            where: { id: In(workshop.facilityIds) },
-          })
-        : [];
+      const facilities =
+        validFacilityIds.length > 0
+          ? await this.facilitiesRepo.find({
+              where: { id: In(validFacilityIds) },
+            })
+          : [];
 
-    return {
-      message: 'Workshop details fetched successfully',
-      data: {
-        id: workshop.id,
-        title: workshop.title,
-        description: workshop.shortBlurb,
-        learningObjectives: workshop.learningObjectives,
-        deliveryMode: workshop.deliveryMode,
-        status: workshop.status,
+      return {
+        message: 'Workshop details fetched successfully',
+        data: {
+          id: workshop.id,
+          title: workshop.title,
+          description: workshop.shortBlurb,
+          learningObjectives: workshop.learningObjectives,
+          deliveryMode: workshop.deliveryMode,
+          status: workshop.status,
 
-        // Dates
-        startDate: workshopStartDate,
-        endDate: workshopEndDate,
-        numberOfDays: workshop.days?.length || 0,
+          // Dates
+          startDate: workshopStartDate,
+          endDate: workshopEndDate,
+          numberOfDays: workshop.days?.length || 0,
 
-        // Location / Online details
-        facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
-        facilities, // ✅ Full facility objects returned here
-        facilityIds: workshop.facilityIds,
-        webinarPlatform: workshop.webinarPlatform,
-        meetingLink: workshop.meetingLink,
-        autoRecordSession: workshop.autoRecordSession,
+          // Location / Online details
+          facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
+          facilities, // ✅ Full facility objects returned here
+          facilityIds: workshop.facilityIds,
+          webinarPlatform: workshop.webinarPlatform,
+          meetingLink: workshop.meetingLink,
+          autoRecordSession: workshop.autoRecordSession,
 
-        // Visual
-        workshopPhoto: workshop.coverImageUrl,
+          // Visual
+          workshopPhoto: workshop.coverImageUrl,
 
-        // Time
-        totalHours: `${totalHours} hours`,
-        totalMinutes,
+          // Time
+          totalHours: `${totalHours} hours`,
+          totalMinutes,
 
-        // CME
-        offersCmeCredits: workshop.offersCmeCredits,
+          // CME
+          offersCmeCredits: workshop.offersCmeCredits,
 
-        // Capacity
-        totalCapacity: workshop.capacity,
-        reservedSeats,
-        availableSeats,
-        alertAt: workshop.alertAt,
+          // Capacity
+          totalCapacity: workshop.capacity,
+          reservedSeats,
+          availableSeats,
+          alertAt: workshop.alertAt,
 
-        // Pricing
-        standardPrice: workshop.standardBaseRate,
-        offerPrice: offerPrice,
-        groupDiscountEnabled: workshop.groupDiscountEnabled,
-        groupDiscounts: sortedDiscounts.map((d) => ({
-          minimumAttendees: d.minimumAttendees,
-          pricePerPerson: d.groupRatePerPerson,
-          savingsPerPerson: (
-            Number(workshop.standardBaseRate) - Number(d.groupRatePerPerson)
-          ).toFixed(2),
-        })),
+          // Pricing
+          standardPrice: workshop.standardBaseRate,
+          offerPrice: offerPrice,
+          groupDiscountEnabled: workshop.groupDiscountEnabled,
+          groupDiscounts: sortedDiscounts.map((d) => ({
+            minimumAttendees: d.minimumAttendees,
+            pricePerPerson: d.groupRatePerPerson,
+            savingsPerPerson: (
+              Number(workshop.standardBaseRate) - Number(d.groupRatePerPerson)
+            ).toFixed(2),
+          })),
 
-        // Content
-        totalModules,
-        days: daysWithDetails,
+          // Content
+          totalModules,
+          days: daysWithDetails,
 
-        // Faculty
-        faculty: workshop.faculty?.map((f) => ({
-          id: f.id,
-          name: `${f.firstName} ${f.lastName}`,
-          title: f.primaryClinicalRole,
-          bio: f.medicalDesignation,
-          profileImageUrl: f.imageUrl,
-          specialties: f.institutionOrHospital,
-        })),
+          // Faculty
+          faculty: workshop.faculty?.map((f) => ({
+            id: f.id,
+            name: `${f.firstName} ${f.lastName}`,
+            title: f.primaryClinicalRole,
+            bio: f.medicalDesignation,
+            profileImageUrl: f.imageUrl,
+            specialties: f.institutionOrHospital,
+          })),
 
-        // Timestamps
-        createdAt: workshop.createdAt,
-        updatedAt: workshop.updatedAt,
-      },
-    };
+          // Timestamps
+          createdAt: workshop.createdAt,
+          updatedAt: workshop.updatedAt,
+        },
+      };
+    } catch (error) {
+      console.error('Error fetching workshop:', error);
+      
+      // If it's already a NestJS exception, re-throw it
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      
+      // If it's a known error, provide a meaningful message
+      if (error instanceof Error) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: error.message || 'Failed to fetch workshop details',
+          error: 'Bad Request',
+        });
+      }
+      
+      // Generic error handler
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'An error occurred while fetching workshop details. Please try again later.',
+        error: 'Bad Request',
+      });
+    }
   }
 
   async getMyEnrolledWorkshops(userId: string) {
@@ -2347,8 +2407,118 @@ export class WorkshopsService {
       );
     }
 
-    const numberOfSeats = attendees.length;
+    const numberOfSeatsBeingAdded = attendees.length;
 
+    // ✅ NEW: Check if user already has an active reservation for this workshop
+    const existingReservation = await this.reservationsRepo.findOne({
+      where: {
+        workshopId: dto.workshopId,
+        userId,
+        status: ReservationStatus.CONFIRMED,
+      },
+      relations: ['attendees'],
+    });
+
+    // If existing reservation found, MERGE the attendees instead of creating new
+    if (existingReservation) {
+      // Get current reserved seats count (excluding this user's existing reservation for accurate calculation)
+      const reservedSeatsResult = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .select('SUM(r.numberOfSeats)', 'total')
+        .where('r.workshopId = :workshopId', { workshopId: dto.workshopId })
+        .andWhere('r.status != :cancelledStatus', {
+          cancelledStatus: 'cancelled',
+        })
+        .andWhere('r.id != :reservationId', { reservationId: existingReservation.id })
+        .getRawOne();
+
+      const otherReservedSeats = parseInt(
+        reservedSeatsResult?.total || '0',
+        10,
+      );
+      const totalCapacity = workshop.capacity;
+      const availableSeatsForMerge = totalCapacity - otherReservedSeats;
+
+      // Check if we have enough seats to add new attendees
+      if (availableSeatsForMerge < numberOfSeatsBeingAdded) {
+        throw new BadRequestException(
+          `Only ${availableSeatsForMerge} seats available. You are trying to add ${numberOfSeatsBeingAdded} more attendees.`,
+        );
+      }
+
+      // ✅ MERGE: Add new attendees to existing reservation
+      const newAttendees = attendees.map((att) =>
+        this.attendeesRepo.create({
+          fullName: att.fullName,
+          professionalRole: att.professionalRole,
+          npiNumber: att.npiNumber,
+          email: att.email,
+        }),
+      );
+
+      existingReservation.attendees = [
+        ...existingReservation.attendees,
+        ...newAttendees,
+      ];
+
+      // Update seat count and price
+      const updatedNumberOfSeats =
+        existingReservation.numberOfSeats + numberOfSeatsBeingAdded;
+
+      // Recalculate price with group discount if applicable
+      let pricePerSeat = Number(workshop.standardBaseRate);
+
+      if (
+        workshop.groupDiscountEnabled &&
+        workshop.groupDiscounts?.length > 0
+      ) {
+        const applicableDiscounts = workshop.groupDiscounts
+          .filter((d) => updatedNumberOfSeats >= d.minimumAttendees)
+          .sort(
+            (a, b) =>
+              Number(a.groupRatePerPerson) - Number(b.groupRatePerPerson),
+          );
+
+        if (applicableDiscounts.length > 0) {
+          pricePerSeat = Number(applicableDiscounts[0].groupRatePerPerson);
+        }
+      }
+
+      const totalPrice = pricePerSeat * updatedNumberOfSeats;
+
+      // Update the existing reservation
+      existingReservation.numberOfSeats = updatedNumberOfSeats;
+      existingReservation.pricePerSeat = pricePerSeat.toString();
+      existingReservation.totalPrice = totalPrice.toString();
+
+      const updated = await this.reservationsRepo.save(existingReservation);
+
+      // Mark order summary as consumed
+      await this.orderSummariesRepo.update(
+        { id: attendees[0].orderSummary.id },
+        { status: OrderSummaryStatus.EXPIRED },
+      );
+
+      return {
+        message:
+          'New attendees added to existing workshop booking successfully (merged)',
+        data: {
+          reservationId: updated.id,
+          workshopId: updated.workshopId,
+          numberOfSeats: updated.numberOfSeats,
+          pricePerSeat: updated.pricePerSeat,
+          totalPrice: updated.totalPrice,
+          status: updated.status,
+          attendeesCount: updated.attendees.length,
+          attendees: updated.attendees,
+          action: 'merged_with_existing',
+          createdAt: updated.createdAt,
+          updatedAt: updated.updatedAt,
+        },
+      };
+    }
+
+    // Original logic: No existing reservation, create new one
     // Check available seats
     const reservedSeatsResult = await this.reservationsRepo
       .createQueryBuilder('r')
@@ -2362,9 +2532,9 @@ export class WorkshopsService {
     const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
     const availableSeats = workshop.capacity - reservedSeats;
 
-    if (availableSeats < numberOfSeats) {
+    if (availableSeats < numberOfSeatsBeingAdded) {
       throw new BadRequestException(
-        `Only ${availableSeats} seats available. You are trying to book ${numberOfSeats} seats.`,
+        `Only ${availableSeats} seats available. You are trying to book ${numberOfSeatsBeingAdded} seats.`,
       );
     }
 
@@ -2373,7 +2543,7 @@ export class WorkshopsService {
 
     if (workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0) {
       const applicableDiscounts = workshop.groupDiscounts
-        .filter((d) => numberOfSeats >= d.minimumAttendees)
+        .filter((d) => numberOfSeatsBeingAdded >= d.minimumAttendees)
         .sort(
           (a, b) => Number(a.groupRatePerPerson) - Number(b.groupRatePerPerson),
         );
@@ -2383,13 +2553,13 @@ export class WorkshopsService {
       }
     }
 
-    const totalPrice = pricePerSeat * numberOfSeats;
+    const totalPrice = pricePerSeat * numberOfSeatsBeingAdded;
 
     // Create reservation with attendees mapped from order summary
     const reservation = this.reservationsRepo.create({
       workshopId: dto.workshopId,
       userId,
-      numberOfSeats,
+      numberOfSeats: numberOfSeatsBeingAdded,
       pricePerSeat: pricePerSeat.toString(),
       totalPrice: totalPrice.toString(),
       status: ReservationStatus.CONFIRMED,
@@ -2421,7 +2591,8 @@ export class WorkshopsService {
         totalPrice: saved.totalPrice,
         status: saved.status,
         attendees: saved.attendees,
-        availableSeatsRemaining: availableSeats - numberOfSeats,
+        action: 'new_reservation_created',
+        availableSeatsRemaining: availableSeats - numberOfSeatsBeingAdded,
         createdAt: saved.createdAt,
       },
     };
