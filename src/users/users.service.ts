@@ -10,7 +10,10 @@ import { User, UserRole, UserStatus } from './entities/user.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import * as bcrypt from 'bcrypt';
 import { MasterDirectoryQueryDto } from './dto/master-directory.query.dto';
-import { UpdateMyProfileDto, ChangePasswordDto } from './dto/update-my-profile.dto';
+import {
+  UpdateMyProfileDto,
+  ChangePasswordDto,
+} from './dto/update-my-profile.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
 import { ActivateDeactivateUserDto } from './dto/activate-deactivate-user.dto';
 
@@ -35,8 +38,8 @@ function pickStatus(status: any) {
   return null;
 }
 
-async function adminGetUserProfile(userId:string){
-  const user = await this.usersRepo.findOne
+async function adminGetUserProfile(userId: string) {
+  const user = await this.usersRepo.findOne;
 }
 
 function splitFullLegalName(fullLegalName?: string | null): {
@@ -71,7 +74,8 @@ export class UsersService {
 
     const firstName = user.firstName?.trim() || fallback.firstName || null;
     const lastName = user.lastName?.trim() || fallback.lastName || null;
-    const title = user.professionalTitle?.trim() || user.credentials?.trim() || null;
+    const title =
+      user.professionalTitle?.trim() || user.credentials?.trim() || null;
 
     return {
       profilePicture: user.profilePhotoUrl ?? null,
@@ -471,7 +475,7 @@ export class UsersService {
   // ✅ GET SINGLE USER PROFILE (Admin only)
   async adminGetUserProfile(userId: string) {
     const user = await this.usersRepo.findOne({ where: { id: userId } });
-    
+
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
@@ -505,7 +509,7 @@ export class UsersService {
   // ✅ ADMIN UPDATE USER DETAILS
   async adminUpdateUser(userId: string, dto: any) {
     const user = await this.usersRepo.findOne({ where: { id: userId } });
-    
+
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
@@ -589,10 +593,7 @@ export class UsersService {
   }
 
   // ✅ ACTIVATE/DEACTIVATE USER (Admin only)
-  async activateDeactivateUser(
-    userId: string,
-    dto: ActivateDeactivateUserDto,
-  ) {
+  async activateDeactivateUser(userId: string, dto: ActivateDeactivateUserDto) {
     const user = await this.usersRepo.findOne({ where: { id: userId } });
 
     if (!user) {
@@ -683,21 +684,80 @@ export class UsersService {
 
     const [users, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
-    // Transform users to table format
-    const tableData = users.map((user) => ({
-      id: user.id,
-      userIdentity: {
-        name: user.fullLegalName,
-        email: user.medicalEmail,
-        profilePhoto: user.profilePhotoUrl,
-      },
-      role: user.role,
-      credential: user.credentials || user.professionalRole,
-      status: user.status,
-      courses: user.coursesCount,
-      joinedDate: user.createdAt,
-      lastActive: user.lastActiveAt,
-    }));
+    // Transform users to table format with products and spent aggregations
+    const tableData = await Promise.all(
+      users.map(async (user) => {
+        let productsCount = 0;
+        let totalSpent = 0;
+
+        // If the user is a student (or customer), calculate products and spent
+        if (
+          user.role.toLowerCase() === 'student' ||
+          user.role.toLowerCase() === 'user'
+        ) {
+          try {
+            // 1. Calculate total spent on Workshop Orders
+            // Note: Replace 'WorkshopOrderSummary' with your exact entity class name if it differs
+            const workshopOrders = await this.usersRepo.manager
+              .createQueryBuilder('WorkshopOrderSummary', 'wos')
+              .select('SUM(wos.totalPrice)', 'total')
+              .where('wos.userId = :userId', { userId: user.id })
+              .andWhere('wos.status = :status', { status: 'completed' })
+              .getRawOne();
+
+            const workshopSpent = parseFloat(workshopOrders?.total || '0');
+
+            // 2. Calculate total spent on Product Orders
+            // Note: Replace 'ProductOrderSummary' with your exact entity class name if it differs
+            const productOrders = await this.usersRepo.manager
+              .createQueryBuilder('ProductOrderSummary', 'pos')
+              .select('SUM(pos.totalAmount)', 'total')
+              .addSelect('COUNT(pos.id)', 'count')
+              .where('pos.userId = :userId', { userId: user.id })
+              .andWhere('pos.status = :status', { status: 'completed' })
+              .getRawOne();
+
+            const productSpent = parseFloat(productOrders?.total || '0');
+            productsCount = parseInt(productOrders?.count || '0', 10);
+
+            totalSpent = workshopSpent + productSpent;
+          } catch (error) {
+            // Silently handle if tables/entities don't match or are empty during aggregation
+            totalSpent = 0;
+            productsCount = 0;
+          }
+        }
+
+        const baseUser = {
+          id: user.id,
+          userIdentity: {
+            name: user.fullLegalName,
+            email: user.medicalEmail,
+            profilePhoto: user.profilePhotoUrl,
+          },
+          role: user.role,
+          credential: user.credentials || user.professionalRole,
+          status: user.status,
+          courses: user.coursesCount,
+          joinedDate: user.createdAt,
+          lastActive: user.lastActiveAt,
+        };
+
+        // Add products and spent only if they are a student
+        if (
+          user.role.toLowerCase() === 'student' ||
+          user.role.toLowerCase() === 'user'
+        ) {
+          return {
+            ...baseUser,
+            products: `${productsCount} Item${productsCount !== 1 ? 's' : ''}`,
+            spent: `$${totalSpent.toFixed(2)}`,
+          };
+        }
+
+        return baseUser;
+      }),
+    );
 
     return {
       statistics: stats,

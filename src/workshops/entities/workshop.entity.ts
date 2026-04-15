@@ -21,6 +21,7 @@ export enum WorkshopDeliveryMode {
 export enum WorkshopStatus {
   DRAFT = 'draft',
   PUBLISHED = 'published',
+  CANCELLED = 'cancelled',
 }
 
 @Entity('workshops')
