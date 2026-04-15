@@ -1169,7 +1169,7 @@ export class PaymentsService {
   }
 
   async getSessionStatus(userId: string, sessionId: string) {
-    const payment = await this.paymentsRepo.findOne({
+    let payment = await this.paymentsRepo.findOne({
       where: {
         userId,
         providerSessionId: sessionId,
@@ -1178,6 +1178,60 @@ export class PaymentsService {
 
     if (!payment) {
       throw new NotFoundException('Payment session not found');
+    }
+
+    // If the payment hasn't been finalized yet, actively check with Stripe
+    // as a fallback for delayed/missed webhooks.
+    if (
+      !payment.finalizedRefId &&
+      (payment.status === PaymentTransactionStatus.PENDING ||
+        payment.status === PaymentTransactionStatus.CREATED)
+    ) {
+      try {
+        const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+        if (stripeSecretKey) {
+          const stripe = Stripe(stripeSecretKey);
+          const stripeSession = await stripe.checkout.sessions.retrieve(
+            sessionId,
+          );
+
+          if (
+            stripeSession.payment_status === 'paid' &&
+            payment.status !== PaymentTransactionStatus.PAID
+          ) {
+            payment.providerPaymentIntentId =
+              typeof stripeSession.payment_intent === 'string'
+                ? stripeSession.payment_intent
+                : payment.providerPaymentIntentId;
+            payment.status = PaymentTransactionStatus.PAID;
+            payment.paidAt = new Date();
+            await this.paymentsRepo.save(payment);
+
+            if (!payment.finalizedRefId) {
+              if (payment.domainType === PaymentDomainType.PRODUCT) {
+                const orderId = await this.finalizeProductPayment(
+                  payment,
+                  stripeSession,
+                );
+                payment.finalizedRefId = orderId;
+              }
+
+              if (payment.domainType === PaymentDomainType.WORKSHOP) {
+                const summaryId =
+                  await this.finalizeWorkshopPayment(payment);
+                payment.finalizedRefId = summaryId;
+              }
+
+              await this.paymentsRepo.save(payment);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(
+          `Fallback Stripe verification failed for session ${sessionId}:`,
+          err,
+        );
+      }
     }
 
     return {
