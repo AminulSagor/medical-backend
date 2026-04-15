@@ -1071,72 +1071,102 @@ export class WorkshopsService {
       ]),
     );
 
-    // Transform data for public view
-    const transformedData = workshops.map((workshop) => {
-      const reservedSeats = reservationMap.get(workshop.id) || 0;
-      const availableSeats = workshop.capacity - reservedSeats;
+    // Get current date and time
+    const now = new Date();
 
-      // Calculate total hours
-      let totalMinutes = 0;
-      workshop.days?.forEach((day) => {
-        day.segments?.forEach((segment) => {
-          const start = segment.startTime.split(':');
-          const end = segment.endTime.split(':');
-          const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-          const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-          totalMinutes += endMinutes - startMinutes;
+    // Transform data for public view and filter out past workshops
+    const transformedData = workshops
+      .map((workshop) => {
+        const reservedSeats = reservationMap.get(workshop.id) || 0;
+        const availableSeats = workshop.capacity - reservedSeats;
+
+        // Calculate total hours
+        let totalMinutes = 0;
+        workshop.days?.forEach((day) => {
+          day.segments?.forEach((segment) => {
+            const start = segment.startTime.split(':');
+            const end = segment.endTime.split(':');
+            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+            totalMinutes += endMinutes - startMinutes;
+          });
         });
-      });
-      const totalHours = (totalMinutes / 60).toFixed(1);
+        const totalHours = (totalMinutes / 60).toFixed(1);
 
-      // Total number of modules (segments)
-      const totalModules =
-        workshop.days?.reduce(
-          (sum, day) => sum + (day.segments?.length || 0),
-          0,
-        ) || 0;
+        // Total number of modules (segments)
+        const totalModules =
+          workshop.days?.reduce(
+            (sum, day) => sum + (day.segments?.length || 0),
+            0,
+          ) || 0;
 
-      // Get workshop date (first day)
-      const workshopDate = workshop.days?.[0]?.date || null;
+        // Get workshop date (first day)
+        const workshopDate = workshop.days?.[0]?.date || null;
 
-      // Calculate offer price (group discount for minimum attendees)
-      const offerPrice =
-        workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
-          ? workshop.groupDiscounts.sort(
-              (a, b) => a.minimumAttendees - b.minimumAttendees,
-            )[0].groupRatePerPerson
-          : null;
+        // ✅ Check if workshop has started (compare first day date and first segment time)
+        if (workshopDate) {
+          const workshopStartDate = new Date(workshopDate);
+          
+          // Check if first day has already passed
+          if (workshopStartDate < now) {
+            return null; // Filter out past workshops
+          }
 
-      // Get facility names
-      const facilityNames = workshop.facilityIds?.join(', ') || '';
+          // Check if workshop starts today - verify the exact start time
+          if (workshopStartDate.toDateString() === now.toDateString()) {
+            const firstSegment = workshop.days?.[0]?.segments?.[0];
+            if (firstSegment) {
+              const [startHour, startMinute] = firstSegment.startTime.split(':').map(Number);
+              const workshopStartTime = new Date(workshopStartDate);
+              workshopStartTime.setHours(startHour, startMinute, 0);
 
-      return {
-        id: workshop.id,
-        date: workshopDate,
-        title: workshop.title,
-        description: workshop.shortBlurb,
-        facility: facilityNames,
-        deliveryMode: workshop.deliveryMode,
-        workshopPhoto: workshop.coverImageUrl,
-        totalHours: `${totalHours} hours`,
-        cmeFredits: workshop.offersCmeCredits,
-        availableSeats,
-        totalCapacity: workshop.capacity,
-        price: workshop.standardBaseRate,
-        offerPrice: offerPrice,
-        totalModules,
-        learningObjectives: workshop.learningObjectives,
-        groupDiscountEnabled: workshop.groupDiscountEnabled,
-        faculty: workshop.faculty?.map((f) => ({
-          id: f.id,
-          name: `${f.firstName} ${f.lastName}`,
-          title: f.primaryClinicalRole,
-          profileImageUrl: f.imageUrl,
-        })),
-        // Online workshop details
-        webinarPlatform: workshop.webinarPlatform,
-      };
-    });
+              // If workshop start time has already passed today, filter it out
+              if (workshopStartTime <= now) {
+                return null;
+              }
+            }
+          }
+        }
+
+        // Calculate offer price (group discount for minimum attendees)
+        const offerPrice =
+          workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
+            ? workshop.groupDiscounts.sort(
+                (a, b) => a.minimumAttendees - b.minimumAttendees,
+              )[0].groupRatePerPerson
+            : null;
+
+        // Get facility names
+        const facilityNames = workshop.facilityIds?.join(', ') || '';
+
+        return {
+          id: workshop.id,
+          date: workshopDate,
+          title: workshop.title,
+          description: workshop.shortBlurb,
+          facility: facilityNames,
+          deliveryMode: workshop.deliveryMode,
+          workshopPhoto: workshop.coverImageUrl,
+          totalHours: `${totalHours} hours`,
+          cmeFredits: workshop.offersCmeCredits,
+          availableSeats,
+          totalCapacity: workshop.capacity,
+          price: workshop.standardBaseRate,
+          offerPrice: offerPrice,
+          totalModules,
+          learningObjectives: workshop.learningObjectives,
+          groupDiscountEnabled: workshop.groupDiscountEnabled,
+          faculty: workshop.faculty?.map((f) => ({
+            id: f.id,
+            name: `${f.firstName} ${f.lastName}`,
+            title: f.primaryClinicalRole,
+            profileImageUrl: f.imageUrl,
+          })),
+          // Online workshop details
+          webinarPlatform: workshop.webinarPlatform,
+        };
+      })
+      .filter((item) => item !== null);
 
     // Apply availability filter after transformation
     let filteredData = transformedData;
