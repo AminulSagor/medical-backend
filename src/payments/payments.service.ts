@@ -1196,8 +1196,7 @@ export class PaymentsService {
           );
 
           if (
-            stripeSession.payment_status === 'paid' &&
-            payment.status !== PaymentTransactionStatus.PAID
+            stripeSession.payment_status === 'paid'
           ) {
             payment.providerPaymentIntentId =
               typeof stripeSession.payment_intent === 'string'
