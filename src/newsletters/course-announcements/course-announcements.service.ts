@@ -6,6 +6,14 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { NewsletterDeliveryJob } from '../delivery/entities/newsletter-delivery-job.entity';
+import { NewsletterDeliveryRecipient } from '../delivery/entities/newsletter-delivery-recipient.entity';
+import {
+  Notification,
+  NotificationPriority,
+} from '../../notifications/entities/notification.entity';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
@@ -36,6 +44,9 @@ import {
   NewsletterContentType,
   CourseAnnouncementPriority,
   CourseAnnouncementRecipientMode,
+  NewsletterDeliveryJobStatus,
+  NewsletterDeliveryRecipientStatus,
+  NewsletterSubscriberStatus,
 } from '../../common/enums/newsletter-constants.enum';
 import { AddCourseAnnouncementAttachmentDto } from './dto/add-course-announcement-attachment.dto';
 import { ToggleRecipientDto } from './dto/toggle-recipient.dto';
@@ -46,8 +57,12 @@ import {
 
 @Injectable()
 export class CourseAnnouncementsService {
+  private readonly ses!: SESv2Client;
+  private readonly sesFromEmail: string | null;
+
   constructor(
     private readonly dataSource: DataSource,
+    private readonly configService: ConfigService,
 
     @InjectRepository(Workshop)
     private readonly workshopRepo: Repository<Workshop>,
@@ -70,7 +85,28 @@ export class CourseAnnouncementsService {
     private readonly courseMetaRepo: Repository<NewsletterCourseAnnouncement>,
     @InjectRepository(NewsletterCourseAnnouncementRecipient)
     private readonly courseRecipientRepo: Repository<NewsletterCourseAnnouncementRecipient>,
-  ) {}
+  ) {
+    const region =
+      this.configService.get<string>('AWS_REGION') ||
+      this.configService.get<string>('AWS_S3_REGION');
+    const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
+    const secretAccessKey = this.configService.get<string>(
+      'AWS_SECRET_ACCESS_KEY',
+    );
+
+    this.sesFromEmail =
+      this.configService.get<string>('SES_FROM_EMAIL') ?? null;
+
+    if (region && accessKeyId && secretAccessKey) {
+      this.ses = new SESv2Client({
+        region,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+        },
+      });
+    }
+  }
 
   async getDashboard(): Promise<Record<string, unknown>> {
     const [activeEnrollments, pendingBroadcasts, avgSizeRow] =
@@ -674,6 +710,12 @@ export class CourseAnnouncementsService {
     adminUserId: string,
     broadcastId: string,
   ): Promise<Record<string, unknown>> {
+    if (!this.ses || !this.sesFromEmail) {
+      throw new UnprocessableEntityException(
+        'AWS SES is not configured for course announcements',
+      );
+    }
+
     const b = await this.broadcastRepo.findOne({
       where: {
         id: broadcastId,
@@ -701,20 +743,330 @@ export class CourseAnnouncementsService {
     if (!userIds.length)
       throw new UnprocessableEntityException('No recipients selected');
 
-    // For MVP: mark SENT + store counts. (Delivery job/provider can be wired later)
-    b.status = NewsletterBroadcastStatus.SENT;
-    b.sentAt = new Date();
-    b.sentRecipientsCount = userIds.length;
-    b.updatedByAdminId = adminUserId;
+    const users = await this.userRepo.findBy({ id: In(userIds) });
+    const validUsers = users.filter((user) => user.medicalEmail?.trim());
 
-    await this.broadcastRepo.save(b);
+    if (!validUsers.length) {
+      throw new UnprocessableEntityException(
+        'No deliverable recipient email addresses were found',
+      );
+    }
+
+    const [deliveryJob, subscriberMap] = await this.dataSource.transaction(
+      async (manager) => {
+        const job = await manager.save(
+          NewsletterDeliveryJob,
+          manager.create(NewsletterDeliveryJob, {
+            broadcastId: b.id,
+            jobStatus: NewsletterDeliveryJobStatus.PROCESSING,
+            scheduledExecutionAt: new Date(),
+            startedAt: new Date(),
+            totalRecipients: validUsers.length,
+            successCount: 0,
+            failureCount: 0,
+            provider: 'SES',
+          }),
+        );
+
+        const emailList = validUsers.map((user) =>
+          user.medicalEmail.trim().toLowerCase(),
+        );
+        const existingSubscribers = emailList.length
+          ? await manager.find(NewsletterSubscriber, {
+              where: { email: In(emailList) },
+            })
+          : [];
+        const existingMap = new Map(
+          existingSubscribers.map((subscriber) => [
+            subscriber.email,
+            subscriber,
+          ]),
+        );
+
+        const subscribersToCreate = emailList
+          .filter((email) => !existingMap.has(email))
+          .map((email) => {
+            const user = validUsers.find(
+              (candidate) =>
+                candidate.medicalEmail.trim().toLowerCase() === email,
+            )!;
+
+            return manager.create(NewsletterSubscriber, {
+              email,
+              fullName: user.fullLegalName,
+              clinicalRole: user.professionalRole ?? null,
+              institution: user.institutionOrHospital ?? null,
+              status: NewsletterSubscriberStatus.ACTIVE,
+              source: 'COURSE_ANNOUNCEMENT',
+              createdByAdminId: adminUserId,
+              updatedByAdminId: adminUserId,
+            });
+          });
+
+        if (subscribersToCreate.length) {
+          const createdSubscribers = await manager.save(
+            NewsletterSubscriber,
+            subscribersToCreate,
+          );
+          for (const subscriber of createdSubscribers) {
+            existingMap.set(subscriber.email, subscriber);
+          }
+        }
+
+        const recipients = validUsers.map((user) => {
+          const email = user.medicalEmail.trim().toLowerCase();
+          const subscriber = existingMap.get(email)!;
+          return manager.create(NewsletterDeliveryRecipient, {
+            deliveryJobId: job.id,
+            broadcastId: b.id,
+            subscriberId: subscriber.id,
+            emailSnapshot: email,
+            deliveryStatus: NewsletterDeliveryRecipientStatus.PENDING,
+          });
+        });
+
+        const savedRecipients = await manager.save(
+          NewsletterDeliveryRecipient,
+          recipients,
+        );
+
+        const savedRecipientMap = new Map(
+          savedRecipients.map((recipient) => [
+            recipient.emailSnapshot,
+            recipient,
+          ]),
+        );
+
+        return [job, savedRecipientMap] as const;
+      },
+    );
+
+    const html = this.buildCourseAnnouncementHtml(
+      b.subjectLine,
+      b.customContent.messageBodyHtml,
+    );
+    const text = this.buildCourseAnnouncementText(
+      b.subjectLine,
+      b.customContent.messageBodyText,
+      b.customContent.messageBodyHtml,
+    );
+
+    let successCount = 0;
+    let failureCount = 0;
+    const failedEmails: string[] = [];
+
+    for (const user of validUsers) {
+      const email = user.medicalEmail.trim().toLowerCase();
+      const deliveryRecipient = subscriberMap.get(email);
+      if (!deliveryRecipient) continue;
+
+      try {
+        const response = await this.ses.send(
+          new SendEmailCommand({
+            FromEmailAddress: this.sesFromEmail,
+            Destination: {
+              ToAddresses: [email],
+            },
+            EmailTags: [
+              { Name: 'broadcastId', Value: b.id },
+              { Name: 'deliveryJobId', Value: deliveryJob.id },
+              { Name: 'deliveryRecipientId', Value: deliveryRecipient.id },
+            ],
+            Content: {
+              Simple: {
+                Subject: {
+                  Data: b.subjectLine,
+                  Charset: 'UTF-8',
+                },
+                Body: {
+                  Html: {
+                    Data: html,
+                    Charset: 'UTF-8',
+                  },
+                  Text: {
+                    Data: text,
+                    Charset: 'UTF-8',
+                  },
+                },
+              },
+            },
+          }),
+        );
+
+        deliveryRecipient.providerMessageId = response.MessageId ?? null;
+        deliveryRecipient.sentAt = new Date();
+        deliveryRecipient.deliveryStatus =
+          NewsletterDeliveryRecipientStatus.SENT;
+        deliveryRecipient.failureReason = null;
+        successCount += 1;
+      } catch (error) {
+        deliveryRecipient.deliveryStatus =
+          NewsletterDeliveryRecipientStatus.FAILED;
+        deliveryRecipient.failureReason =
+          error instanceof Error ? error.message : 'SES send failed';
+        failedEmails.push(email);
+        failureCount += 1;
+      }
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.save(
+        NewsletterDeliveryRecipient,
+        Array.from(subscriberMap.values()),
+      );
+
+      deliveryJob.successCount = successCount;
+      deliveryJob.failureCount = failureCount;
+      deliveryJob.completedAt = new Date();
+      deliveryJob.errorSummary =
+        failureCount > 0 ? `${failureCount} course recipient(s) failed` : null;
+      deliveryJob.jobStatus =
+        successCount === 0
+          ? NewsletterDeliveryJobStatus.FAILED
+          : failureCount > 0
+            ? NewsletterDeliveryJobStatus.PARTIAL
+            : NewsletterDeliveryJobStatus.COMPLETED;
+      await manager.save(NewsletterDeliveryJob, deliveryJob);
+
+      b.status =
+        successCount === 0
+          ? NewsletterBroadcastStatus.FAILED
+          : NewsletterBroadcastStatus.SENT;
+      b.sentAt = successCount > 0 ? new Date() : null;
+      b.sentRecipientsCount = successCount;
+      b.lastError = failedEmails.length
+        ? `Failed recipients: ${failedEmails.join(', ')}`
+        : null;
+      b.updatedByAdminId = adminUserId;
+      await manager.save(NewsletterBroadcast, b);
+
+      if (meta.pushToStudentPanel && successCount > 0) {
+        const notifications = validUsers.map((user) =>
+          manager.create(Notification, {
+            userId: user.id,
+            title: b.subjectLine,
+            message: this.buildInAppNotificationMessage(
+              meta.priority,
+              b.customContent?.messageBodyText,
+              b.customContent?.messageBodyHtml,
+            ),
+            category: 'course_updates',
+            type: 'COURSE_ANNOUNCEMENT',
+            priority: this.mapNotificationPriority(meta.priority),
+            icon: 'announcement',
+            resourceType: 'Workshop',
+            resourceId: meta.workshopId,
+            actionRoute: `/student/courses/${meta.workshopId}`,
+          }),
+        );
+
+        await manager.save(Notification, notifications);
+      }
+    });
 
     return {
-      message: 'Course announcement sent successfully',
+      message:
+        failureCount > 0
+          ? 'Course announcement sent with partial failures'
+          : 'Course announcement sent successfully',
       id: b.id,
       subjectLine: b.subjectLine,
-      recipientsCount: userIds.length,
+      recipientsCount: validUsers.length,
+      successCount,
+      failureCount,
     };
+  }
+
+  private buildCourseAnnouncementHtml(
+    subjectLine: string,
+    messageBodyHtml: string,
+  ): string {
+    return `
+      <!doctype html>
+      <html>
+        <head><meta charset="utf-8" /></head>
+        <body>
+          <h2>${this.escapeHtml(subjectLine)}</h2>
+          <div>${messageBodyHtml}</div>
+        </body>
+      </html>
+    `;
+  }
+
+  private buildCourseAnnouncementText(
+    subjectLine: string,
+    messageBodyText?: string | null,
+    messageBodyHtml?: string | null,
+  ): string {
+    if (messageBodyText?.trim()) {
+      return `${subjectLine}
+
+${messageBodyText.trim()}`;
+    }
+
+    return `${subjectLine}
+
+${this.stripHtml(messageBodyHtml ?? '')}`.trim();
+  }
+
+  private buildInAppNotificationMessage(
+    priority: CourseAnnouncementPriority,
+    messageBodyText?: string | null,
+    messageBodyHtml?: string | null,
+  ): string {
+    const content =
+      messageBodyText?.trim() || this.stripHtml(messageBodyHtml ?? '');
+    const trimmed =
+      content.length > 180 ? `${content.slice(0, 177)}...` : content;
+    return `${this.getPriorityLabel(priority)}: ${trimmed}`;
+  }
+
+  private mapNotificationPriority(
+    priority: CourseAnnouncementPriority,
+  ): NotificationPriority {
+    switch (priority) {
+      case CourseAnnouncementPriority.URGENT_ALERT:
+        return NotificationPriority.CRITICAL;
+      case CourseAnnouncementPriority.MATERIAL_SHARE:
+        return NotificationPriority.HIGH;
+      default:
+        return NotificationPriority.ROUTINE;
+    }
+  }
+
+  private getPriorityLabel(priority: CourseAnnouncementPriority): string {
+    switch (priority) {
+      case CourseAnnouncementPriority.URGENT_ALERT:
+        return 'Urgent alert';
+      case CourseAnnouncementPriority.MATERIAL_SHARE:
+        return 'Material share';
+      default:
+        return 'General update';
+    }
+  }
+
+  private stripHtml(value: string): string {
+    return value
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&#039;/gi, "'")
+      .replace(/&quot;/gi, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
   async listTransmissions(query: {
@@ -773,11 +1125,26 @@ export class CourseAnnouncementsService {
     mode: CourseAnnouncementRecipientMode,
   ): Promise<string[]> {
     if (mode === CourseAnnouncementRecipientMode.ALL) {
-      const rows = await this.enrollmentRepo.find({
-        where: { workshopId, isActive: true },
-        select: ['userId'],
-      });
-      return rows.map((r) => r.userId);
+      const [enrollments, reservations] = await Promise.all([
+        this.enrollmentRepo.find({
+          where: { workshopId, isActive: true },
+          select: ['userId'],
+        }),
+        this.reservationsRepo.find({
+          where: {
+            workshopId,
+            status: ReservationStatus.CONFIRMED,
+          },
+          select: ['userId'],
+        }),
+      ]);
+
+      return [
+        ...new Set([
+          ...enrollments.map((row) => row.userId),
+          ...reservations.map((row) => row.userId),
+        ]),
+      ];
     }
 
     const selected = await this.courseRecipientRepo.find({
