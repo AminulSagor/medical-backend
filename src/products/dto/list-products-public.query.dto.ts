@@ -18,12 +18,12 @@ export class ListProductsPublicQueryDto {
     @IsString()
     search?: string;
 
-    // Filter by category name(s)
+    // Filter by category ID(s)
     @IsOptional()
     @IsArray()
     @IsString({ each: true })
     @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
-    categoryNames?: string[];
+    categoryIds?: string[];
 
     // Filter by brand(s)
     @IsOptional()

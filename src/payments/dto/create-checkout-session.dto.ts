@@ -6,7 +6,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
   MaxLength,
   Min,
@@ -77,10 +76,10 @@ export class CreateCheckoutSessionDto {
   shippingAddress?: CheckoutShippingAddressDto;
 
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
   successUrl?: string;
 
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
   cancelUrl?: string;
 }

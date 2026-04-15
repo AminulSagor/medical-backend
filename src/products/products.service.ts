@@ -605,81 +605,83 @@ export class ProductsService {
 
   // ✅ PUBLIC: Get products with filters
   async findAllPublic(query: ListProductsPublicQueryDto) {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 12;
-    const skip = (page - 1) * limit;
+    try {
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 12;
+      const skip = (page - 1) * limit;
 
-    const qb = this.productsRepo
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.details', 'details')
-      .where('p.isActive = :isActive', { isActive: true });
+      const qb = this.productsRepo
+        .createQueryBuilder('p')
+        .leftJoinAndSelect('p.details', 'details')
+        .where('p.isActive = :isActive', { isActive: true });
 
-    // Search filter
-    if (query.search && query.search.trim()) {
-      const s = `%${query.search.trim().toLowerCase()}%`;
-      qb.andWhere(
-        `(
-                    LOWER(p.name) LIKE :s
-                    OR LOWER(p.sku) LIKE :s
-                    OR LOWER(p.clinicalDescription) LIKE :s
-                )`,
-        { s },
-      );
-    }
+      // Search filter
+      if (query.search && query.search.trim()) {
+        const s = `%${query.search.trim().toLowerCase()}%`;
+        qb.andWhere(
+          `(
+                      LOWER(p.name) LIKE :s
+                      OR LOWER(p.sku) LIKE :s
+                      OR LOWER(p.clinicalDescription) LIKE :s
+                  )`,
+          { s },
+        );
+      }
 
-    // Category filter by names
-    if (query.categoryNames && query.categoryNames.length > 0) {
-      const categories = await this.categoriesRepo.find({
-        where: query.categoryNames.map((name) => ({ name })),
-      });
-      const categoryIds = categories.map((c) => c.id);
-      if (categoryIds.length > 0) {
-        qb.andWhere('p.categoryId && :categoryIds', {
-          categoryIds,
+      // Category filter by IDs - validate UUIDs first
+      if (query.categoryIds && query.categoryIds.length > 0) {
+        // UUID v4 regex pattern
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const validCategoryIds = query.categoryIds.filter((id) => uuidRegex.test(id));
+        
+        if (validCategoryIds.length > 0) {
+          qb.andWhere('p.categoryId && :categoryIds', {
+            categoryIds: validCategoryIds,
+          });
+        }
+        // If no valid UUIDs, the filter is simply ignored (returns all active products)
+      }
+
+      // Brand filter
+      if (query.brands && query.brands.length > 0) {
+        qb.andWhere('p.brand IN (:...brands)', { brands: query.brands });
+      }
+
+      // Price range filter
+      if (query.minPrice) {
+        qb.andWhere('CAST(p.offerPrice AS DECIMAL) >= :minPrice', {
+          minPrice: query.minPrice,
         });
       }
-    }
 
-    // Brand filter
-    if (query.brands && query.brands.length > 0) {
-      qb.andWhere('p.brand IN (:...brands)', { brands: query.brands });
-    }
+      if (query.maxPrice) {
+        qb.andWhere('CAST(p.offerPrice AS DECIMAL) <= :maxPrice', {
+          maxPrice: query.maxPrice,
+        });
+      }
 
-    // Price range filter
-    if (query.minPrice) {
-      qb.andWhere('CAST(p.offerPrice AS DECIMAL) >= :minPrice', {
-        minPrice: query.minPrice,
-      });
-    }
+      // Sorting
+      switch (query.sortBy) {
+        case 'price-asc':
+          qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'ASC');
+          break;
+        case 'price-desc':
+          qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'DESC');
+          break;
+        case 'name-asc':
+          qb.orderBy('p.name', 'ASC');
+          break;
+        case 'name-desc':
+          qb.orderBy('p.name', 'DESC');
+          break;
+        case 'newest':
+        default:
+          qb.orderBy('p.createdAt', 'DESC');
+          break;
+      }
 
-    if (query.maxPrice) {
-      qb.andWhere('CAST(p.offerPrice AS DECIMAL) <= :maxPrice', {
-        maxPrice: query.maxPrice,
-      });
-    }
-
-    // Sorting
-    switch (query.sortBy) {
-      case 'price-asc':
-        qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'ASC');
-        break;
-      case 'price-desc':
-        qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'DESC');
-        break;
-      case 'name-asc':
-        qb.orderBy('p.name', 'ASC');
-        break;
-      case 'name-desc':
-        qb.orderBy('p.name', 'DESC');
-        break;
-      case 'newest':
-      default:
-        qb.orderBy('p.createdAt', 'DESC');
-        break;
-    }
-
-    const total = await qb.getCount();
-    const products = await qb.skip(skip).take(limit).getMany();
+      const total = await qb.getCount();
+      const products = await qb.skip(skip).take(limit).getMany();
 
     // Get category names for products
     const categoryIds = [
@@ -694,11 +696,11 @@ export class ProductsService {
       categoryMap = new Map(categories.map((c) => [c.id, c.name]));
     }
 
-    const items = products.map((p) => ({
-      id: p.id,
-      photo: p.details?.images?.[0] || null,
-      category: (p.categoryId || [])
-        .map((id) => categoryMap.get(id))
+      const items = products.map((p) => ({
+        id: p.id,
+        photo: p.details?.images?.[0] || null,
+        category: (p.categoryId || [])
+          .map((id) => categoryMap.get(id))
         .filter(Boolean)
         .join(', '),
       title: p.name,
@@ -712,15 +714,33 @@ export class ProductsService {
         null,
     }));
 
-    return {
-      items,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
+      return {
+        items,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (error) {
+      console.error('Error fetching products:', error);
+      
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      // Return empty results instead of throwing error for invalid filters
+      return {
+        items: [],
+        meta: {
+          page: query.page ?? 1,
+          limit: query.limit ?? 12,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
   }
 
   // ✅ PUBLIC: Get full product details by ID
