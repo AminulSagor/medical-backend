@@ -57,6 +57,7 @@ import {
   BroadcastDetail,
 } from 'src/common/types/broadcasts.types';
 import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
+import { DeliveryService } from '../delivery/delivery.service';
 
 @Injectable()
 export class BroadcastsService {
@@ -67,6 +68,7 @@ export class BroadcastsService {
     private readonly auditService: NewsletterAuditService,
     private readonly articleSourceAdapter: ArticleSourceAdapterService,
     private readonly blogArticleSourceService: BlogArticleSourceService,
+    private readonly deliveryService: DeliveryService,
 
     @InjectRepository(NewsletterBroadcast)
     private readonly broadcastRepo: Repository<NewsletterBroadcast>,
@@ -1057,13 +1059,25 @@ export class BroadcastsService {
   ): Promise<Record<string, unknown>> {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
-      relations: ['customContent', 'articleLink'], // Removed broadcastSegments
+      relations: ['customContent', 'articleLink'],
     });
 
-    if (!broadcast)
+    if (!broadcast) {
       throw new NotFoundException('General newsletter broadcast not found');
+    }
 
-    // 1. Verify schedule settings exist
+    if (
+      ![
+        NewsletterBroadcastStatus.DRAFT,
+        NewsletterBroadcastStatus.READY,
+        NewsletterBroadcastStatus.REVIEW_PENDING,
+      ].includes(broadcast.status)
+    ) {
+      throw new UnprocessableEntityException(
+        'Only draft/ready broadcasts can be scheduled',
+      );
+    }
+
     if (
       !broadcast.scheduledAt ||
       !broadcast.frequencyType ||
@@ -1074,7 +1088,6 @@ export class BroadcastsService {
       );
     }
 
-    // 2. Validate readiness
     if (!broadcast.subjectLine?.trim()) {
       throw new UnprocessableEntityException(
         'subjectLine is required before scheduling',
@@ -1102,8 +1115,12 @@ export class BroadcastsService {
     const cadence = await this.cadenceRepo.findOne({
       where: { channelType: NewsletterChannelType.GENERAL },
     });
+    if (!cadence) {
+      throw new NotFoundException(
+        'General newsletter cadence settings not found',
+      );
+    }
 
-    // 3. Check for Cadence Collisions
     const collision = await this.broadcastRepo.findOne({
       where: {
         channelType: NewsletterChannelType.GENERAL,
@@ -1117,13 +1134,16 @@ export class BroadcastsService {
       throw new ConflictException('Selected cadence slot is already booked');
     }
 
-    // 4. Estimate Recipients (Just grab everyone!)
     broadcast.estimatedRecipientsCount =
       await this.audienceResolverService.estimateAllSubscribers();
+    if (broadcast.estimatedRecipientsCount < 1) {
+      throw new UnprocessableEntityException(
+        'No active recipients available for selected audience',
+      );
+    }
 
-    // 5. Finalize the Execution
-    broadcast.cadenceVersionAtScheduling = cadence!.version;
-    broadcast.status = NewsletterBroadcastStatus.SCHEDULED; // THE TRIGGER
+    broadcast.cadenceVersionAtScheduling = cadence.version;
+    broadcast.status = NewsletterBroadcastStatus.SCHEDULED;
     broadcast.updatedByAdminId = adminUserId;
 
     const saved = await this.broadcastRepo.save(broadcast);
@@ -1133,6 +1153,8 @@ export class BroadcastsService {
       saved.id,
       saved.frequencyType!,
     );
+
+    await this.deliveryService.createDeliveryJobForBroadcast(saved.id);
 
     await this.auditService.log({
       entityType: 'BROADCAST',

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { DeliveryService } from './delivery.service';
 
 @Injectable()
@@ -7,7 +8,11 @@ export class DeliveryWorkerService {
 
   constructor(private readonly deliveryService: DeliveryService) {}
 
-  // Hook this to @Cron('* * * * *') later
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleCron(): Promise<void> {
+    await this.runOnce();
+  }
+
   async runOnce(): Promise<void> {
     const processed = await this.deliveryService.processDueJobs(new Date());
     if (processed > 0) {
