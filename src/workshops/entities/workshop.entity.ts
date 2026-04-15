@@ -54,6 +54,10 @@ export class Workshop {
   @Column({ type: 'boolean', default: false })
   offersCmeCredits: boolean;
 
+  // Number of CME credits offered (0 if none). Enables range filtering.
+  @Column({ type: 'numeric', precision: 6, scale: 1, default: 0 })
+  cmeCreditsCount: number;
+
   // location - array for multiple facilities or ["online"] for online workshops
   @Index()
   @Column({ type: 'simple-array' })

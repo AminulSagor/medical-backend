@@ -667,6 +667,7 @@ export class WorkshopsService {
       coverImageUrl: dto.coverImageUrl?.trim() || undefined,
       learningObjectives: dto.learningObjectives ?? undefined,
       offersCmeCredits: dto.offersCmeCredits,
+      cmeCreditsCount: dto.offersCmeCredits ? (dto.cmeCreditsCount ?? 0) : 0,
 
       facilityIds: facilityIds,
 
@@ -878,6 +879,8 @@ export class WorkshopsService {
       updatePayload.learningObjectives = dto.learningObjectives ?? undefined;
     if (dto.offersCmeCredits !== undefined)
       updatePayload.offersCmeCredits = dto.offersCmeCredits;
+    if (dto.cmeCreditsCount !== undefined)
+      updatePayload.cmeCreditsCount = dto.cmeCreditsCount;
     if (facilityIds !== undefined) updatePayload.facilityIds = facilityIds;
     if (dto.webinarPlatform !== undefined)
       updatePayload.webinarPlatform = dto.webinarPlatform?.trim() || undefined;
@@ -950,9 +953,13 @@ export class WorkshopsService {
     }
 
     if (query.offersCmeCredits) {
-      qb.andWhere('w.offersCmeCredits = :offersCmeCredits', {
-        offersCmeCredits: query.offersCmeCredits === 'true',
-      });
+      // backward compat: 'true' means cmeCreditsCount > 0
+      const wantsCme = query.offersCmeCredits === 'true';
+      if (wantsCme) {
+        qb.andWhere('w.cmeCreditsCount > 0');
+      } else {
+        qb.andWhere('w.cmeCreditsCount = 0');
+      }
     }
 
     if (query.groupDiscountEnabled) {
@@ -1053,10 +1060,15 @@ export class WorkshopsService {
       });
     }
 
-    // ── CME credits filter ──────────────────────────────────────────────────
-    if (query.offersCmeCredits) {
-      qb.andWhere('w.offersCmeCredits = :offersCmeCredits', {
-        offersCmeCredits: query.offersCmeCredits === 'true',
+    // ── CME credits range filter ────────────────────────────────────────────
+    if (query.minCmeCredits !== undefined) {
+      qb.andWhere('w.cmeCreditsCount >= :minCmeCredits', {
+        minCmeCredits: query.minCmeCredits,
+      });
+    }
+    if (query.maxCmeCredits !== undefined) {
+      qb.andWhere('w.cmeCreditsCount <= :maxCmeCredits', {
+        maxCmeCredits: query.maxCmeCredits,
       });
     }
 
@@ -1236,6 +1248,7 @@ export class WorkshopsService {
         workshopPhoto: workshop.coverImageUrl,
         totalHours: `${totalHours} hours`,
         cmeCredits: workshop.offersCmeCredits,
+        cmeCreditsCount: Number(workshop.cmeCreditsCount ?? 0),
         availableSeats,
         totalCapacity: workshop.capacity,
         isFullyBooked: availableSeats <= 0,

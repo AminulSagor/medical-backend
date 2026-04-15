@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min } from "class-validator";
 import { Type } from "class-transformer";
 
 export class PublicListWorkshopsQueryDto {
@@ -32,15 +32,32 @@ export class PublicListWorkshopsQueryDto {
   @IsIn(["in_person", "online"])
   deliveryMode?: "in_person" | "online";
 
-  /** CME credits filter: 'true' | 'false' */
-  @IsOptional()
-  @IsIn(["true", "false"])
-  offersCmeCredits?: "true" | "false";
 
   /** Seat availability: 'true' = has seats, 'false' = fully booked */
   @IsOptional()
   @IsIn(["true", "false"])
   hasAvailableSeats?: "true" | "false";
+
+  /**
+   * CME credits range filter.
+   * minCmeCredits: only workshops offering >= this many CME credits.
+   * e.g. minCmeCredits=4
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  minCmeCredits?: number;
+
+  /**
+   * maxCmeCredits: only workshops offering <= this many CME credits.
+   * e.g. maxCmeCredits=12
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  maxCmeCredits?: number;
 
   /**
    * Upcoming filter: 'true' returns only workshops starting today or later.
