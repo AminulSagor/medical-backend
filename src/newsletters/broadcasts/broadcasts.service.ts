@@ -56,6 +56,7 @@ import {
   BroadcastActionsAllowed,
   BroadcastDetail,
 } from 'src/common/types/broadcasts.types';
+import { NewsletterSubscriber } from '../audience/entities/newsletter-subscriber.entity';
 
 @Injectable()
 export class BroadcastsService {
@@ -91,6 +92,8 @@ export class BroadcastsService {
     private readonly deliveryRecipientRepo: Repository<NewsletterDeliveryRecipient>,
     @InjectRepository(NewsletterDeliveryJob)
     private readonly deliveryJobRepo: Repository<NewsletterDeliveryJob>,
+    @InjectRepository(NewsletterSubscriber)
+    private readonly subscriberRepo: Repository<NewsletterSubscriber>,
   ) {}
 
   async createDraft(
@@ -1287,6 +1290,9 @@ export class BroadcastsService {
       ? { ...baseWhere, frequencyType: query.frequencyType }
       : baseWhere;
 
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
     // Run all aggregate queries concurrently for an "allover summary"
     const [
       queuedCount,
@@ -1296,7 +1302,9 @@ export class BroadcastsService {
       byTypeRows,
       historyCount,
       sentCount,
-      bestOpenRow,
+      totalSubscribers,
+      newSubscribersThisWeek,
+      allSentOpenRates, // Fetch all sent open rates to calculate max and avg safely in JS
     ] = await Promise.all([
       // 1. Queue Stats
       this.broadcastRepo.count({
@@ -1324,7 +1332,7 @@ export class BroadcastsService {
         where: { ...freqWhere, status: NewsletterBroadcastStatus.SENT },
         select: ['openRatePercent'],
         order: { sentAt: 'DESC' },
-        take: 20,
+        take: 20, // Recent 20 for calculating current engagement
       }),
 
       // 2. Draft Stats
@@ -1367,24 +1375,47 @@ export class BroadcastsService {
       this.broadcastRepo.count({
         where: { ...freqWhere, status: NewsletterBroadcastStatus.SENT },
       }),
-      this.broadcastRepo
-        .createQueryBuilder('b')
-        .select('MAX(CAST(b.openRatePercent AS NUMERIC))', 'bestOpenRate')
-        .where('b.channelType = :channelType', {
+
+      // 4. NEW: Subscriber Stats
+      this.subscriberRepo.createQueryBuilder('s').getCount(),
+
+      this.subscriberRepo
+        .createQueryBuilder('s')
+        .where('s.createdAt >= :sevenDaysAgo', { sevenDaysAgo })
+        .getCount(),
+
+      // 5. ✅ FIX: Fetch raw rates safely without SQL CAST to prevent Postgres crashes
+      this.broadcastRepo.find({
+        where: {
           channelType: NewsletterChannelType.GENERAL,
-        })
-        .andWhere('b.status = :status', {
           status: NewsletterBroadcastStatus.SENT,
-        })
-        .getRawOne<{ bestOpenRate: string | null }>(),
+        },
+        select: ['openRatePercent'],
+      }),
     ]);
 
-    // Calculate Averages and Coverage
+    // ✅ Calculate Safe Historical Averages & Max Rates in JS
+    let bestOpenRatePercent = 0;
+    let historicalTotal = 0;
+    let validHistoricalCount = 0;
+
+    for (const b of allSentOpenRates) {
+      const rate = Number(b.openRatePercent);
+      if (!Number.isNaN(rate)) {
+        if (rate > bestOpenRatePercent) bestOpenRatePercent = rate;
+        historicalTotal += rate;
+        validHistoricalCount++;
+      }
+    }
+    const historicalAvg =
+      validHistoricalCount > 0 ? historicalTotal / validHistoricalCount : 0;
+
+    // Calculate Recent Averages and Coverage
     const avgOpen = sentRecent.length
       ? Number(
           (
             sentRecent.reduce(
-              (sum, x) => sum + Number(x.openRatePercent || 0),
+              (sum, x) => sum + (Number(x.openRatePercent) || 0),
               0,
             ) / sentRecent.length
           ).toFixed(1),
@@ -1406,16 +1437,37 @@ export class BroadcastsService {
         query.frequencyType === NewsletterFrequencyType.MONTHLY ? 30 : 7;
     }
 
+    // Calculate Engagement Trend (Current vs Historical Avg)
+    const diff = avgOpen - historicalAvg;
+    const trendSign = diff >= 0 ? '+' : '';
+    const engagementTrendStr = `${trendSign}${diff.toFixed(1)}% vs historical avg`;
+
+    // Map Exact UI Response
     return {
-      cards: {
-        queueEfficiency: {
-          queuedCount,
-          coverageDays,
-          draftCount,
-        },
-        engagementPulse: {
-          averageOpenRatePercent: avgOpen,
-          bestOpenRatePercent: Number(bestOpenRow?.bestOpenRate ?? 0),
+      message: 'Workspace metrics fetched successfully',
+      data: {
+        cards: {
+          // Card 1: Queue Efficiency
+          queueEfficiency: {
+            value: `${queuedCount} Items Queued`,
+            trend: `Next ${coverageDays} days covered`,
+            rawCount: queuedCount,
+            draftCount: draftCount,
+          },
+          // Card 2: Total Subscribers
+          totalSubscribers: {
+            value: totalSubscribers.toLocaleString(),
+            trend: `+${newSubscribersThisWeek} this week`,
+          },
+          // Card 3: Engagement Pulse
+          engagementPulse: {
+            value: `${avgOpen.toFixed(1)}% Open`,
+            trend:
+              validHistoricalCount > 0
+                ? engagementTrendStr
+                : 'Insufficient data',
+            bestOpenRatePercent: Number(bestOpenRatePercent.toFixed(1)),
+          },
         },
         breakdownByContentType: byTypeRows.map((r) => ({
           contentType: r.contentType,

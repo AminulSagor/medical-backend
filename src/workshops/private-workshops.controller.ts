@@ -1,10 +1,12 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { WorkshopsService } from './workshops.service';
@@ -14,6 +16,8 @@ import {
   ListMyCoursesLoggedQueryDto,
   ListMyCoursesQueryDto,
 } from './dto/list-my-courses.query.dto';
+import type { Response } from 'express';
+import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
 
 @Controller('workshops/private')
 export class PrivateWorkshopsController {
@@ -35,9 +39,22 @@ export class PrivateWorkshopsController {
     return this.workshopsService.getMyCoursesLogged(req.user.id, query);
   }
 
-  @Get('tickets/:ticketId')
-  getPublicTicketDetails(@Param('ticketId') ticketId: string) {
-    return this.workshopsService.getPublicTicketDetails(ticketId);
+  // @Get('tickets/:ticketId')
+  // getPublicTicketDetails(@Param('ticketId') ticketId: string) {
+  //   return this.workshopsService.getPublicTicketDetails(ticketId);
+  // }
+
+  // 2. Get QR Code Data URL
+  @Get('tickets/:id/qr')
+  getTicketQrCode(@Param('id') ticketId: string) {
+    return this.workshopsService.getTicketQrCode(ticketId);
+  }
+
+  // 3. Download PDF Ticket
+  @Get('tickets/:id/download')
+  downloadTicketPdf(@Param('id') ticketId: string, @Res() res: Response) {
+    // Note: We don't return anything directly here because the service pipes the PDF buffer to the response stream.
+    this.workshopsService.generateTicketPdf(ticketId, res);
   }
 
   @Get('my-courses/:courseId')
@@ -60,6 +77,7 @@ export class PrivateWorkshopsController {
 
   // 1. Get Refund Eligibility & Info
   @Get('my-courses/:courseId/refund-info')
+  @UseGuards(AuthGuard('jwt'))
   getRefundEstimation(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
@@ -69,15 +87,37 @@ export class PrivateWorkshopsController {
 
   // 2. Submit Refund Request
   @Post('my-courses/:courseId/refund')
+  @UseGuards(AuthGuard('jwt'))
   submitRefundRequest(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
+    @Body() dto: SubmitRefundRequestDto, // ✅ Added Body
   ) {
-    return this.workshopsService.submitRefundRequest(req.user.id, courseId);
+    return this.workshopsService.submitRefundRequest(
+      req.user.id,
+      courseId,
+      dto,
+    );
+  }
+
+  @Get('my-courses/:courseId/calendar/download-ics')
+  async downloadIcsFile(
+    @Param('courseId') courseId: string,
+    @Res() res: Response,
+  ) {
+    const icsString = await this.workshopsService.generateIcsFile(courseId);
+
+    res.set({
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `attachment; filename="workshop-${courseId}.ics"`,
+    });
+
+    res.send(icsString);
   }
 
   // 3. Get Calendar Links
   @Get('my-courses/:courseId/calendar')
+  @UseGuards(AuthGuard('jwt'))
   getCalendarLinks(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
@@ -87,10 +127,20 @@ export class PrivateWorkshopsController {
 
   // 4. Get Live Meeting Info
   @Get('my-courses/:courseId/meeting')
+  @UseGuards(AuthGuard('jwt'))
   getMeetingDetails(
     @Req() req: AuthenticatedRequest,
     @Param('courseId') courseId: string,
   ) {
     return this.workshopsService.getMeetingDetails(req.user.id, courseId);
+  }
+
+  @Get('my-course/certificate/:ticketId/download')
+  async downloadCertificate(
+    @Param('ticketId') ticketId: string,
+    @Res() res: Response,
+  ) {
+    // Note: We don't return JSON. The service pipes the PDF buffer to the response stream.
+    await this.workshopsService.generateCertificatePdf(ticketId, res);
   }
 }
