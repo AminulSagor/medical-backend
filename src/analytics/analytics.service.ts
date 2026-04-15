@@ -21,6 +21,7 @@ import {
 } from 'src/workshops/entities/workshop-order-summary.entity';
 import { Product } from 'src/products/entities/product.entity';
 import { Workshop } from 'src/workshops/entities/workshop.entity';
+import { PopularCoursesMetricsResponse } from 'src/common/interfaces/response.interface';
 
 @Injectable()
 export class AnalyticsService {
@@ -36,6 +37,8 @@ export class AnalyticsService {
     private readonly productRepo: Repository<Product>,
     @InjectRepository(Workshop)
     private readonly workshopRepo: Repository<Workshop>,
+    @InjectRepository(User)
+    private readonly usersRepo: Repository<User>,
   ) {}
 
   private getDateRanges(query: AnalyticsQueryDto) {
@@ -238,10 +241,32 @@ export class AnalyticsService {
   // ────────────────── MOST POPULAR COURSES ──────────────────
   async getPopularCoursesMetrics(
     query: PopularCoursesQueryDto,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<PopularCoursesMetricsResponse> {
+    const totalEnrollments = await this.enrollmentRepo.count();
+
+    const totalCompletedEnrollments = await this.enrollmentRepo.count({
+      where: {
+        isActive: true,
+      },
+    });
+
+    const completionRate =
+      totalEnrollments > 0
+        ? Number(
+            ((totalCompletedEnrollments / totalEnrollments) * 100).toFixed(1),
+          )
+        : 0;
+
+    const activeInstructors = await this.usersRepo
+      .createQueryBuilder('user')
+      .where('LOWER(user.role) = :role', { role: 'instructor' })
+      .andWhere('user.isActive = :isActive', { isActive: true })
+      .getCount();
+
     return {
-      totalEnrollments: await this.enrollmentRepo.count(),
-      activeWorkshops: await this.workshopRepo.count(), // Assuming Workshop entity exists
+      totalEnrollments,
+      completionRate,
+      activeInstructors,
     };
   }
 

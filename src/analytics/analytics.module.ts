@@ -19,6 +19,7 @@ import { Workshop } from 'src/workshops/entities/workshop.entity';
       WorkshopOrderSummary,
       Product,
       Workshop,
+      User,
     ]),
   ],
   providers: [AnalyticsService],

@@ -11,6 +11,8 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ListProductsPublicQueryDto } from './dto/list-products-public.query.dto';
 import { CartRequestDto } from './dto/cart.dto';
 import { Review, ReviewStatus } from '../reviews/entities/review.entity';
+import { AdminProductViewResponse } from 'src/common/interfaces/response.interface';
+import { OrderItem } from 'src/orders/entities/order-item.entity';
 
 @Injectable()
 export class ProductsService {
@@ -18,6 +20,7 @@ export class ProductsService {
     @InjectRepository(Product) private productsRepo: Repository<Product>,
     @InjectRepository(Category) private categoriesRepo: Repository<Category>,
     @InjectRepository(Review) private reviewsRepo: Repository<Review>,
+    @InjectRepository(OrderItem) private orderItemRepo: Repository<OrderItem>,
   ) {}
 
   async create(dto: CreateProductDto) {
@@ -177,6 +180,134 @@ export class ProductsService {
       bundleUpsells: product.details?.bundleUpsells || [],
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
+    };
+  }
+
+  async getAdminProductView(
+    productId: string,
+  ): Promise<AdminProductViewResponse> {
+    const product = await this.productsRepo.findOne({
+      where: { id: productId },
+      relations: ['details'],
+    });
+
+    if (!product) throw new NotFoundException('Product not found');
+
+    // ===== CURRENT PERIOD (last 30 days) =====
+    const now = new Date();
+    const last30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const prev30 = new Date(last30.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const qb = this.orderItemRepo
+      .createQueryBuilder('item')
+      .leftJoin('item.order', 'order')
+      .where('item.productId = :productId', { productId });
+
+    // current
+    const current = await qb
+      .andWhere('order.createdAt >= :last30', { last30 })
+      .select([
+        'SUM(item.quantity) as units',
+        'SUM(item.total) as revenue',
+        'MAX(order.createdAt) as lastSale',
+      ])
+      .getRawOne();
+
+    // previous
+    const previous = await qb
+      .andWhere('order.createdAt BETWEEN :prev30 AND :last30', {
+        prev30,
+        last30,
+      })
+      .select(['SUM(item.quantity) as units', 'SUM(item.total) as revenue'])
+      .getRawOne();
+
+    const currentUnits = Number(current?.units || 0);
+    const currentRevenue = Number(current?.revenue || 0);
+
+    const prevUnits = Number(previous?.units || 0);
+    const prevRevenue = Number(previous?.revenue || 0);
+
+    const unitsChange =
+      prevUnits === 0 ? 100 : ((currentUnits - prevUnits) / prevUnits) * 100;
+
+    const revenueChange =
+      prevRevenue === 0
+        ? 100
+        : ((currentRevenue - prevRevenue) / prevRevenue) * 100;
+
+    // ===== CROSS SELL FULL DETAILS =====
+    const crossIds = [
+      ...(product.details?.frequentlyBoughtTogether || []),
+      ...(product.details?.bundleUpsells || []),
+    ];
+
+    const crossProducts = await this.productsRepo.findByIds(crossIds);
+
+    const mapMini = (p: Product) => ({
+      id: p.id,
+      name: p.name,
+      image: p.details?.images?.[0],
+      price: p.offerPrice,
+    });
+
+    return {
+      summary: {
+        totalUnitsSold: currentUnits,
+        totalRevenue: currentRevenue,
+        lastSaleDate: current?.lastsale || null,
+        comparison: {
+          unitsSoldChangePct: Number(unitsChange.toFixed(2)),
+          revenueChangePct: Number(revenueChange.toFixed(2)),
+        },
+      },
+
+      product: {
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        brand: product.brand,
+        clinicalDescription: product.clinicalDescription,
+
+        images: product.details?.images || [],
+        badges: product.details?.frontendBadges || [],
+
+        organization: {
+          availability: product.stockQuantity > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK',
+          department: product.categoryId,
+        },
+
+        clinicalBenefits: product.details?.clinicalBenefits || [],
+        technicalSpecifications: product.details?.technicalSpecifications || [],
+
+        pricing: {
+          publicPrice: product.actualPrice,
+          memberPrice: product.offerPrice,
+          bulkTiers: product.bulkPriceTiers,
+        },
+
+        inventory: {
+          currentStock: product.stockQuantity,
+          status:
+            product.stockQuantity === 0
+              ? 'OUT'
+              : product.stockQuantity <= product.lowStockAlert
+                ? 'LOW'
+                : 'OPTIMAL',
+        },
+
+        crossSell: {
+          frequentlyBoughtTogether: crossProducts
+            .filter((p) =>
+              product.details.frequentlyBoughtTogether.includes(p.id),
+            )
+            .map(mapMini),
+
+          bundleUpsells: crossProducts
+            .filter((p) => product.details.bundleUpsells.includes(p.id))
+            .map(mapMini),
+        },
+      },
     };
   }
 
@@ -445,7 +576,9 @@ export class ProductsService {
     const brands = [...new Set(products.map((p) => p.brand).filter(Boolean))];
 
     // Calculate price range
-    const prices = products.map((p) => Number(p.offerPrice) || Number(p.actualPrice) || 0);
+    const prices = products.map(
+      (p) => Number(p.offerPrice) || Number(p.actualPrice) || 0,
+    );
     const priceRange = {
       min: prices.length > 0 ? Math.min(...prices) : 0,
       max: prices.length > 0 ? Math.max(...prices) : 0,
@@ -549,9 +682,11 @@ export class ProductsService {
     const products = await qb.skip(skip).take(limit).getMany();
 
     // Get category names for products
-    const categoryIds = [...new Set(products.flatMap((p) => p.categoryId || []))];
+    const categoryIds = [
+      ...new Set(products.flatMap((p) => p.categoryId || [])),
+    ];
     let categoryMap = new Map<string, string>();
-    
+
     if (categoryIds.length > 0) {
       const categories = await this.categoriesRepo.find({
         where: categoryIds.map((id) => ({ id })),
@@ -572,7 +707,9 @@ export class ProductsService {
       discountedPrice: p.offerPrice,
       brand: p.brand,
       inStock: p.stockQuantity > 0,
-      badge: p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') || null,
+      badge:
+        p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') ||
+        null,
     }));
 
     return {
