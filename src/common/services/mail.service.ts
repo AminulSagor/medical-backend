@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import nodemailer from 'nodemailer';
+import * as nodemailer from 'nodemailer'
 
 @Injectable()
 export class MailService {
@@ -27,7 +27,11 @@ export class MailService {
         port,
         secure: port === 465,
         auth: { user, pass },
-      });
+        family: 4,
+        tls: {
+          rejectUnauthorized: false,
+        },
+      } as nodemailer.TransportOptions);
     } else {
       this.transporter = null;
       console.warn(
