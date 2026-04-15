@@ -494,17 +494,11 @@ export class ProductsService {
       );
     }
 
-    // Category filter by names
-    if (query.categoryNames && query.categoryNames.length > 0) {
-      const categories = await this.categoriesRepo.find({
-        where: query.categoryNames.map((name) => ({ name })),
+    // Category filter by IDs
+    if (query.categoryIds && query.categoryIds.length > 0) {
+      qb.andWhere('p.categoryId && :categoryIds', {
+        categoryIds: query.categoryIds,
       });
-      const categoryIds = categories.map((c) => c.id);
-      if (categoryIds.length > 0) {
-        qb.andWhere('p.categoryId && :categoryIds', {
-          categoryIds,
-        });
-      }
     }
 
     // Brand filter

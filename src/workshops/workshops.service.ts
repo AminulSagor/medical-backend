@@ -1175,167 +1175,192 @@ export class WorkshopsService {
   }
 
   async getPublicWorkshopById(id: string) {
-    // Find workshop with all relations
-    const workshop = await this.workshopsRepo.findOne({
-      where: { id, status: WorkshopStatus.PUBLISHED },
-      relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
-      order: {
-        days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
-      },
-    });
+    try {
+      // Find workshop with all relations
+      const workshop = await this.workshopsRepo.findOne({
+        where: { id, status: WorkshopStatus.PUBLISHED },
+        relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
+        order: {
+          days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
+        },
+      });
 
-    if (!workshop) {
-      throw new NotFoundException('Workshop not found or not available');
+      if (!workshop) {
+        throw new NotFoundException('Workshop not found or not available');
+      }
+
+      // Get reserved seats count
+      const reservedSeatsResult = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .select('SUM(r.numberOfSeats)', 'total')
+        .where('r.workshopId = :workshopId', { workshopId: id })
+        .andWhere('r.status != :cancelledStatus', {
+          cancelledStatus: 'cancelled',
+        })
+        .getRawOne();
+
+      const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
+      const availableSeats = workshop.capacity - reservedSeats;
+
+      // Calculate total hours and duration for each day
+      let totalMinutes = 0;
+      const daysWithDetails =
+        workshop.days?.map((day) => {
+          let dayMinutes = 0;
+          const segmentsWithDetails =
+            day.segments?.map((segment) => {
+              const start = segment.startTime.split(':');
+              const end = segment.endTime.split(':');
+              const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+              const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+              const duration = endMinutes - startMinutes;
+              dayMinutes += duration;
+
+              return {
+                segmentNumber: segment.segmentNumber,
+                courseTopic: segment.courseTopic,
+                topicDetails: segment.topicDetails,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                durationMinutes: duration,
+                durationHours: (duration / 60).toFixed(1),
+              };
+            }) || [];
+
+          totalMinutes += dayMinutes;
+
+          return {
+            dayNumber: day.dayNumber,
+            date: day.date,
+            totalDayHours: (dayMinutes / 60).toFixed(1),
+            segments: segmentsWithDetails,
+          };
+        }) || [];
+
+      const totalHours = (totalMinutes / 60).toFixed(1);
+      const totalModules =
+        workshop.days?.reduce(
+          (sum, day) => sum + (day.segments?.length || 0),
+          0,
+        ) || 0;
+
+      // Get workshop dates
+      const workshopStartDate = workshop.days?.[0]?.date || null;
+      const workshopEndDate =
+        workshop.days?.[workshop.days.length - 1]?.date || null;
+
+      // Calculate offer price (group discount for minimum attendees)
+      const sortedDiscounts =
+        workshop.groupDiscounts?.sort(
+          (a, b) => a.minimumAttendees - b.minimumAttendees,
+        ) || [];
+      const offerPrice =
+        workshop.groupDiscountEnabled && sortedDiscounts.length > 0
+          ? sortedDiscounts[0].groupRatePerPerson
+          : null;
+
+      // ✅ FIX: Fetch full facility details dynamically
+      const facilities =
+        workshop.facilityIds?.length > 0
+          ? await this.facilitiesRepo.find({
+              where: { id: In(workshop.facilityIds) },
+            })
+          : [];
+
+      return {
+        message: 'Workshop details fetched successfully',
+        data: {
+          id: workshop.id,
+          title: workshop.title,
+          description: workshop.shortBlurb,
+          learningObjectives: workshop.learningObjectives,
+          deliveryMode: workshop.deliveryMode,
+          status: workshop.status,
+
+          // Dates
+          startDate: workshopStartDate,
+          endDate: workshopEndDate,
+          numberOfDays: workshop.days?.length || 0,
+
+          // Location / Online details
+          facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
+          facilities, // ✅ Full facility objects returned here
+          facilityIds: workshop.facilityIds,
+          webinarPlatform: workshop.webinarPlatform,
+          meetingLink: workshop.meetingLink,
+          autoRecordSession: workshop.autoRecordSession,
+
+          // Visual
+          workshopPhoto: workshop.coverImageUrl,
+
+          // Time
+          totalHours: `${totalHours} hours`,
+          totalMinutes,
+
+          // CME
+          offersCmeCredits: workshop.offersCmeCredits,
+
+          // Capacity
+          totalCapacity: workshop.capacity,
+          reservedSeats,
+          availableSeats,
+          alertAt: workshop.alertAt,
+
+          // Pricing
+          standardPrice: workshop.standardBaseRate,
+          offerPrice: offerPrice,
+          groupDiscountEnabled: workshop.groupDiscountEnabled,
+          groupDiscounts: sortedDiscounts.map((d) => ({
+            minimumAttendees: d.minimumAttendees,
+            pricePerPerson: d.groupRatePerPerson,
+            savingsPerPerson: (
+              Number(workshop.standardBaseRate) - Number(d.groupRatePerPerson)
+            ).toFixed(2),
+          })),
+
+          // Content
+          totalModules,
+          days: daysWithDetails,
+
+          // Faculty
+          faculty: workshop.faculty?.map((f) => ({
+            id: f.id,
+            name: `${f.firstName} ${f.lastName}`,
+            title: f.primaryClinicalRole,
+            bio: f.medicalDesignation,
+            profileImageUrl: f.imageUrl,
+            specialties: f.institutionOrHospital,
+          })),
+
+          // Timestamps
+          createdAt: workshop.createdAt,
+          updatedAt: workshop.updatedAt,
+        },
+      };
+    } catch (error) {
+      console.error('Error fetching workshop:', error);
+      
+      // If it's already a NestJS exception, re-throw it
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      
+      // If it's a known error, provide a meaningful message
+      if (error instanceof Error) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: error.message || 'Failed to fetch workshop details',
+          error: 'Bad Request',
+        });
+      }
+      
+      // Generic error handler
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'An error occurred while fetching workshop details. Please try again later.',
+        error: 'Bad Request',
+      });
     }
-
-    // Get reserved seats count
-    const reservedSeatsResult = await this.reservationsRepo
-      .createQueryBuilder('r')
-      .select('SUM(r.numberOfSeats)', 'total')
-      .where('r.workshopId = :workshopId', { workshopId: id })
-      .andWhere('r.status != :cancelledStatus', {
-        cancelledStatus: 'cancelled',
-      })
-      .getRawOne();
-
-    const reservedSeats = parseInt(reservedSeatsResult?.total || '0', 10);
-    const availableSeats = workshop.capacity - reservedSeats;
-
-    // Calculate total hours and duration for each day
-    let totalMinutes = 0;
-    const daysWithDetails =
-      workshop.days?.map((day) => {
-        let dayMinutes = 0;
-        const segmentsWithDetails =
-          day.segments?.map((segment) => {
-            const start = segment.startTime.split(':');
-            const end = segment.endTime.split(':');
-            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-            const duration = endMinutes - startMinutes;
-            dayMinutes += duration;
-
-            return {
-              segmentNumber: segment.segmentNumber,
-              courseTopic: segment.courseTopic,
-              topicDetails: segment.topicDetails,
-              startTime: segment.startTime,
-              endTime: segment.endTime,
-              durationMinutes: duration,
-              durationHours: (duration / 60).toFixed(1),
-            };
-          }) || [];
-
-        totalMinutes += dayMinutes;
-
-        return {
-          dayNumber: day.dayNumber,
-          date: day.date,
-          totalDayHours: (dayMinutes / 60).toFixed(1),
-          segments: segmentsWithDetails,
-        };
-      }) || [];
-
-    const totalHours = (totalMinutes / 60).toFixed(1);
-    const totalModules =
-      workshop.days?.reduce(
-        (sum, day) => sum + (day.segments?.length || 0),
-        0,
-      ) || 0;
-
-    // Get workshop dates
-    const workshopStartDate = workshop.days?.[0]?.date || null;
-    const workshopEndDate =
-      workshop.days?.[workshop.days.length - 1]?.date || null;
-
-    // Calculate offer price (group discount for minimum attendees)
-    const sortedDiscounts =
-      workshop.groupDiscounts?.sort(
-        (a, b) => a.minimumAttendees - b.minimumAttendees,
-      ) || [];
-    const offerPrice =
-      workshop.groupDiscountEnabled && sortedDiscounts.length > 0
-        ? sortedDiscounts[0].groupRatePerPerson
-        : null;
-
-    // ✅ FIX: Fetch full facility details dynamically
-    const facilities =
-      workshop.facilityIds?.length > 0
-        ? await this.facilitiesRepo.find({
-            where: { id: In(workshop.facilityIds) },
-          })
-        : [];
-
-    return {
-      message: 'Workshop details fetched successfully',
-      data: {
-        id: workshop.id,
-        title: workshop.title,
-        description: workshop.shortBlurb,
-        learningObjectives: workshop.learningObjectives,
-        deliveryMode: workshop.deliveryMode,
-        status: workshop.status,
-
-        // Dates
-        startDate: workshopStartDate,
-        endDate: workshopEndDate,
-        numberOfDays: workshop.days?.length || 0,
-
-        // Location / Online details
-        facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
-        facilities, // ✅ Full facility objects returned here
-        facilityIds: workshop.facilityIds,
-        webinarPlatform: workshop.webinarPlatform,
-        meetingLink: workshop.meetingLink,
-        autoRecordSession: workshop.autoRecordSession,
-
-        // Visual
-        workshopPhoto: workshop.coverImageUrl,
-
-        // Time
-        totalHours: `${totalHours} hours`,
-        totalMinutes,
-
-        // CME
-        offersCmeCredits: workshop.offersCmeCredits,
-
-        // Capacity
-        totalCapacity: workshop.capacity,
-        reservedSeats,
-        availableSeats,
-        alertAt: workshop.alertAt,
-
-        // Pricing
-        standardPrice: workshop.standardBaseRate,
-        offerPrice: offerPrice,
-        groupDiscountEnabled: workshop.groupDiscountEnabled,
-        groupDiscounts: sortedDiscounts.map((d) => ({
-          minimumAttendees: d.minimumAttendees,
-          pricePerPerson: d.groupRatePerPerson,
-          savingsPerPerson: (
-            Number(workshop.standardBaseRate) - Number(d.groupRatePerPerson)
-          ).toFixed(2),
-        })),
-
-        // Content
-        totalModules,
-        days: daysWithDetails,
-
-        // Faculty
-        faculty: workshop.faculty?.map((f) => ({
-          id: f.id,
-          name: `${f.firstName} ${f.lastName}`,
-          title: f.primaryClinicalRole,
-          bio: f.medicalDesignation,
-          profileImageUrl: f.imageUrl,
-          specialties: f.institutionOrHospital,
-        })),
-
-        // Timestamps
-        createdAt: workshop.createdAt,
-        updatedAt: workshop.updatedAt,
-      },
-    };
   }
 
   async getMyEnrolledWorkshops(userId: string) {
