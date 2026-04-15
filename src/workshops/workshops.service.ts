@@ -1008,32 +1008,76 @@ export class WorkshopsService {
     // Only show published workshops
     qb.andWhere('w.status = :status', { status: 'published' });
 
-    // Filters
+    // ── Workshop type / delivery mode filter ────────────────────────────────
     if (query.deliveryMode) {
       qb.andWhere('w.deliveryMode = :deliveryMode', {
         deliveryMode: query.deliveryMode,
       });
     }
 
+    // ── CME credits filter ──────────────────────────────────────────────────
     if (query.offersCmeCredits) {
       qb.andWhere('w.offersCmeCredits = :offersCmeCredits', {
         offersCmeCredits: query.offersCmeCredits === 'true',
       });
     }
 
-    // Get reserved seats count for each workshop
-    const reservationsSubQuery = this.reservationsRepo
-      .createQueryBuilder('r')
-      .select('r.workshopId', 'workshopId')
-      .addSelect('SUM(r.numberOfSeats)', 'reservedSeats')
-      .where('r.status != :cancelledStatus', { cancelledStatus: 'cancelled' })
-      .groupBy('r.workshopId');
+    // ── General title / blurb search ────────────────────────────────────────
+    if (query.q?.trim()) {
+      const searchTerm = `%${query.q.trim().toLowerCase()}%`;
+      qb.andWhere(
+        '(LOWER(w.title) LIKE :searchTerm OR LOWER(w.shortBlurb) LIKE :searchTerm)',
+        { searchTerm },
+      );
+    }
 
-    // Sorting
+    // ── Topic filter (match against segment courseTopic) ────────────────────
+    if (query.topic?.trim()) {
+      const topicTerm = `%${query.topic.trim().toLowerCase()}%`;
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM workshop_days wd
+          JOIN workshop_segments ws ON ws."dayId" = wd.id
+          WHERE wd."workshopId" = w.id
+            AND LOWER(ws."courseTopic") LIKE :topicTerm
+        )`,
+        { topicTerm },
+      );
+    }
+
+    // ── Date range filters ─────────────────────────────────────────────────
+    if (query.dateFrom) {
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) >= :dateFrom`,
+        { dateFrom: query.dateFrom },
+      );
+    }
+
+    if (query.dateTo) {
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) <= :dateTo`,
+        { dateTo: query.dateTo },
+      );
+    }
+
+    // ── Upcoming filter ────────────────────────────────────────────────────
+    if (query.upcoming === 'true') {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) >= :todayStr`,
+        { todayStr },
+      );
+    }
+
+    // ── Sorting ─────────────────────────────────────────────────────────────
     const sortBy = query.sortBy ?? 'date';
-    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as 'ASC' | 'DESC';
 
     if (sortBy === 'date') {
       qb.orderBy('days.date', sortOrder);
@@ -1043,12 +1087,12 @@ export class WorkshopsService {
       qb.orderBy('w.title', sortOrder);
     }
 
-    // Pagination
+    // ── Pagination ──────────────────────────────────────────────────────────
     qb.skip(skip).take(limit);
 
     const [workshops, total] = await qb.getManyAndCount();
 
-    // Get reservation counts
+    // ── Reservation counts (for available seats) ─────────────────────────────
     const workshopIds = workshops.map((w) => w.id);
     const reservationCounts =
       workshopIds.length > 0
@@ -1071,109 +1115,94 @@ export class WorkshopsService {
       ]),
     );
 
-    // Get current date and time
-    const now = new Date();
+    const todayStr = new Date().toISOString().slice(0, 10);
 
-    // Transform data for public view and filter out past workshops
-    const transformedData = workshops
-      .map((workshop) => {
-        const reservedSeats = reservationMap.get(workshop.id) || 0;
-        const availableSeats = workshop.capacity - reservedSeats;
+    // ── Transform workshops ──────────────────────────────────────────────────
+    const transformedData = workshops.map((workshop) => {
+      const reservedSeats = reservationMap.get(workshop.id) || 0;
+      const availableSeats = workshop.capacity - reservedSeats;
 
-        // Calculate total hours
-        let totalMinutes = 0;
-        workshop.days?.forEach((day) => {
-          day.segments?.forEach((segment) => {
-            const start = segment.startTime.split(':');
-            const end = segment.endTime.split(':');
-            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-            totalMinutes += endMinutes - startMinutes;
-          });
+      // Calculate total hours
+      let totalMinutes = 0;
+      workshop.days?.forEach((day) => {
+        day.segments?.forEach((segment) => {
+          const start = segment.startTime.split(':');
+          const end = segment.endTime.split(':');
+          const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+          const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+          totalMinutes += endMinutes - startMinutes;
         });
-        const totalHours = (totalMinutes / 60).toFixed(1);
+      });
+      const totalHours = (totalMinutes / 60).toFixed(1);
 
-        // Total number of modules (segments)
-        const totalModules =
-          workshop.days?.reduce(
-            (sum, day) => sum + (day.segments?.length || 0),
-            0,
-          ) || 0;
+      const totalModules =
+        workshop.days?.reduce(
+          (sum, day) => sum + (day.segments?.length || 0),
+          0,
+        ) || 0;
 
-        // Get workshop date (first day)
-        const workshopDate = workshop.days?.[0]?.date || null;
+      // Sort days ascending to get the earliest start date
+      const sortedDays = [...(workshop.days ?? [])].sort((a, b) =>
+        a.date.localeCompare(b.date),
+      );
+      const workshopDate = sortedDays[0]?.date || null;
 
-        // ✅ Check if workshop has started (compare first day date and first segment time)
-        if (workshopDate) {
-          const workshopStartDate = new Date(workshopDate);
-          
-          // Check if first day has already passed
-          if (workshopStartDate < now) {
-            return null; // Filter out past workshops
-          }
+      // Group discount offer price
+      const offerPrice =
+        workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
+          ? workshop.groupDiscounts.sort(
+              (a, b) => a.minimumAttendees - b.minimumAttendees,
+            )[0].groupRatePerPerson
+          : null;
 
-          // Check if workshop starts today - verify the exact start time
-          if (workshopStartDate.toDateString() === now.toDateString()) {
-            const firstSegment = workshop.days?.[0]?.segments?.[0];
-            if (firstSegment) {
-              const [startHour, startMinute] = firstSegment.startTime.split(':').map(Number);
-              const workshopStartTime = new Date(workshopStartDate);
-              workshopStartTime.setHours(startHour, startMinute, 0);
+      // Collect unique topics across all segments
+      const topics = [
+        ...new Set(
+          workshop.days?.flatMap(
+            (day) => day.segments?.map((s) => s.courseTopic) ?? [],
+          ) ?? [],
+        ),
+      ];
 
-              // If workshop start time has already passed today, filter it out
-              if (workshopStartTime <= now) {
-                return null;
-              }
-            }
-          }
-        }
+      const isUpcoming = workshopDate ? workshopDate >= todayStr : false;
+      const facilityNames = workshop.facilityIds?.join(', ') || '';
 
-        // Calculate offer price (group discount for minimum attendees)
-        const offerPrice =
-          workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
-            ? workshop.groupDiscounts.sort(
-                (a, b) => a.minimumAttendees - b.minimumAttendees,
-              )[0].groupRatePerPerson
-            : null;
+      return {
+        id: workshop.id,
+        date: workshopDate,
+        title: workshop.title,
+        description: workshop.shortBlurb,
+        facility: facilityNames,
+        deliveryMode: workshop.deliveryMode,
+        workshopPhoto: workshop.coverImageUrl,
+        totalHours: `${totalHours} hours`,
+        cmeCredits: workshop.offersCmeCredits,
+        availableSeats,
+        totalCapacity: workshop.capacity,
+        isFullyBooked: availableSeats <= 0,
+        isUpcoming,
+        price: workshop.standardBaseRate,
+        offerPrice,
+        totalModules,
+        topics,
+        learningObjectives: workshop.learningObjectives,
+        groupDiscountEnabled: workshop.groupDiscountEnabled,
+        faculty: workshop.faculty?.map((f) => ({
+          id: f.id,
+          name: `${f.firstName} ${f.lastName}`,
+          title: f.primaryClinicalRole,
+          profileImageUrl: f.imageUrl,
+        })),
+        webinarPlatform: workshop.webinarPlatform,
+      };
+    });
 
-        // Get facility names
-        const facilityNames = workshop.facilityIds?.join(', ') || '';
-
-        return {
-          id: workshop.id,
-          date: workshopDate,
-          title: workshop.title,
-          description: workshop.shortBlurb,
-          facility: facilityNames,
-          deliveryMode: workshop.deliveryMode,
-          workshopPhoto: workshop.coverImageUrl,
-          totalHours: `${totalHours} hours`,
-          cmeFredits: workshop.offersCmeCredits,
-          availableSeats,
-          totalCapacity: workshop.capacity,
-          price: workshop.standardBaseRate,
-          offerPrice: offerPrice,
-          totalModules,
-          learningObjectives: workshop.learningObjectives,
-          groupDiscountEnabled: workshop.groupDiscountEnabled,
-          faculty: workshop.faculty?.map((f) => ({
-            id: f.id,
-            name: `${f.firstName} ${f.lastName}`,
-            title: f.primaryClinicalRole,
-            profileImageUrl: f.imageUrl,
-          })),
-          // Online workshop details
-          webinarPlatform: workshop.webinarPlatform,
-        };
-      })
-      .filter((item) => item !== null);
-
-    // Apply availability filter after transformation
+    // ── Seat availability post-filter ─────────────────────────────────────────
     let filteredData = transformedData;
     if (query.hasAvailableSeats === 'true') {
       filteredData = transformedData.filter((w) => w.availableSeats > 0);
     } else if (query.hasAvailableSeats === 'false') {
-      filteredData = transformedData.filter((w) => w.availableSeats === 0);
+      filteredData = transformedData.filter((w) => w.availableSeats <= 0);
     }
 
     return {
