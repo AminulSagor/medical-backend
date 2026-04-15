@@ -276,9 +276,10 @@ export class AnalyticsService {
         ? Number(((completedEnrollments / totalEnrollments) * 100).toFixed(1))
         : 0;
 
+    // ✅ FIX: Cast the enum to text using ::text before applying LOWER()
     const activeInstructors = await this.usersRepo
       .createQueryBuilder('user')
-      .where('LOWER("user"."role") = :role', { role: 'instructor' })
+      .where('LOWER("user"."role"::text) = :role', { role: 'instructor' })
       .andWhere('"user"."isActive" = :isActive', { isActive: true })
       .getCount();
 
