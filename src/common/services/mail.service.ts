@@ -23,15 +23,11 @@ export class MailService {
 
     if (this.isConfigured) {
       this.transporter = nodemailer.createTransport({
-  host,
-  port,
-  secure: port === 465,
-  auth: { user, pass },
-  family: 4,
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
-});
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+      });
     } else {
       this.transporter = null;
       console.warn(
