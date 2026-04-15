@@ -113,63 +113,52 @@ export class CourseAnnouncementsService {
   async listCohorts(
     query: ListCohortsQueryDto,
   ): Promise<Record<string, unknown>> {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
-    // ✅ FIX 1: Force lowercase to handle "UPCOMING" or "COMPLETED" from Postman
-    const tab = (query.tab || 'all').toLowerCase();
+    const page = Number(query.page ?? 1);
+    const limit = Number(query.limit ?? 10);
+    const tab = String(query.tab ?? 'all')
+      .trim()
+      .toLowerCase();
+    const now = new Date();
 
     const qb = this.workshopRepo
       .createQueryBuilder('w')
       .leftJoinAndSelect('w.days', 'd')
-      .orderBy('w.createdAt', 'DESC');
+      .leftJoinAndSelect('d.segments', 's')
+      .orderBy('w.createdAt', 'DESC')
+      .addOrderBy('d.dayNumber', 'ASC')
+      .addOrderBy('s.segmentNumber', 'ASC');
 
-    // 1. Filter by Course Name (Search)
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere('LOWER(w.title) LIKE :s', { s });
     }
 
-    // ✅ FIX 2: Uncommented and activated Category Filter
-    if (query.category?.trim()) {
-      // Assuming your Workshop entity has a 'categoryId' or 'category' column.
-      // Adjust 'w.categoryId' to match your exact entity property name if different.
-      qb.andWhere('w.categoryId = :category', {
-        category: query.category.trim(),
-      });
-    }
-
-    // 3. Filter by Cohort Status at the Database level
-    const now = new Date();
-
-    if (tab === 'upcoming') {
-      qb.andWhere(
-        '(EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now) OR NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id))',
-        { now },
-      );
-    } else if (tab === 'completed') {
-      qb.andWhere(
-        'NOT EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id AND wd.date >= :now)',
-        { now },
-      );
-      qb.andWhere(
-        'EXISTS (SELECT 1 FROM workshop_days wd WHERE wd."workshopId" = w.id)',
-      );
-    } else if (tab === 'cancelled') {
-      // ✅ FIX 3: Actually query for cancelled status instead of forcing 1=0
+    // draft must be excluded
+    if (tab === 'cancelled') {
       qb.andWhere('w.status = :cancelledStatus', {
         cancelledStatus: 'cancelled',
       });
+    } else if (tab === 'upcoming' || tab === 'completed') {
+      qb.andWhere('w.status = :publishedStatus', {
+        publishedStatus: 'published',
+      });
+    } else {
+      // all = published + cancelled, avoid draft
+      qb.andWhere('w.status != :draftStatus', {
+        draftStatus: 'draft',
+      });
     }
 
-    // Execute query with accurate pagination limits
-    const [items, total] = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+    if (query.category?.trim()) {
+      qb.andWhere('w.deliveryMode = :deliveryMode', {
+        deliveryMode: query.category.trim().toLowerCase(),
+      });
+    }
 
-    const workshopIds = items.map((w) => w.id);
+    const workshops = await qb.getMany();
 
-    // Fetch enrollments to calculate seat capacities
+    const workshopIds = workshops.map((w) => w.id);
+
     const counts = workshopIds.length
       ? await this.enrollmentRepo
           .createQueryBuilder('e')
@@ -183,46 +172,100 @@ export class CourseAnnouncementsService {
 
     const countMap = new Map(counts.map((r) => [r.workshopId, Number(r.cnt)]));
 
-    const rows = items.map((w: any) => {
-      const dayDates = (w.days ?? [])
-        .map((x: any) => new Date(x.date))
-        .filter((d: Date) => !Number.isNaN(d.getTime()))
-        .sort((a, b) => a.getTime() - b.getTime());
+    const sortDays = (days: any[] = []) =>
+      [...days].sort((a, b) => {
+        if ((a.dayNumber ?? 0) !== (b.dayNumber ?? 0)) {
+          return (a.dayNumber ?? 0) - (b.dayNumber ?? 0);
+        }
 
-      const startDate = dayDates[0] ?? null;
-      const endDate = dayDates.length ? dayDates[dayDates.length - 1] : null;
+        return String(a.date).localeCompare(String(b.date));
+      });
 
-      const enrolledCount = countMap.get(w.id) ?? 0;
-      const capacity = Number(w.capacity ?? 0);
+    const buildDateTime = (
+      date: string | null | undefined,
+      time: string | null | undefined,
+      fallbackTime: string,
+    ) => {
+      if (!date) return null;
 
-      // Map dynamic status for the UI
-      let cohortStatus = 'upcoming'; // default
+      const value = new Date(`${date}T${time || fallbackTime}`);
+      return Number.isNaN(value.getTime()) ? null : value;
+    };
 
-      // If it's a draft, flag it as 'draft' so the UI can show a draft badge
-      if (String(w.status).toLowerCase() === 'draft') {
-        cohortStatus = 'upcoming';
-      } else if (endDate && endDate.getTime() < now.getTime()) {
-        cohortStatus = 'completed';
-      } else if (String(w.status).toLowerCase() === 'cancelled') {
-        cohortStatus = 'cancelled';
-      }
+    const getWorkshopStartAt = (days: any[] = []) => {
+      const orderedDays = sortDays(days);
+      const firstDay = orderedDays[0];
+      if (!firstDay) return null;
 
-      const seatStatus =
-        capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
+      const firstStartTime =
+        [...(firstDay.segments ?? [])]
+          .map((segment: any) => segment.startTime)
+          .filter(Boolean)
+          .sort()[0] ?? '00:00:00';
 
-      return {
-        id: w.id,
-        title: w.title,
-        startDate,
-        status: cohortStatus,
-        seatStatus,
-        enrolledCount,
-        capacity,
-      };
-    });
+      return buildDateTime(firstDay.date, firstStartTime, '00:00:00');
+    };
+
+    const getWorkshopEndAt = (days: any[] = []) => {
+      const orderedDays = sortDays(days);
+      const lastDay = orderedDays[orderedDays.length - 1];
+      if (!lastDay) return null;
+
+      const sortedEndTimes = [...(lastDay.segments ?? [])]
+        .map((segment: any) => segment.endTime)
+        .filter(Boolean)
+        .sort();
+
+      const lastEndTime =
+        sortedEndTimes[sortedEndTimes.length - 1] ?? '23:59:59';
+
+      return buildDateTime(lastDay.date, lastEndTime, '23:59:59');
+    };
+
+    const rows = workshops
+      .map((w: any) => {
+        const startAt = getWorkshopStartAt(w.days ?? []);
+        const endAt = getWorkshopEndAt(w.days ?? []);
+        const enrolledCount = countMap.get(w.id) ?? 0;
+        const capacity = Number(w.capacity ?? 0);
+
+        let cohortStatus: 'upcoming' | 'completed' | 'cancelled';
+
+        if (String(w.status).toLowerCase() === 'cancelled') {
+          cohortStatus = 'cancelled';
+        } else if (endAt && endAt.getTime() < now.getTime()) {
+          // all sessions finished
+          cohortStatus = 'completed';
+        } else {
+          // published and not finished yet = upcoming
+          // this also keeps ongoing workshops inside upcoming
+          cohortStatus = 'upcoming';
+        }
+
+        const seatStatus =
+          capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
+
+        return {
+          id: w.id,
+          title: w.title,
+          startDate: startAt,
+          status: cohortStatus,
+          seatStatus,
+          enrolledCount,
+          capacity,
+        };
+      })
+      .filter((row) => {
+        if (tab === 'all') return true;
+        return row.status === tab;
+      });
+
+    const total = rows.length;
+    const startIndex = (page - 1) * limit;
+    const items = rows.slice(startIndex, startIndex + limit);
 
     return {
-      items: rows,
+      items,
       meta: { page, limit, total },
     };
   }
