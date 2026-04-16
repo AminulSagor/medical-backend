@@ -1087,7 +1087,7 @@ export class PaymentsService {
         productId: item.productId,
         productName: item.name,
         sku: item.sku || undefined,
-        image: item.photo || undefined,
+        images: item.photo ? [item.photo] : [],
         unitPrice: item.unitPrice,
         quantity: item.quantity,
         total: item.lineTotal,

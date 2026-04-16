@@ -226,7 +226,7 @@ export class PrivateOrderService {
           ? {
               title: leadItem.productName,
               sku: leadItem.sku,
-              imageUrl: leadItem.image,
+              imageUrl: leadItem.images?.[0],
               extraItemsText:
                 extraItemsCount > 0 ? `+ ${extraItemsCount} other items` : null,
               badgeText:
@@ -365,7 +365,7 @@ export class PrivateOrderService {
           id: item.productId,
           name: item.productName,
           sku: item.sku || 'N/A',
-          imageUrl: item.image || null,
+          imageUrl: item.images?.[0] || null,
           price: parseFloat(item.unitPrice).toFixed(2),
           quantity: item.quantity,
           attributes: null,
