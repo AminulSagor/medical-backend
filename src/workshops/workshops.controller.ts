@@ -71,6 +71,9 @@ export class WorkshopsController {
     return this.service.getRefundPreview(workshopId, reservationId);
   }
 
+
+  
+
   @Post(':workshopId/refunds/confirm')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
