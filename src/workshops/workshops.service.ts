@@ -1019,6 +1019,27 @@ export class WorkshopsService {
       );
     }
 
+    // filter by upcoming (workshops with at least one date in the future)
+    if (query.upcoming === 'true') {
+      qb.andWhere(
+        'w.id IN (SELECT DISTINCT wd.workshopId FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
+      );
+    }
+
+    // filter by past (workshops with all dates in the past)
+    if (query.past === 'true') {
+      qb.andWhere(
+        'w.id NOT IN (SELECT DISTINCT wd.workshopId FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
+      );
+    }
+
+    // filter by refund requests (workshops with refund records)
+    if (query.hasRefundRequests === 'true') {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM workshop_refunds wr WHERE wr.workshopId = w.id)',
+      );
+    }
+
     // sorting
     const sortBy = query.sortBy ?? 'createdAt';
     const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
