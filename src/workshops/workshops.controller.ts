@@ -27,7 +27,12 @@ export class WorkshopsController {
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
-  create(@Body() dto: CreateWorkshopDto) {
+  async create(@Body() dto: CreateWorkshopDto) {
+    // If ID is provided, update existing workshop (upsert)
+    if (dto.id) {
+      return this.service.update(dto.id, dto);
+    }
+    // Otherwise create new workshop
     return this.service.create(dto);
   }
 

@@ -64,16 +64,22 @@ class CreateWorkshopGroupDiscountDto {
 }
 
 export class CreateWorkshopDto {
+  @IsOptional()
+  @IsUUID()
+  id?: string; // Optional ID for upsert functionality
+
+  @IsOptional()
   @IsEnum(WorkshopDeliveryMode)
-  deliveryMode: WorkshopDeliveryMode;
+  deliveryMode?: WorkshopDeliveryMode;
 
   @IsOptional()
   @IsEnum(WorkshopStatus)
   status?: WorkshopStatus;
 
+  @IsOptional()
   @IsString()
   @MaxLength(220)
-  title: string;
+  title?: string; // Optional for drafts
 
   @IsOptional()
   @IsString()
@@ -87,8 +93,9 @@ export class CreateWorkshopDto {
   @IsString()
   learningObjectives?: string;
 
+  @IsOptional()
   @IsBoolean()
-  offersCmeCredits: boolean;
+  offersCmeCredits?: boolean; // Optional for drafts
 
   /** Number of CME credits this workshop offers (e.g. 4.5). Required when offersCmeCredits=true. */
   @IsOptional()
@@ -98,7 +105,7 @@ export class CreateWorkshopDto {
 
   @IsArray()
   @IsString({ each: true })
-  facilityIds: string[];
+  facilityIds?: string[]; // Optional for drafts
 
   // Online workshop specific fields (optional, used when deliveryMode is "online")
   @IsOptional()
@@ -119,19 +126,23 @@ export class CreateWorkshopDto {
   @IsBoolean()
   autoRecordSession?: boolean;
 
+  @IsOptional()
   @IsInt()
   @Min(1)
-  capacity: number;
+  capacity?: number; // Optional for drafts
 
+  @IsOptional()
   @IsInt()
   @Min(0)
-  alertAt: number;
+  alertAt?: number; // Optional for drafts
 
+  @IsOptional()
   @IsString()
-  standardBaseRate: string;
+  standardBaseRate?: string; // Optional for drafts
 
+  @IsOptional()
   @IsBoolean()
-  groupDiscountEnabled: boolean;
+  groupDiscountEnabled?: boolean; // Optional for drafts
 
   // if enabled=true, you will send at least one record
   @IsOptional()
@@ -146,8 +157,9 @@ export class CreateWorkshopDto {
   @IsUUID('4', { each: true })
   facultyIds?: string[];
 
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateWorkshopDayDto)
-  days: CreateWorkshopDayDto[];
+  days?: CreateWorkshopDayDto[]; // Optional for drafts
 }
