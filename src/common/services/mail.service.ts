@@ -27,9 +27,12 @@ export class MailService {
         port,
         secure: port === 465,
         auth: { user, pass },
-        family: 4,
+        family: 4, // Force IPv4 to avoid IPv6 connectivity issues
+        connectionTimeout: 10000, // 10 seconds
+        socketTimeout: 10000, // 10 seconds
         tls: {
           rejectUnauthorized: false,
+          minVersion: 'TLSv1.2',
         },
       } as nodemailer.TransportOptions);
     } else {
