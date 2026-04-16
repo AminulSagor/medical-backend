@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -96,7 +97,12 @@ export class CreateWorkshopDto {
   @IsBoolean()
   offersCmeCredits?: boolean; // Optional for drafts
 
+  /** Number of CME credits this workshop offers (e.g. 4.5). Required when offersCmeCredits=true. */
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  cmeCreditsCount?: number;
+
   @IsArray()
   @IsString({ each: true })
   facilityIds?: string[]; // Optional for drafts

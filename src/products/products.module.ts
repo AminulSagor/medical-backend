@@ -9,10 +9,18 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { User } from '../users/entities/user.entity';
 import { Category } from '../categories/entities/category.entity';
 import { Review } from '../reviews/entities/review.entity';
+import { OrderItem } from 'src/orders/entities/order-item.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Product, ProductDetails, Category, User, Review]),
+    TypeOrmModule.forFeature([
+      Product,
+      ProductDetails,
+      Category,
+      User,
+      Review,
+      OrderItem,
+    ]),
   ],
   controllers: [ProductsController, PublicProductsController],
   providers: [ProductsService, RolesGuard],

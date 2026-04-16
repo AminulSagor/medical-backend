@@ -3,6 +3,8 @@ import { Injectable } from '@nestjs/common';
 export interface SendEmailRecipient {
   email: string;
   subscriberId?: string;
+  deliveryRecipientId?: string;
+  tags?: Record<string, string>;
 }
 
 export interface SendEmailPayload {
@@ -10,6 +12,16 @@ export interface SendEmailPayload {
   html: string;
   text?: string | null;
   recipients: SendEmailRecipient[];
+  replyToAddresses?: string[];
+}
+
+export interface SendEmailRecipientResult {
+  email: string;
+  subscriberId?: string;
+  deliveryRecipientId?: string;
+  accepted: boolean;
+  providerMessageId?: string | null;
+  errorMessage?: string | null;
 }
 
 export interface SendEmailResult {
@@ -17,17 +29,18 @@ export interface SendEmailResult {
   providerBatchId?: string | null;
   acceptedCount: number;
   failedCount: number;
+  recipientResults: SendEmailRecipientResult[];
 }
 
 @Injectable()
 export class ProviderAdapterService {
   async sendBatch(_payload: SendEmailPayload): Promise<SendEmailResult> {
-    // Default no-op adapter; override with SES/SendGrid provider service later
     return {
       provider: 'NOOP',
       providerBatchId: null,
       acceptedCount: 0,
       failedCount: 0,
+      recipientResults: [],
     };
   }
 }
