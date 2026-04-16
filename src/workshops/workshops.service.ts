@@ -532,19 +532,28 @@ export class WorkshopsService {
 
   async create(dto: CreateWorkshopDto) {
     // --- validations ---
-    const title = dto.title?.trim();
-    if (!title) throw new BadRequestException('Workshop title is required');
-
-    const baseRate = Number(dto.standardBaseRate ?? '0');
-    if (!Number.isFinite(baseRate) || baseRate <= 0) {
-      throw new BadRequestException('standardBaseRate must be greater than 0');
+    // For drafts, only validate provided fields
+    if (dto.title !== undefined) {
+      const title = dto.title?.trim();
+      if (!title) throw new BadRequestException('Workshop title cannot be empty');
     }
 
-    if (dto.alertAt > dto.capacity) {
-      throw new BadRequestException('alertAt cannot be greater than capacity');
+    // Validate pricing only if provided
+    if (dto.standardBaseRate !== undefined) {
+      const baseRate = Number(dto.standardBaseRate);
+      if (!Number.isFinite(baseRate) || baseRate <= 0) {
+        throw new BadRequestException('standardBaseRate must be greater than 0');
+      }
     }
 
-    // Handle facilityIds based on delivery mode
+    // Validate capacity/alertAt relationship only if both are provided
+    if (dto.capacity !== undefined && dto.alertAt !== undefined) {
+      if (dto.alertAt > dto.capacity) {
+        throw new BadRequestException('alertAt cannot be greater than capacity');
+      }
+    }
+
+    // Handle facilityIds based on delivery mode (only if deliveryMode is provided)
     let facilityIds = dto.facilityIds || [];
 
     if (dto.deliveryMode === 'online') {
@@ -552,7 +561,7 @@ export class WorkshopsService {
       if (facilityIds.length === 0) {
         facilityIds = ['online'];
       }
-    } else {
+    } else if (dto.deliveryMode === 'in_person') {
       // For in-person workshops, validate all facilities exist
       if (facilityIds.length === 0) {
         throw new BadRequestException(
@@ -569,6 +578,7 @@ export class WorkshopsService {
         }
       }
     }
+    // If deliveryMode is not provided (draft), skip facility validation
 
     // group discount validation
     const groupDiscounts = dto.groupDiscounts ?? [];
@@ -587,7 +597,8 @@ export class WorkshopsService {
             'groupRatePerPerson must be greater than 0',
           );
         }
-        if (rate >= baseRate) {
+        // Only validate against baseRate if both are provided
+        if (dto.standardBaseRate !== undefined && rate >= Number(dto.standardBaseRate)) {
           throw new BadRequestException(
             'groupRatePerPerson must be less than standardBaseRate',
           );
@@ -601,11 +612,15 @@ export class WorkshopsService {
       }
     }
 
-    // days/segments validation + time parsing
-    if (!dto.days?.length)
-      throw new BadRequestException('At least one day is required');
-
-    const normalizedDays = dto.days.map((d) => {
+    // days/segments validation + time parsing (only if days are provided)
+    if (dto.days !== undefined && dto.days.length === 0) {
+      throw new BadRequestException('At least one day is required when days are provided');
+    }
+    
+    // Skip days validation if not provided (for drafts)
+    let normalizedDays;
+    if (dto.days?.length) {
+      normalizedDays = dto.days.map((d) => {
       if (!d.segments?.length) {
         throw new BadRequestException(
           `Day ${d.dayNumber} must have at least one segment`,
@@ -649,6 +664,7 @@ export class WorkshopsService {
         segments,
       };
     });
+    }
 
     // faculty assignment (existing only)
     let facultyEntities: Faculty[] = [];
@@ -662,7 +678,7 @@ export class WorkshopsService {
     const payload: DeepPartial<Workshop> = {
       deliveryMode: dto.deliveryMode,
       status: dto.status ?? WorkshopStatus.DRAFT,
-      title,
+      title: dto.title?.trim(),
       shortBlurb: dto.shortBlurb?.trim() || undefined,
       coverImageUrl: dto.coverImageUrl?.trim() || undefined,
       learningObjectives: dto.learningObjectives ?? undefined,
