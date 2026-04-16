@@ -3,6 +3,7 @@ import {
     IsBoolean,
     IsEnum,
     IsInt,
+    IsNumber,
     IsOptional,
     IsString,
     MaxLength,
@@ -87,6 +88,12 @@ export class UpdateWorkshopDto {
     @IsOptional()
     @IsBoolean()
     offersCmeCredits?: boolean;
+
+    /** Number of CME credits this workshop offers (e.g. 4.5). */
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    cmeCreditsCount?: number;
 
     @IsOptional()
     @IsArray()

@@ -683,6 +683,7 @@ export class WorkshopsService {
       coverImageUrl: dto.coverImageUrl?.trim() || undefined,
       learningObjectives: dto.learningObjectives ?? undefined,
       offersCmeCredits: dto.offersCmeCredits,
+      cmeCreditsCount: dto.offersCmeCredits ? (dto.cmeCreditsCount ?? 0) : 0,
 
       facilityIds: facilityIds,
 
@@ -894,6 +895,8 @@ export class WorkshopsService {
       updatePayload.learningObjectives = dto.learningObjectives ?? undefined;
     if (dto.offersCmeCredits !== undefined)
       updatePayload.offersCmeCredits = dto.offersCmeCredits;
+    if (dto.cmeCreditsCount !== undefined)
+      updatePayload.cmeCreditsCount = dto.cmeCreditsCount;
     if (facilityIds !== undefined) updatePayload.facilityIds = facilityIds;
     if (dto.webinarPlatform !== undefined)
       updatePayload.webinarPlatform = dto.webinarPlatform?.trim() || undefined;
@@ -969,7 +972,12 @@ export class WorkshopsService {
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.workshopsRepo.createQueryBuilder('w');
+    const qb = this.workshopsRepo
+      .createQueryBuilder('w')
+      .leftJoinAndSelect('w.faculty', 'faculty')
+      .leftJoinAndSelect('w.days', 'days')
+      .leftJoinAndSelect('days.segments', 'segments')
+      .leftJoinAndSelect('w.groupDiscounts', 'groupDiscounts');
 
     // filters
     if (query.q?.trim()) {
@@ -979,7 +987,6 @@ export class WorkshopsService {
     }
 
     if (query.facilityId) {
-      // Check if facilityId is contained in the facilityIds array (stored as comma-separated)
       qb.andWhere('w.facilityIds LIKE :facilityId', {
         facilityId: `%${query.facilityId}%`,
       });
@@ -996,9 +1003,13 @@ export class WorkshopsService {
     }
 
     if (query.offersCmeCredits) {
-      qb.andWhere('w.offersCmeCredits = :offersCmeCredits', {
-        offersCmeCredits: query.offersCmeCredits === 'true',
-      });
+      // backward compat: 'true' means cmeCreditsCount > 0
+      const wantsCme = query.offersCmeCredits === 'true';
+      if (wantsCme) {
+        qb.andWhere('w.cmeCreditsCount > 0');
+      } else {
+        qb.andWhere('w.cmeCreditsCount = 0');
+      }
     }
 
     if (query.groupDiscountEnabled) {
@@ -1007,19 +1018,17 @@ export class WorkshopsService {
       });
     }
 
-    // filter by faculty (workshop_faculty join table)
     if (query.facultyId) {
-      qb.innerJoin(
-        'workshop_faculty',
-        'wf',
-        'wf.workshopId = w.id AND wf.facultyId = :facultyId',
-        {
-          facultyId: query.facultyId,
-        },
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM workshop_faculty wf
+          WHERE wf."workshopId" = w.id AND wf."facultyId" = :facultyId
+        )`,
+        { facultyId: query.facultyId },
       );
     }
 
-    // filter by upcoming (workshops with at least one date in the future)
+// filter by upcoming (workshops with at least one date in the future)
     if (query.upcoming === 'true') {
       qb.andWhere(
         'w.id IN (SELECT DISTINCT wd.workshopId FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
@@ -1042,15 +1051,121 @@ export class WorkshopsService {
 
     // sorting
     const sortBy = query.sortBy ?? 'createdAt';
-    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
     qb.orderBy(`w.${sortBy}`, sortOrder);
 
-    // pagination
     qb.skip(skip).take(limit);
 
-    const [data, total] = await qb.getManyAndCount();
+    const [workshops, total] = await qb.getManyAndCount();
+
+    // ── Reservation counts (for totalEnrolled / available seats) ──────────────
+    const workshopIds = workshops.map((w) => w.id);
+    const reservationCounts =
+      workshopIds.length > 0
+        ? await this.reservationsRepo
+            .createQueryBuilder('r')
+            .select('r.workshopId', 'workshopId')
+            .addSelect('SUM(r.numberOfSeats)', 'reservedSeats')
+            .where('r.workshopId IN (:...workshopIds)', { workshopIds })
+            .andWhere('r.status != :cancelledStatus', {
+              cancelledStatus: 'cancelled',
+            })
+            .groupBy('r.workshopId')
+            .getRawMany()
+        : [];
+
+    const reservationMap = new Map(
+      reservationCounts.map((r) => [
+        r.workshopId,
+        parseInt(r.reservedSeats, 10),
+      ]),
+    );
+
+    // ── Refund stats per workshop ────────────────────────────────────────────
+    const refundStats =
+      workshopIds.length > 0
+        ? await this.refundsRepo
+            .createQueryBuilder('ref')
+            .select('ref.workshopId', 'workshopId')
+            .addSelect('ref.refundType', 'refundType')
+            .addSelect('COUNT(ref.id)', 'count')
+            .where('ref.workshopId IN (:...workshopIds)', { workshopIds })
+            .groupBy('ref.workshopId')
+            .addGroupBy('ref.refundType')
+            .getRawMany()
+        : [];
+
+    const refundStatsMap = new Map<
+      string,
+      { partialRefund: number; refunded: number }
+    >();
+    for (const row of refundStats) {
+      const existing = refundStatsMap.get(row.workshopId) || {
+        partialRefund: 0,
+        refunded: 0,
+      };
+      if (row.refundType === 'FULL') {
+        existing.refunded = parseInt(row.count, 10);
+      } else if (row.refundType === 'PARTIAL') {
+        existing.partialRefund = parseInt(row.count, 10);
+      }
+      refundStatsMap.set(row.workshopId, existing);
+    }
+
+    // ── Resolve full facility details in one batch query ──────────────────────
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allFacilityIds = [
+      ...new Set(
+        workshops.flatMap((w) =>
+          (w.facilityIds ?? []).filter((id) => uuidRegex.test(id)),
+        ),
+      ),
+    ];
+    const allFacilities =
+      allFacilityIds.length > 0
+        ? await this.facilitiesRepo.find({ where: { id: In(allFacilityIds) } })
+        : [];
+    const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
+
+    const data = workshops.map((w) => {
+      const reservedSeats = reservationMap.get(w.id) || 0;
+      const refundInfo = refundStatsMap.get(w.id) || {
+        partialRefund: 0,
+        refunded: 0,
+      };
+
+      return {
+        ...w,
+        // ✅ Full faculty objects
+        faculty: (w.faculty ?? []).map((f) => ({
+          id: f.id,
+          firstName: f.firstName,
+          lastName: f.lastName,
+          fullName: `${f.firstName} ${f.lastName}`,
+          primaryClinicalRole: f.primaryClinicalRole,
+          medicalDesignation: f.medicalDesignation,
+          institutionOrHospital: f.institutionOrHospital,
+          assignedRole: f.assignedRole,
+          imageUrl: f.imageUrl,
+          npiNumber: f.npiNumber,
+          phoneNumber: f.phoneNumber,
+          email: f.email,
+        })),
+        // ✅ Full facility objects
+        facilityIds: w.facilityIds,
+        facilities: (w.facilityIds ?? [])
+          .filter((id) => uuidRegex.test(id))
+          .map((id) => facilityMap.get(id))
+          .filter(Boolean),
+        // ✅ Enrollment & refund overview
+        overview: {
+          totalEnrolled: reservedSeats,
+          refundRequested: 0,
+          partialRefund: refundInfo.partialRefund,
+          refunded: refundInfo.refunded,
+        },
+      };
+    });
 
     return {
       message: 'Workshops fetched successfully',
@@ -1079,32 +1194,81 @@ export class WorkshopsService {
     // Only show published workshops
     qb.andWhere('w.status = :status', { status: 'published' });
 
-    // Filters
+    // ── Workshop type / delivery mode filter ────────────────────────────────
     if (query.deliveryMode) {
       qb.andWhere('w.deliveryMode = :deliveryMode', {
         deliveryMode: query.deliveryMode,
       });
     }
 
-    if (query.offersCmeCredits) {
-      qb.andWhere('w.offersCmeCredits = :offersCmeCredits', {
-        offersCmeCredits: query.offersCmeCredits === 'true',
+    // ── CME credits range filter ────────────────────────────────────────────
+    if (query.minCmeCredits !== undefined) {
+      qb.andWhere('w.cmeCreditsCount >= :minCmeCredits', {
+        minCmeCredits: query.minCmeCredits,
+      });
+    }
+    if (query.maxCmeCredits !== undefined) {
+      qb.andWhere('w.cmeCreditsCount <= :maxCmeCredits', {
+        maxCmeCredits: query.maxCmeCredits,
       });
     }
 
-    // Get reserved seats count for each workshop
-    const reservationsSubQuery = this.reservationsRepo
-      .createQueryBuilder('r')
-      .select('r.workshopId', 'workshopId')
-      .addSelect('SUM(r.numberOfSeats)', 'reservedSeats')
-      .where('r.status != :cancelledStatus', { cancelledStatus: 'cancelled' })
-      .groupBy('r.workshopId');
+    // ── General title / blurb search ────────────────────────────────────────
+    if (query.q?.trim()) {
+      const searchTerm = `%${query.q.trim().toLowerCase()}%`;
+      qb.andWhere(
+        '(LOWER(w.title) LIKE :searchTerm OR LOWER(w.shortBlurb) LIKE :searchTerm)',
+        { searchTerm },
+      );
+    }
 
-    // Sorting
+    // ── Topic filter (match against segment courseTopic) ────────────────────
+    if (query.topic?.trim()) {
+      const topicTerm = `%${query.topic.trim().toLowerCase()}%`;
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM workshop_days wd
+          JOIN workshop_segments ws ON ws."dayId" = wd.id
+          WHERE wd."workshopId" = w.id
+            AND LOWER(ws."courseTopic") LIKE :topicTerm
+        )`,
+        { topicTerm },
+      );
+    }
+
+    // ── Date range filters ─────────────────────────────────────────────────
+    if (query.dateFrom) {
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) >= :dateFrom`,
+        { dateFrom: query.dateFrom },
+      );
+    }
+
+    if (query.dateTo) {
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) <= :dateTo`,
+        { dateTo: query.dateTo },
+      );
+    }
+
+    // ── Upcoming filter ────────────────────────────────────────────────────
+    if (query.upcoming === 'true') {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      qb.andWhere(
+        `(
+          SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id
+        ) >= :todayStr`,
+        { todayStr },
+      );
+    }
+
+    // ── Sorting ─────────────────────────────────────────────────────────────
     const sortBy = query.sortBy ?? 'date';
-    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as 'ASC' | 'DESC';
 
     if (sortBy === 'date') {
       qb.orderBy('days.date', sortOrder);
@@ -1114,12 +1278,12 @@ export class WorkshopsService {
       qb.orderBy('w.title', sortOrder);
     }
 
-    // Pagination
+    // ── Pagination ──────────────────────────────────────────────────────────
     qb.skip(skip).take(limit);
 
     const [workshops, total] = await qb.getManyAndCount();
 
-    // Get reservation counts
+    // ── Reservation counts (for available seats) ─────────────────────────────
     const workshopIds = workshops.map((w) => w.id);
     const reservationCounts =
       workshopIds.length > 0
@@ -1142,109 +1306,126 @@ export class WorkshopsService {
       ]),
     );
 
-    // Get current date and time
-    const now = new Date();
+    const todayStr = new Date().toISOString().slice(0, 10);
 
-    // Transform data for public view and filter out past workshops
-    const transformedData = workshops
-      .map((workshop) => {
-        const reservedSeats = reservationMap.get(workshop.id) || 0;
-        const availableSeats = workshop.capacity - reservedSeats;
+    // ── Resolve full facility details for all workshops in one batch query ────
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allFacilityIds = [
+      ...new Set(
+        workshops.flatMap((w) =>
+          (w.facilityIds ?? []).filter((id) => uuidRegex.test(id)),
+        ),
+      ),
+    ];
+    const allFacilities =
+      allFacilityIds.length > 0
+        ? await this.facilitiesRepo.find({
+            where: { id: In(allFacilityIds) },
+          })
+        : [];
+    const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
 
-        // Calculate total hours
-        let totalMinutes = 0;
-        workshop.days?.forEach((day) => {
-          day.segments?.forEach((segment) => {
-            const start = segment.startTime.split(':');
-            const end = segment.endTime.split(':');
-            const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
-            const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
-            totalMinutes += endMinutes - startMinutes;
-          });
+    // ── Transform workshops ──────────────────────────────────────────────────
+    const transformedData = workshops.map((workshop) => {
+      const reservedSeats = reservationMap.get(workshop.id) || 0;
+      const availableSeats = workshop.capacity - reservedSeats;
+
+      // Calculate total hours
+      let totalMinutes = 0;
+      workshop.days?.forEach((day) => {
+        day.segments?.forEach((segment) => {
+          const start = segment.startTime.split(':');
+          const end = segment.endTime.split(':');
+          const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+          const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+          totalMinutes += endMinutes - startMinutes;
         });
-        const totalHours = (totalMinutes / 60).toFixed(1);
+      });
+      const totalHours = (totalMinutes / 60).toFixed(1);
 
-        // Total number of modules (segments)
-        const totalModules =
-          workshop.days?.reduce(
-            (sum, day) => sum + (day.segments?.length || 0),
-            0,
-          ) || 0;
+      const totalModules =
+        workshop.days?.reduce(
+          (sum, day) => sum + (day.segments?.length || 0),
+          0,
+        ) || 0;
 
-        // Get workshop date (first day)
-        const workshopDate = workshop.days?.[0]?.date || null;
+      // Sort days ascending to get the earliest start date
+      const sortedDays = [...(workshop.days ?? [])].sort((a, b) =>
+        a.date.localeCompare(b.date),
+      );
+      const workshopDate = sortedDays[0]?.date || null;
 
-        // ✅ Check if workshop has started (compare first day date and first segment time)
-        if (workshopDate) {
-          const workshopStartDate = new Date(workshopDate);
-          
-          // Check if first day has already passed
-          if (workshopStartDate < now) {
-            return null; // Filter out past workshops
-          }
+      // Group discount offer price
+      const offerPrice =
+        workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
+          ? workshop.groupDiscounts.sort(
+              (a, b) => a.minimumAttendees - b.minimumAttendees,
+            )[0].groupRatePerPerson
+          : null;
 
-          // Check if workshop starts today - verify the exact start time
-          if (workshopStartDate.toDateString() === now.toDateString()) {
-            const firstSegment = workshop.days?.[0]?.segments?.[0];
-            if (firstSegment) {
-              const [startHour, startMinute] = firstSegment.startTime.split(':').map(Number);
-              const workshopStartTime = new Date(workshopStartDate);
-              workshopStartTime.setHours(startHour, startMinute, 0);
+      // Collect unique topics across all segments
+      const topics = [
+        ...new Set(
+          workshop.days?.flatMap(
+            (day) => day.segments?.map((s) => s.courseTopic) ?? [],
+          ) ?? [],
+        ),
+      ];
 
-              // If workshop start time has already passed today, filter it out
-              if (workshopStartTime <= now) {
-                return null;
-              }
-            }
-          }
-        }
+      const isUpcoming = workshopDate ? workshopDate >= todayStr : false;
 
-        // Calculate offer price (group discount for minimum attendees)
-        const offerPrice =
-          workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0
-            ? workshop.groupDiscounts.sort(
-                (a, b) => a.minimumAttendees - b.minimumAttendees,
-              )[0].groupRatePerPerson
-            : null;
+      // Resolve full facility objects
+      const facilities = (workshop.facilityIds ?? [])
+        .filter((id) => uuidRegex.test(id))
+        .map((id) => facilityMap.get(id))
+        .filter(Boolean);
 
-        // Get facility names
-        const facilityNames = workshop.facilityIds?.join(', ') || '';
+      return {
+        id: workshop.id,
+        date: workshopDate,
+        title: workshop.title,
+        description: workshop.shortBlurb,
+        deliveryMode: workshop.deliveryMode,
+        workshopPhoto: workshop.coverImageUrl,
+        totalHours: `${totalHours} hours`,
+        cmeCredits: workshop.offersCmeCredits,
+        cmeCreditsCount: Number(workshop.cmeCreditsCount ?? 0),
+        availableSeats,
+        totalCapacity: workshop.capacity,
+        isFullyBooked: availableSeats <= 0,
+        isUpcoming,
+        price: workshop.standardBaseRate,
+        offerPrice,
+        totalModules,
+        topics,
+        learningObjectives: workshop.learningObjectives,
+        groupDiscountEnabled: workshop.groupDiscountEnabled,
+        // ✅ Full facility objects
+        facilityIds: workshop.facilityIds,
+        facilities,
+        // ✅ Full faculty objects
+        faculty: workshop.faculty?.map((f) => ({
+          id: f.id,
+          firstName: f.firstName,
+          lastName: f.lastName,
+          fullName: `${f.firstName} ${f.lastName}`,
+          primaryClinicalRole: f.primaryClinicalRole,
+          medicalDesignation: f.medicalDesignation,
+          institutionOrHospital: f.institutionOrHospital,
+          assignedRole: f.assignedRole,
+          imageUrl: f.imageUrl,
+          npiNumber: f.npiNumber,
+        })),
+        webinarPlatform: workshop.webinarPlatform,
+      };
+    });
 
-        return {
-          id: workshop.id,
-          date: workshopDate,
-          title: workshop.title,
-          description: workshop.shortBlurb,
-          facility: facilityNames,
-          deliveryMode: workshop.deliveryMode,
-          workshopPhoto: workshop.coverImageUrl,
-          totalHours: `${totalHours} hours`,
-          cmeFredits: workshop.offersCmeCredits,
-          availableSeats,
-          totalCapacity: workshop.capacity,
-          price: workshop.standardBaseRate,
-          offerPrice: offerPrice,
-          totalModules,
-          learningObjectives: workshop.learningObjectives,
-          groupDiscountEnabled: workshop.groupDiscountEnabled,
-          faculty: workshop.faculty?.map((f) => ({
-            id: f.id,
-            name: `${f.firstName} ${f.lastName}`,
-            title: f.primaryClinicalRole,
-            profileImageUrl: f.imageUrl,
-          })),
-          // Online workshop details
-          webinarPlatform: workshop.webinarPlatform,
-        };
-      })
-      .filter((item) => item !== null);
-
-    // Apply availability filter after transformation
+    // ── Seat availability post-filter ─────────────────────────────────────────
     let filteredData = transformedData;
     if (query.hasAvailableSeats === 'true') {
       filteredData = transformedData.filter((w) => w.availableSeats > 0);
     } else if (query.hasAvailableSeats === 'false') {
-      filteredData = transformedData.filter((w) => w.availableSeats === 0);
+      filteredData = transformedData.filter((w) => w.availableSeats <= 0);
     }
 
     return {
