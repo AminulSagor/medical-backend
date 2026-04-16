@@ -58,4 +58,16 @@ export class ListWorkshopsQueryDto {
   @IsOptional()
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc' = 'desc';
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  upcoming?: 'true' | 'false'; // filter workshops with dates in the future
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  past?: 'true' | 'false'; // filter workshops with all dates in the past
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  hasRefundRequests?: 'true' | 'false'; // filter workshops with refund records
 }
