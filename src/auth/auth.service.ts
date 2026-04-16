@@ -170,6 +170,7 @@ export class AuthService {
 
     // ✅ send email only if bypass is disabled (production flow)
     if (!bypassEnabled) {
+      console.log(`📧 Sending real OTP email to ${email}...`);
       await this.sendOtpEmail(email, otp);
     } else {
       // ✅ bypass mode: log the OTP for development
@@ -194,7 +195,13 @@ export class AuthService {
   private async sendOtpEmail(email: string, otp: string) {
     const expiresInSeconds = Number(process.env.OTP_EXPIRE_SEC || 300);
     const expiresInMinutes = Math.ceil(expiresInSeconds / 60);
-    await this.mailService.sendOtpEmail(email, otp, expiresInMinutes);
+    try {
+      await this.mailService.sendOtpEmail(email, otp, expiresInMinutes);
+      console.log(`✅ OTP email sent successfully to ${email}`);
+    } catch (err) {
+      console.error('❌ Failed to send OTP email:', err);
+      throw err;
+    }
   }
 
   async verifyOtp(dto: VerifyOtpDto): Promise<{
