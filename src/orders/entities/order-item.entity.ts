@@ -31,8 +31,8 @@ export class OrderItem {
   @Column({ type: 'varchar', length: 80, nullable: true })
   sku?: string;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  image?: string;
+  @Column({ type: "text", array: true, default: () => "ARRAY[]::text[]" })
+  images: string[];
 
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   unitPrice: string;
