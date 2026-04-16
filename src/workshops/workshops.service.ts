@@ -669,7 +669,9 @@ export class WorkshopsService {
     // faculty assignment (existing only)
     let facultyEntities: Faculty[] = [];
     if (dto.facultyIds?.length) {
-      facultyEntities = await this.facultyRepo.findByIds(dto.facultyIds as any);
+      facultyEntities = await this.facultyRepo.find({
+        where: { id: In(dto.facultyIds) },
+      });
       if (facultyEntities.length !== dto.facultyIds.length) {
         throw new BadRequestException('One or more facultyIds are invalid');
       }
@@ -869,9 +871,9 @@ export class WorkshopsService {
     let facultyEntities: Faculty[] | undefined;
     if (dto.facultyIds !== undefined) {
       if (dto.facultyIds.length > 0) {
-        facultyEntities = await this.facultyRepo.findByIds(
-          dto.facultyIds as any,
-        );
+        facultyEntities = await this.facultyRepo.find({
+          where: { id: In(dto.facultyIds) },
+        });
         if (facultyEntities.length !== dto.facultyIds.length) {
           throw new BadRequestException('One or more facultyIds are invalid');
         }
