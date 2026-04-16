@@ -183,6 +183,7 @@ export class CartService {
           imageUrl: product.details?.images?.[0] || null,
           unitPrice: price.toFixed(2),
           quantity: item.quantity,
+          availableQuantity: product.stockQuantity,
           lineTotal: lineTotal.toFixed(2),
           inStock: product.stockQuantity >= item.quantity || product.backorder,
         };
