@@ -6,6 +6,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, In, Repository } from 'typeorm';
 import { Workshop } from './entities/workshop.entity';
+import { WorkshopDay } from './entities/workshop-day.entity';
+import { WorkshopSegment } from './entities/workshop-segment.entity';
 import { WorkshopReservation } from './entities/workshop-reservation.entity';
 import { WorkshopAttendee } from './entities/workshop-attendee.entity';
 import { WorkshopOrderSummary } from './entities/workshop-order-summary.entity';
@@ -89,6 +91,8 @@ export class WorkshopsService {
   private readonly ses: SESv2Client;
   constructor(
     @InjectRepository(Workshop) private workshopsRepo: Repository<Workshop>,
+    @InjectRepository(WorkshopDay) private daysRepo: Repository<WorkshopDay>,
+    @InjectRepository(WorkshopSegment) private segmentsRepo: Repository<WorkshopSegment>,
     @InjectRepository(WorkshopReservation)
     private reservationsRepo: Repository<WorkshopReservation>,
     @InjectRepository(WorkshopAttendee)
@@ -918,9 +922,36 @@ export class WorkshopsService {
     // Update the workshop entity
     Object.assign(workshop, updatePayload);
 
-    // Handle relations separately
+    // Handle days relationship - delete old days and create new ones
     if (normalizedDays !== undefined) {
-      workshop.days = normalizedDays as any;
+      // Delete existing days (cascade will delete segments)
+      await this.daysRepo.delete({ workshopId: id });
+      
+      // Create new days with segments
+      const newDays: WorkshopDay[] = [];
+      for (const dayData of normalizedDays) {
+        const day = this.daysRepo.create({
+          workshopId: id,
+          date: dayData.date,
+          dayNumber: dayData.dayNumber,
+        });
+        const savedDay = await this.daysRepo.save(day);
+        
+        // Create segments for this day
+        const segments = dayData.segments.map((s: any) =>
+          this.segmentsRepo.create({
+            dayId: savedDay.id,
+            segmentNumber: s.segmentNumber,
+            courseTopic: s.courseTopic,
+            topicDetails: s.topicDetails,
+            startTime: s.startTime,
+            endTime: s.endTime,
+          })
+        );
+        await this.segmentsRepo.save(segments);
+        newDays.push(savedDay);
+      }
+      workshop.days = newDays;
     }
     if (dto.groupDiscounts !== undefined) {
       workshop.groupDiscounts = dto.groupDiscounts.map((g) => ({
