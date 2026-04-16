@@ -917,6 +917,40 @@ export class WorkshopsService {
     return await this.workshopsRepo.save(workshop);
   }
 
+  async remove(id: string) {
+    // Check if workshop exists
+    const workshop = await this.workshopsRepo.findOne({ where: { id } });
+    if (!workshop) {
+      throw new NotFoundException('Workshop not found');
+    }
+
+    // Check if workshop has any active reservations or enrollments
+    const activeReservation = await this.reservationsRepo.findOne({
+      where: { workshopId: id },
+    });
+
+    const activeEnrollment = await this.enrollmentsRepo.findOne({
+      where: { workshopId: id },
+    });
+
+    if (activeReservation || activeEnrollment) {
+      throw new BadRequestException(
+        'Cannot delete workshop with active reservations or enrollments'
+      );
+    }
+
+    // Delete the workshop (cascade will handle related entities)
+    await this.workshopsRepo.delete(id);
+
+    return {
+      message: 'Workshop deleted successfully',
+      data: {
+        workshopId: id,
+        title: workshop.title,
+      },
+    };
+  }
+
   async list(query: ListWorkshopsQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;

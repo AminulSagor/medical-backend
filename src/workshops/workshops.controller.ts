@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Post,
   Put,
@@ -71,8 +72,12 @@ export class WorkshopsController {
     return this.service.getRefundPreview(workshopId, reservationId);
   }
 
-
-  
+  @Delete(':id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
+  }
 
   @Post(':workshopId/refunds/confirm')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
