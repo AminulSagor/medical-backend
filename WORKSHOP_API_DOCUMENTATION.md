@@ -264,6 +264,153 @@ curl "/admin/workshops?hasRefundRequests=true"
 
 ---
 
+### 5. Get Workshop Enrollees
+**Endpoint:** `GET /admin/workshops/:workshopId/enrollees`
+
+**Description:** Returns paginated list of workshop enrollees with enrollment status information.
+
+**Authentication:** Required (Admin role)
+
+**Query Parameters:**
+```typescript
+{
+  // Pagination
+  page?: number;                     // Default: 1
+  limit?: number;                    // Default: 10, Max: 100
+  
+  // Search & Filters
+  search?: string;                   // Search by name, email, institution
+  bookingType?: 'single' | 'group'; // Filter by booking type
+  enrollmentStatus?: 'BOOKED' | 'REFUND_REQUESTED' | 'PARTIAL_REFUNDED' | 'REFUNDED';
+}
+```
+
+**Response:**
+```typescript
+{
+  enrollees: {
+    reservationId: string;
+    bookingType: 'single' | 'group';
+    groupSize: number;
+    studentInfo: {
+      fullName: string;
+      email: string;
+      phoneNumber?: string;
+    };
+    institutionOrHospital?: string;
+    registeredAt: Date;
+    paymentAmount: string;
+    status: 'BOOKED' | 'REFUND_REQUESTED' | 'PARTIAL_REFUNDED' | 'REFUNDED';
+    paymentGateway?: string;
+    transactionId?: string;
+    members: {
+      attendeeId: string;
+      fullName: string;
+      email: string;
+      status: 'CONFIRMED' | 'PARTIAL_REFUNDED' | 'REFUNDED';
+    }[];
+  }[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+```
+
+**Enrollment Status Logic:**
+- **BOOKED** - Normal confirmed booking (no refunds or requests)
+- **REFUND_REQUESTED** - Pending refund request exists (highest priority)
+- **PARTIAL_REFUNDED** - Some attendees refunded or partial refunds processed
+- **REFUNDED** - All attendees fully refunded
+
+**Examples:**
+```bash
+# Get all enrollees
+curl "/admin/workshops/workshop-uuid/enrollees?page=1&limit=10"
+
+# Filter by enrollment status
+curl "/admin/workshops/workshop-uuid/enrollees?enrollmentStatus=REFUND_REQUESTED"
+
+# Search by name or email
+curl "/admin/workshops/workshop-uuid/enrollees?search=john"
+
+# Filter by booking type
+curl "/admin/workshops/workshop-uuid/enrollees?bookingType=group"
+```
+
+---
+
+### 6. Get Refund Preview
+**Endpoint:** `GET /admin/workshops/:workshopId/enrollees/:reservationId/refund-preview`
+
+**Description:** Returns refund preview for a specific reservation.
+
+**Authentication:** Required (Admin role)
+
+**Response:**
+```typescript
+{
+  reservation: {
+    id: string;
+    numberOfSeats: number;
+    totalPrice: string;
+    attendees: {
+      id: string;
+      fullName: string;
+      email: string;
+    }[];
+  };
+  refundableAmount: string;
+  refundableAttendees: {
+    attendeeId: string;
+    fullName: string;
+    refundAmount: string;
+  }[];
+}
+```
+
+---
+
+### 7. Confirm Refund
+**Endpoint:** `POST /admin/workshops/:workshopId/refunds`
+
+**Description:** Processes refund for workshop enrollees.
+
+**Authentication:** Required (Admin role)
+
+**Request Body:**
+```typescript
+{
+  reservationId: string;
+  attendeeIds: string[];
+  refundAmount: string;
+  reason: string;
+  adjustmentNote?: string;
+  paymentGateway?: string;
+  transactionId?: string;
+}
+```
+
+**Response:**
+```typescript
+{
+  refundId: string;
+  requestId: string;
+  status: 'PROCESSED';
+  refundAmount: string;
+  processedAt: Date;
+  attendees: {
+    attendeeId: string;
+    status: 'REFUNDED' | 'PARTIAL_REFUNDED';
+    refundAmount: string;
+  }[];
+}
+```
+
+---
+
 ## Public Workshop Endpoints
 
 ### 1. List Public Workshops
