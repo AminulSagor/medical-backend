@@ -3120,7 +3120,7 @@ export class WorkshopsService {
       0,
     );
 
-    const refundRequested = 0;
+    const refundRequested = pendingRefunds.length;
     const partialRefund = transformed.filter(
       (item) => item.status === 'PARTIAL_REFUNDED',
     ).length;
@@ -5072,28 +5072,58 @@ export class WorkshopsService {
   }
 
   async getWorkshopStats(query: WorkshopStatsQueryDto) {
-    const startDate = query.startDate 
-      ? new Date(query.startDate)
-      : new Date(); // Default to today
-    
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + (query.days ?? 5));
+    let workshops: any[];
+    let periodInfo: any;
 
-    // Get workshops within the date range
-    const workshops = await this.workshopsRepo
-      .createQueryBuilder('w')
-      .leftJoinAndSelect('w.days', 'wd')
-      .where('w.status = :status', { status: 'published' })
-      .andWhere('wd.date >= :startDate AND wd.date <= :endDate', {
+    if (query.startDate) {
+      // Date range mode
+      const startDate = new Date(query.startDate);
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + (query.days ?? 5));
+
+      // Get workshops within the date range
+      workshops = await this.workshopsRepo
+        .createQueryBuilder('w')
+        .leftJoin('w.days', 'wd')
+        .where('w.status = :status', { status: WorkshopStatus.PUBLISHED })
+        .andWhere('wd.date >= :startDate AND wd.date <= :endDate', {
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: endDate.toISOString().split('T')[0]
+        })
+        .select(['w.id', 'w.title', 'w.capacity'])
+        .distinct(true)
+        .getMany();
+
+      periodInfo = {
         startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0]
-      })
-      .groupBy('w.id')
-      .getMany();
+        endDate: endDate.toISOString().split('T')[0],
+        days: query.days ?? 5
+      };
+    } else {
+      // Lifetime mode - show all published workshops
+      workshops = await this.workshopsRepo.find({
+        where: { status: WorkshopStatus.PUBLISHED },
+        select: ['id', 'title', 'capacity']
+      });
+
+      periodInfo = {
+        startDate: null,
+        endDate: null,
+        days: null,
+        lifetime: true
+      };
+    }
 
     const workshopStats: any[] = [];
 
     for (const workshop of workshops) {
+      // Get workshop days for date calculation
+      const workshopWithDays = await this.workshopsRepo.findOne({
+        where: { id: workshop.id },
+        relations: ['days'],
+        select: ['id']
+      });
+
       // Get total enrolled seats
       const totalEnrolled = await this.reservationsRepo
         .createQueryBuilder('r')
@@ -5115,8 +5145,8 @@ export class WorkshopsService {
       workshopStats.push({
         workshopId: workshop.id,
         title: workshop.title,
-        startDate: workshop.days?.[0]?.date || null,
-        endDate: workshop.days?.[workshop.days.length - 1]?.date || null,
+        startDate: workshopWithDays?.days?.[0]?.date || null,
+        endDate: workshopWithDays?.days?.[workshopWithDays.days.length - 1]?.date || null,
         totalActiveSeats: totalCapacity,
         totalFilledSeats: totalEnrolled,
         totalRefundRequests,
@@ -5126,22 +5156,18 @@ export class WorkshopsService {
     }
 
     // Sort by start date
-    workshopStats.sort((a, b) => 
+    workshopStats.sort((a, b) =>
       new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
     );
 
     return {
-      period: {
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
-        days: query.days ?? 5
-      },
+      period: periodInfo,
       summary: {
         totalWorkshops: workshopStats.length,
         totalActiveSeats: workshopStats.reduce((sum, w) => sum + w.totalActiveSeats, 0),
         totalFilledSeats: workshopStats.reduce((sum, w) => sum + w.totalFilledSeats, 0),
         totalRefundRequests: workshopStats.reduce((sum, w) => sum + w.totalRefundRequests, 0),
-        overallOccupancyRate: workshopStats.length > 0 
+        overallOccupancyRate: workshopStats.length > 0
           ? Math.round(
               workshopStats.reduce((sum, w) => sum + w.occupancyRate, 0) / workshopStats.length
             )
