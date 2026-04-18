@@ -29,8 +29,8 @@ export class WorkshopRefund {
   id: string;
 
   @Index()
-  @Column({ type: 'varchar', length: 50, unique: true })
-  requestId: string; // Format: #REF-REQ-001
+  @Column({ type: 'varchar', length: 50, unique: true, nullable: true })
+  requestId?: string; // Format: #REF-REQ-001
 
   @Index()
   @Column({ type: 'uuid' })
@@ -42,7 +42,7 @@ export class WorkshopRefund {
 
   @Index()
   @Column({ type: 'uuid', nullable: true })
-  userId: string; // Student who requested the refund
+  userId?: string; // Student who requested the refund
 
   @Index()
   @Column({ type: 'uuid', nullable: true })
