@@ -1485,6 +1485,15 @@ export class WorkshopsService {
     };
   }
 
+  private async getWorkshopFacilities(facilityIds: string[] = []) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const validFacilityIds = facilityIds.filter((fid) => uuidRegex.test(fid));
+
+    return validFacilityIds.length > 0
+      ? await this.facilitiesRepo.find({ where: { id: In(validFacilityIds) } })
+      : [];
+  }
+
   async getWorkshopById(id: string) {
     const workshop = await this.workshopsRepo.findOne({
       where: { id },
@@ -1498,7 +1507,27 @@ export class WorkshopsService {
       throw new NotFoundException(`Workshop with ID ${id} not found`);
     }
 
-    return workshop;
+    const facilities = await this.getWorkshopFacilities(workshop.facilityIds);
+
+    const revenueResult = await this.reservationsRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.totalPrice), 0)', 'revenue')
+      .where('r.workshopId = :workshopId', { workshopId: id })
+      .andWhere('r.status = :confirmedStatus', {
+        confirmedStatus: ReservationStatus.CONFIRMED,
+      })
+      .getRawOne();
+
+    const revenueGenerated = Number(revenueResult?.revenue || 0);
+
+    return {
+      message: 'Workshop details fetched successfully',
+      data: {
+        ...workshop,
+        facilities,
+        revenueGenerated,
+      },
+    };
   }
 
   async getPublicWorkshopById(id: string) {
