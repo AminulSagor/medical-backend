@@ -3002,17 +3002,12 @@ export class WorkshopsService {
           status:
             refundInfo?.status === 'REFUNDED'
               ? 'REFUNDED'
-              : refundInfo?.status === 'PARTIAL_REFUNDED'
-                ? 'PARTIAL_REFUNDED'
-                : 'CONFIRMED',
+              : 'CONFIRMED', // Individual members are either REFUNDED or CONFIRMED
         };
       });
 
       const refundedCount = members.filter(
         (m) => m.status === 'REFUNDED',
-      ).length;
-      const partialRefundCount = members.filter(
-        (m) => m.status === 'PARTIAL_REFUNDED',
       ).length;
 
       let status:
@@ -3026,13 +3021,11 @@ export class WorkshopsService {
         status = 'REFUND_REQUESTED';
       } else if (members.length > 0 && refundedCount === members.length) {
         status = 'REFUNDED';
-      } else if (partialRefundCount > 0 || refundedCount > 0) {
-        status = 'PARTIAL_REFUNDED';
+      } else if (refundedCount > 0 && refundedCount < members.length) {
+        status = 'PARTIAL_REFUNDED'; // Only some members refunded
       }
 
-      const bookingType =
-        reservation.bookingType ??
-        (reservation.numberOfSeats > 1 ? 'group' : 'single');
+      const bookingType = reservation.numberOfSeats > 1 ? 'group' : 'single';
 
       return {
         reservationId: reservation.id,
@@ -3301,10 +3294,7 @@ export class WorkshopsService {
           refundAmount: this.toMoneyString(
             this.toMoney(dto.refundAmount) / dto.attendeeIds.length,
           ),
-          status:
-            refundType === WorkshopRefundType.FULL
-              ? WorkshopRefundItemStatus.REFUNDED
-              : WorkshopRefundItemStatus.PARTIAL_REFUNDED,
+          status: WorkshopRefundItemStatus.REFUNDED, // Individual attendees are always REFUNDED
         }),
       ),
     });

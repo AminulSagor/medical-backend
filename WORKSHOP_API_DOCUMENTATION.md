@@ -262,6 +262,10 @@ curl "/admin/workshops?hasRefundRequests=true"
 - `400 Bad Request` - Workshop has active reservations/enrollments
 - `404 Not Found` - Workshop not found
 
+**Refund Validation:**
+- Prevents refunding already refunded attendees
+- Error: "One or more selected attendees are already fully refunded"
+
 ---
 
 ### 5. Get Workshop Enrollees
@@ -307,7 +311,7 @@ curl "/admin/workshops?hasRefundRequests=true"
       attendeeId: string;
       fullName: string;
       email: string;
-      status: 'CONFIRMED' | 'PARTIAL_REFUNDED' | 'REFUNDED';
+      status: 'CONFIRMED' | 'REFUNDED';  // Individual members are either confirmed or fully refunded
     }[];
   }[];
   pagination: {
@@ -322,8 +326,16 @@ curl "/admin/workshops?hasRefundRequests=true"
 **Enrollment Status Logic:**
 - **BOOKED** - Normal confirmed booking (no refunds or requests)
 - **REFUND_REQUESTED** - Pending refund request exists (highest priority)
-- **PARTIAL_REFUNDED** - Some attendees refunded or partial refunds processed
+- **PARTIAL_REFUNDED** - Some (but not all) attendees refunded
 - **REFUNDED** - All attendees fully refunded
+
+**Member Status Logic:**
+- **CONFIRMED** - Attendee is actively enrolled
+- **REFUNDED** - Attendee has been fully refunded (no partial refunds for individuals)
+
+**Booking Type Logic:**
+- **single** - 1 attendee (numberOfSeats = 1)
+- **group** - 2+ attendees (numberOfSeats > 1)
 
 **Examples:**
 ```bash
