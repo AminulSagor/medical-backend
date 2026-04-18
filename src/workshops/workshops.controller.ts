@@ -18,6 +18,7 @@ import { UpdateWorkshopDto } from './dto/update-workshop.dto';
 import { ListWorkshopsQueryDto } from './dto/list-workshops.query.dto';
 import { WorkshopsService } from './workshops.service';
 import { ListWorkshopEnrolleesQueryDto } from './dto/list-workshop-enrollees.query.dto';
+import { WorkshopStatsQueryDto } from './dto/workshop-stats-query.dto';
 import { ConfirmWorkshopRefundDto } from './dto/confirm-workshop-refund.dto';
 
 @Controller('admin/workshops')
@@ -94,5 +95,12 @@ export class WorkshopsController {
   ) {
     const adminId = req.user.id;
     return this.service.confirmRefund(workshopId, adminId, dto);
+  }
+
+  @Get('stats')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  getWorkshopStats(@Query() query: WorkshopStatsQueryDto) {
+    return this.service.getWorkshopStats(query);
   }
 }
