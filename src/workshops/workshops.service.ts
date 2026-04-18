@@ -1061,10 +1061,13 @@ export class WorkshopsService {
       );
     }
 
-// filter by upcoming (workshops with at least one date in the future)
+    // filter by upcoming (workshops with at least one date in the future)
     if (query.upcoming === 'true') {
       qb.andWhere(
         'w.id IN (SELECT DISTINCT wd."workshopId" FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
+      );
+    }
+
     // filter by past (workshops with all dates in the past)
     if (query.past === 'true') {
       qb.andWhere(
