@@ -1,72 +1,85 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer'
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 @Injectable()
 export class MailService {
-  private transporter: nodemailer.Transporter | null;
+  private readonly ses: SESv2Client;
   private from: string;
   private isConfigured: boolean;
 
   constructor(private readonly config: ConfigService) {
-    const host = this.config.get<string>('SMTP_HOST');
-    const port = Number(this.config.get<string>('SMTP_PORT') || 587);
-    const user = this.config.get<string>('SMTP_USER');
-    const pass = this.config.get<string>('SMTP_PASS');
-    this.from = this.config.get<string>('SMTP_FROM') || user || '';
+    const region =
+      this.config.get<string>('AWS_REGION') ||
+      this.config.get<string>('AWS_S3_REGION');
 
-    // ✅ Check if SMTP is properly configured (not placeholder values)
-    const smtpMissing = !host || !user || !pass || !this.from;
-    const hasPlaceholders =
-      user?.includes('your_email') || pass?.includes('your_email_password');
-    this.isConfigured = !smtpMissing && !hasPlaceholders;
+    const accessKeyId = this.config.get<string>('AWS_ACCESS_KEY_ID');
+    const secretAccessKey = this.config.get<string>(
+      'AWS_SECRET_ACCESS_KEY',
+    );
 
-    if (this.isConfigured) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: { user, pass },
-        family: 4, // Force IPv4 to avoid IPv6 connectivity issues
-        connectionTimeout: 10000, // 10 seconds
-        socketTimeout: 10000, // 10 seconds
-        tls: {
-          rejectUnauthorized: false,
-          minVersion: 'TLSv1.2',
+    this.from = this.config.get<string>('SES_FROM_EMAIL') || '';
+
+    // ✅ Check if SES is properly configured
+    const sesMissing = !region || !accessKeyId || !secretAccessKey || !this.from;
+    this.isConfigured = !sesMissing;
+
+    if (this.isConfigured && region && accessKeyId && secretAccessKey) {
+      this.ses = new SESv2Client({
+        region,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
         },
-      } as nodemailer.TransportOptions);
+      });
+      console.log('✅ SES email service initialized');
     } else {
-      this.transporter = null;
       console.warn(
-        '⚠️  SMTP not configured. Email sending will be skipped. Set real SMTP credentials in .env to enable.',
+        '⚠️  SES not configured. Email sending will be skipped. Set AWS credentials and SES_FROM_EMAIL in .env to enable.',
       );
     }
   }
 
   async sendOtpEmail(to: string, otp: string, expiresInMinutes: number) {
-    // ✅ Skip if SMTP not configured (development with bypass mode)
-    if (!this.isConfigured || !this.transporter) {
+    // ✅ Skip if SES not configured (development with bypass mode)
+    if (!this.isConfigured) {
       console.log(
-        `⏭️  Email skipped - SMTP not configured. OTP for ${to}: ${otp}`,
+        `⏭️  Email skipped - SES not configured. OTP for ${to}: ${otp}`,
       );
       return;
     }
 
     try {
-      await this.transporter.sendMail({
-        from: this.from,
-        to,
-        subject: 'Your verification code',
-        text: `Your OTP is ${otp}. It will expire in ${expiresInMinutes} minutes.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2>Your verification code</h2>
-            <p>Your OTP is:</p>
-            <div style="font-size: 28px; font-weight: 700; letter-spacing: 4px;">${otp}</div>
-            <p>This code will expire in <b>${expiresInMinutes} minutes</b>.</p>
-          </div>
-        `,
-      });
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+          <h2>Your verification code</h2>
+          <p>Your OTP is:</p>
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: 4px;">${otp}</div>
+          <p>This code will expire in <b>${expiresInMinutes} minutes</b>.</p>
+        </div>
+      `;
+
+      await this.ses.send(
+        new SendEmailCommand({
+          FromEmailAddress: this.from,
+          Destination: {
+            ToAddresses: [to],
+          },
+          Content: {
+            Simple: {
+              Subject: {
+                Data: 'Your verification code',
+              },
+              Body: {
+                Html: { Data: htmlContent },
+                Text: {
+                  Data: `Your OTP is ${otp}. It will expire in ${expiresInMinutes} minutes.`,
+                },
+              },
+            },
+          },
+        }),
+      );
       console.log(`✅ OTP email sent successfully to ${to}`);
     } catch (err) {
       console.error('📧 Email sending failed:', err);
