@@ -1311,9 +1311,7 @@ export class WorkshopsService {
       qb.orderBy('w.title', sortOrder);
     }
 
-    // ── Pagination ──────────────────────────────────────────────────────────
-    qb.skip(skip).take(limit);
-
+    // ── Fetch ALL matching workshops (without pagination yet) ──────────────────
     const [workshops, total] = await qb.getManyAndCount();
 
     // ── Reservation counts (for available seats) ─────────────────────────────
@@ -1454,6 +1452,7 @@ export class WorkshopsService {
     });
 
     // ── Seat availability post-filter ─────────────────────────────────────────
+    // ✅ FIXED: Apply filter BEFORE pagination
     let filteredData = transformedData;
     if (query.hasAvailableSeats === 'true') {
       filteredData = transformedData.filter((w) => w.availableSeats > 0);
@@ -1461,15 +1460,19 @@ export class WorkshopsService {
       filteredData = transformedData.filter((w) => w.availableSeats <= 0);
     }
 
+    // ── Apply pagination to filtered data ────────────────────────────────────
+    const filteredTotal = filteredData.length;
+    const paginatedData = filteredData.slice(skip, skip + limit);
+
     return {
       message: 'Public workshops fetched successfully',
       meta: {
         page,
         limit,
-        total: filteredData.length,
-        totalPages: Math.max(Math.ceil(filteredData.length / limit), 1),
+        total: filteredTotal,
+        totalPages: Math.max(Math.ceil(filteredTotal / limit), 1),
       },
-      data: filteredData,
+      data: paginatedData,
     };
   }
 
@@ -4433,7 +4436,6 @@ export class WorkshopsService {
     }
 
     // 1. Fetch User and Workshop details for the email
-    // Assuming you have usersRepo injected. If not, fetch from enrollment/reservation.
     const user = await this.userRepo.findOne({ where: { id: userId } });
     const workshop = await this.workshopsRepo.findOne({
       where: { id: courseId },
@@ -4443,11 +4445,48 @@ export class WorkshopsService {
       throw new NotFoundException('User or Workshop not found.');
     }
 
+    // 2. Get the reservation to link the refund request
+    const reservation = await this.reservationsRepo.findOne({
+      where: { userId, workshopId: courseId, status: 'confirmed' as any },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException('No confirmed reservation found for this course.');
+    }
+
+    // 3. Generate unique RefundRequestId (#REF-REQ-XXX)
+    const lastRefund = await this.refundsRepo.findOne({
+      where: { status: 'PENDING' as any },
+      order: { createdAt: 'DESC' },
+    });
+
+    let nextNumber = 1;
+    if (lastRefund?.requestId) {
+      const match = lastRefund.requestId.match(/\d+/);
+      if (match) {
+        nextNumber = parseInt(match[0], 10) + 1;
+      }
+    }
+
+    const requestId = `#REF-REQ-${String(nextNumber).padStart(3, '0')}`;
+
+    // 4. Create WorkshopRefund record with PENDING status
+    const refund = new WorkshopRefund();
+    refund.requestId = requestId;
+    refund.workshopId = courseId;
+    refund.reservationId = reservation.id;
+    refund.userId = userId;
+    refund.refundAmount = dto.refundAmount.toString();
+    refund.reason = dto.reason;
+    refund.status = WorkshopRefundStatus.PENDING;
+
+    const savedRefund = await this.refundsRepo.save(refund);
+
     const userFullName = user.fullLegalName || 'Student';
-    const userEmail = user.medicalEmail || user.medicalEmail; // Use appropriate email field
+    const userEmail = user.medicalEmail || '';
     const courseTitle = workshop.title;
 
-    // 2. Prepare SES variables
+    // 5. Prepare SES variables
     const fromEmail = this.configService.get<string>('SES_FROM_EMAIL');
     const adminEmail = this.configService.get<string>(
       'SES_CONTACT_RECEIVER_EMAIL',
@@ -4473,6 +4512,7 @@ export class WorkshopsService {
           <p>A new refund request has been submitted by a student. Please review the details below:</p>
           
           <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+            <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Request ID:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold; font-size: 14px;">${escapeHtml(requestId)}</td></tr>
             <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Student Name:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userFullName)}</td></tr>
             <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Email:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userEmail)}</td></tr>
             <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Course:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(courseTitle)}</td></tr>
@@ -4495,6 +4535,11 @@ export class WorkshopsService {
           <h2 style="color: #0ea5e9;">Refund Request Received</h2>
           <p>Hello ${escapeHtml(userFullName)},</p>
           <p>We have successfully received your refund request for the course <strong>${escapeHtml(courseTitle)}</strong>.</p>
+
+          <div style="margin: 20px 0; background-color: #f0f9ff; padding: 15px; border-radius: 6px; border: 2px solid #0ea5e9;">
+            <p style="margin: 0; font-size: 14px;"><strong>Your Request ID:</strong></p>
+            <p style="margin: 8px 0 0 0; font-size: 18px; font-weight: bold; color: #0ea5e9;">${escapeHtml(requestId)}</p>
+          </div>
           
           <div style="margin: 20px 0; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
             <p style="margin: 0 0 10px 0;"><strong>Requested Amount:</strong> ${safeAmount}</p>
@@ -4502,6 +4547,7 @@ export class WorkshopsService {
           </div>
 
           <p>Our team will review your request and process it within <strong>3-5 business days</strong>. You will receive another notification once the refund has been processed to your original payment method.</p>
+          <p>Please keep your request ID <strong>${escapeHtml(requestId)}</strong> for your records.</p>
           <p>If you have any questions, please reply to this email or contact our support team.</p>
           
           <p style="margin-top: 30px; margin-bottom: 0;">Best regards,</p>
@@ -4519,7 +4565,7 @@ export class WorkshopsService {
             Content: {
               Simple: {
                 Subject: {
-                  Data: `[Refund Request] ${courseTitle} - ${userFullName}`,
+                  Data: `[Refund Request ${requestId}] ${courseTitle} - ${userFullName}`,
                 },
                 Body: { Html: { Data: adminHtml } },
               },
@@ -4535,7 +4581,7 @@ export class WorkshopsService {
             Content: {
               Simple: {
                 Subject: {
-                  Data: `Refund Request Confirmation - ${courseTitle}`,
+                  Data: `Refund Request Confirmation ${requestId} - ${courseTitle}`,
                 },
                 Body: { Html: { Data: userHtml } },
               },
@@ -4557,6 +4603,7 @@ export class WorkshopsService {
       title: 'Refund Request Submitted',
       message:
         'Your refund request has been successfully submitted. Our team will review it and process it within 3-5 business days. You will receive an email confirmation shortly.',
+      requestId,
       refundAmountRequested: `$${dto.refundAmount.toFixed(2)}`,
       reasonRecorded: dto.reason,
     };

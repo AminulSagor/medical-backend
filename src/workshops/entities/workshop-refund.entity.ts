@@ -19,6 +19,7 @@ export enum WorkshopRefundType {
 }
 
 export enum WorkshopRefundStatus {
+  PENDING = 'PENDING',
   PROCESSED = 'PROCESSED',
 }
 
@@ -26,6 +27,10 @@ export enum WorkshopRefundStatus {
 export class WorkshopRefund {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Index()
+  @Column({ type: 'varchar', length: 50, unique: true })
+  requestId: string; // Format: #REF-REQ-001
 
   @Index()
   @Column({ type: 'uuid' })
@@ -36,33 +41,40 @@ export class WorkshopRefund {
   reservationId: string;
 
   @Index()
-  @Column({ type: 'uuid' })
-  processedByAdminId: string;
+  @Column({ type: 'uuid', nullable: true })
+  userId: string; // Student who requested the refund
 
-  @Column({ type: 'enum', enum: WorkshopRefundType })
-  refundType: WorkshopRefundType;
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  processedByAdminId?: string;
+
+  @Column({ type: 'enum', enum: WorkshopRefundType, nullable: true })
+  refundType?: WorkshopRefundType;
 
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   refundAmount: string;
 
   @Column({ type: 'text', nullable: true })
+  reason?: string; // Reason for refund request
+
+  @Column({ type: 'text', nullable: true })
   adjustmentNote?: string;
 
-  @Column({ type: 'varchar', length: 120 })
-  paymentGateway: string;
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  paymentGateway?: string;
 
-  @Column({ type: 'varchar', length: 255 })
-  transactionId: string;
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  transactionId?: string;
 
   @Column({
     type: 'enum',
     enum: WorkshopRefundStatus,
-    default: WorkshopRefundStatus.PROCESSED,
+    default: WorkshopRefundStatus.PENDING,
   })
   status: WorkshopRefundStatus;
 
-  @Column({ type: 'timestamptz' })
-  processedAt: Date;
+  @Column({ type: 'timestamptz', nullable: true })
+  processedAt?: Date;
 
   @ManyToOne(() => Workshop, { eager: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'workshopId' })
