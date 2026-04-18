@@ -423,6 +423,73 @@ curl "/admin/workshops/workshop-uuid/enrollees?bookingType=group"
 
 ---
 
+### 8. Get Workshop Statistics
+**Endpoint:** `GET /admin/workshops/stats`
+
+**Description:** Returns statistics for workshops within a specified date range (next 5 days by default).
+
+**Authentication:** Required (Admin role)
+
+**Query Parameters:**
+```typescript
+{
+  startDate?: string;  // Format: "2026-04-26" (defaults to today)
+  days?: number;      // Number of days from start date (default: 5)
+}
+```
+
+**Response:**
+```typescript
+{
+  period: {
+    startDate: string;     // "2026-04-26"
+    endDate: string;       // "2026-05-01"
+    days: number;          // 5
+  };
+  summary: {
+    totalWorkshops: number;
+    totalActiveSeats: number;
+    totalFilledSeats: number;
+    totalRefundRequests: number;
+    overallOccupancyRate: number;  // Percentage
+  };
+  workshops: [
+    {
+      workshopId: string;
+      title: string;
+      startDate: string;      // "2026-04-28"
+      endDate: string;        // "2026-04-29"
+      totalActiveSeats: number;  // Workshop capacity
+      totalFilledSeats: number;  // Total enrolled
+      totalRefundRequests: number;
+      availableSeats: number;   // Active - Filled
+      occupancyRate: number;    // Percentage for this workshop
+    }
+  ];
+}
+```
+
+**Examples:**
+```bash
+# Next 5 days from today (default)
+curl "/admin/workshops/stats"
+
+# Next 7 days from April 26, 2026
+curl "/admin/workshops/stats?startDate=2026-04-26&days=7"
+
+# Next 3 days from today
+curl "/admin/workshops/stats?days=3"
+```
+
+**Features:**
+- Only includes **published** workshops
+- Shows workshops with at least one session in the date range
+- Calculates occupancy rates and refund statistics
+- Sorted by workshop start date
+- Includes both individual workshop and overall summary statistics
+
+---
+
 ## Public Workshop Endpoints
 
 ### 1. List Public Workshops

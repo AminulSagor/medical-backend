@@ -44,6 +44,7 @@ import {
 } from './entities/workshop-refund-item.entity';
 import { ConfirmWorkshopRefundDto } from './dto/confirm-workshop-refund.dto';
 import { ListWorkshopEnrolleesQueryDto } from './dto/list-workshop-enrollees.query.dto';
+import { WorkshopStatsQueryDto } from './dto/workshop-stats-query.dto';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { Response } from 'express';
@@ -5039,5 +5040,85 @@ export class WorkshopsService {
     }
 
     doc.end();
+  }
+
+  async getWorkshopStats(query: WorkshopStatsQueryDto) {
+    const startDate = query.startDate 
+      ? new Date(query.startDate)
+      : new Date(); // Default to today
+    
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + (query.days ?? 5));
+
+    // Get workshops within the date range
+    const workshops = await this.workshopsRepo
+      .createQueryBuilder('w')
+      .leftJoinAndSelect('w.days', 'wd')
+      .where('w.status = :status', { status: 'published' })
+      .andWhere('wd.date >= :startDate AND wd.date <= :endDate', {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      })
+      .groupBy('w.id')
+      .getMany();
+
+    const workshopStats: any[] = [];
+
+    for (const workshop of workshops) {
+      // Get total enrolled seats
+      const totalEnrolled = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .leftJoin('r.attendees', 'a')
+        .where('r.workshopId = :workshopId', { workshopId: workshop.id })
+        .andWhere('r.status IN (:...statuses)', { statuses: ['CONFIRMED', 'PENDING'] })
+        .getCount();
+
+      // Get total capacity (sum of all days capacity, but use workshop capacity)
+      const totalCapacity = workshop.capacity;
+
+      // Get total refund requests
+      const totalRefundRequests = await this.refundsRepo
+        .createQueryBuilder('r')
+        .where('r.workshopId = :workshopId', { workshopId: workshop.id })
+        .andWhere('r.status = :status', { status: 'PENDING' })
+        .getCount();
+
+      workshopStats.push({
+        workshopId: workshop.id,
+        title: workshop.title,
+        startDate: workshop.days?.[0]?.date || null,
+        endDate: workshop.days?.[workshop.days.length - 1]?.date || null,
+        totalActiveSeats: totalCapacity,
+        totalFilledSeats: totalEnrolled,
+        totalRefundRequests,
+        availableSeats: totalCapacity - totalEnrolled,
+        occupancyRate: totalCapacity > 0 ? Math.round((totalEnrolled / totalCapacity) * 100) : 0
+      });
+    }
+
+    // Sort by start date
+    workshopStats.sort((a, b) => 
+      new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
+    );
+
+    return {
+      period: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        days: query.days ?? 5
+      },
+      summary: {
+        totalWorkshops: workshopStats.length,
+        totalActiveSeats: workshopStats.reduce((sum, w) => sum + w.totalActiveSeats, 0),
+        totalFilledSeats: workshopStats.reduce((sum, w) => sum + w.totalFilledSeats, 0),
+        totalRefundRequests: workshopStats.reduce((sum, w) => sum + w.totalRefundRequests, 0),
+        overallOccupancyRate: workshopStats.length > 0 
+          ? Math.round(
+              workshopStats.reduce((sum, w) => sum + w.occupancyRate, 0) / workshopStats.length
+            )
+          : 0
+      },
+      workshops: workshopStats
+    };
   }
 }
