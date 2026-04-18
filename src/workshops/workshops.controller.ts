@@ -44,6 +44,13 @@ export class WorkshopsController {
     return this.service.update(id, dto);
   }
 
+  @Get('stats')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  getWorkshopStats(@Query() query: WorkshopStatsQueryDto) {
+    return this.service.getWorkshopStats(query);
+  }
+
   @Get(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
@@ -95,12 +102,5 @@ export class WorkshopsController {
   ) {
     const adminId = req.user.id;
     return this.service.confirmRefund(workshopId, adminId, dto);
-  }
-
-  @Get('stats')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('admin')
-  getWorkshopStats(@Query() query: WorkshopStatsQueryDto) {
-    return this.service.getWorkshopStats(query);
   }
 }
