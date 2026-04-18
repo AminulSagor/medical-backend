@@ -5129,7 +5129,7 @@ export class WorkshopsService {
         .createQueryBuilder('r')
         .leftJoin('r.attendees', 'a')
         .where('r.workshopId = :workshopId', { workshopId: workshop.id })
-        .andWhere('r.status IN (:...statuses)', { statuses: ['CONFIRMED', 'PENDING'] })
+        .andWhere('r.status IN (:...statuses)', { statuses: ['confirmed', 'pending'] })
         .getCount();
 
       // Get total capacity (sum of all days capacity, but use workshop capacity)
