@@ -2965,6 +2965,19 @@ export class WorkshopsService {
       .where('refund.workshopId = :workshopId', { workshopId })
       .getMany();
 
+    // Get pending refund requests for reservation status
+    const pendingRefunds = await this.refundsRepo.find({
+      where: { 
+        workshopId,
+        status: WorkshopRefundStatus.PENDING 
+      },
+    });
+
+    const reservationRefundRequestMap = new Map<string, boolean>();
+    for (const refund of pendingRefunds) {
+      reservationRefundRequestMap.set(refund.reservationId, true);
+    }
+
     const attendeeRefundMap = new Map<
       string,
       { status: 'REFUNDED' | 'PARTIAL_REFUNDED'; refundAmount: string }
@@ -3008,7 +3021,10 @@ export class WorkshopsService {
         | 'PARTIAL_REFUNDED'
         | 'REFUNDED' = 'BOOKED';
 
-      if (members.length > 0 && refundedCount === members.length) {
+      // Check for refund requests first
+      if (reservationRefundRequestMap.has(reservation.id)) {
+        status = 'REFUND_REQUESTED';
+      } else if (members.length > 0 && refundedCount === members.length) {
         status = 'REFUNDED';
       } else if (partialRefundCount > 0 || refundedCount > 0) {
         status = 'PARTIAL_REFUNDED';
