@@ -712,6 +712,9 @@ export class WorkshopsService {
       })) as any,
 
       faculty: facultyEntities,
+      registrationDeadline: dto.registrationDeadline
+        ? new Date(dto.registrationDeadline)
+        : undefined,
     };
 
     const workshop = this.workshopsRepo.create(payload);
@@ -961,6 +964,10 @@ export class WorkshopsService {
     }
     if (facultyEntities !== undefined) {
       workshop.faculty = facultyEntities;
+    }
+
+    if (dto.registrationDeadline !== undefined) {
+      updatePayload.registrationDeadline = new Date(dto.registrationDeadline);
     }
 
     return await this.workshopsRepo.save(workshop);
@@ -1417,6 +1424,7 @@ export class WorkshopsService {
         title: workshop.title,
         description: workshop.shortBlurb,
         deliveryMode: workshop.deliveryMode,
+        registrationDeadline: workshop.registrationDeadline ?? null,
         workshopPhoto: workshop.coverImageUrl,
         totalHours: `${totalHours} hours`,
         cmeCredits: workshop.offersCmeCredits,
@@ -1604,6 +1612,7 @@ export class WorkshopsService {
           startDate: workshopStartDate,
           endDate: workshopEndDate,
           numberOfDays: workshop.days?.length || 0,
+          registrationDeadline: workshop.registrationDeadline ?? null,
 
           // Location / Online details
           facility: facilities.length > 0 ? facilities[0].name : 'Venue TBA', // kept for backwards compatibility if frontend uses this
@@ -1794,6 +1803,7 @@ export class WorkshopsService {
             : null,
           startDate,
           endDate,
+          registrationDeadline: workshop.registrationDeadline ?? null,
         };
       })
       .filter(Boolean);
@@ -1995,7 +2005,8 @@ export class WorkshopsService {
             isEnrolled: false,
             enrolledAt,
             startDate,
-            endDate,
+              endDate,
+              registrationDeadline: workshop.registrationDeadline ?? null,
             completedOn: null,
             totalHours,
             cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
@@ -2064,6 +2075,7 @@ export class WorkshopsService {
           enrolledAt,
           startDate,
           endDate,
+          registrationDeadline: workshop.registrationDeadline ?? null,
           completedOn,
           totalHours,
           cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
@@ -2248,6 +2260,28 @@ export class WorkshopsService {
       );
     }
 
+    // Prevent creating reservations after registration deadline
+    if (workshop.registrationDeadline) {
+      const now = new Date();
+      const deadline = new Date(workshop.registrationDeadline);
+      if (now > deadline) {
+        throw new BadRequestException(
+          'Registration for this workshop has closed. You cannot create or modify reservations.',
+        );
+      }
+    }
+
+    // Prevent creating order summaries after registration deadline
+    if (workshop.registrationDeadline) {
+      const now = new Date();
+      const deadline = new Date(workshop.registrationDeadline);
+      if (now > deadline) {
+        throw new BadRequestException(
+          'Registration for this workshop has closed. You cannot purchase this course anymore.',
+        );
+      }
+    }
+
     // Validate attendees
     if (!dto.attendees || dto.attendees.length === 0) {
       throw new BadRequestException('At least one attendee is required');
@@ -2382,6 +2416,7 @@ export class WorkshopsService {
         workshop: {
           id: workshop.id,
           title: workshop.title,
+          registrationDeadline: workshop.registrationDeadline ?? null,
           deliveryMode: workshop.deliveryMode,
           coverImageUrl: workshop.coverImageUrl,
         },
@@ -2430,6 +2465,8 @@ export class WorkshopsService {
         workshop: {
           id: orderSummary.workshop.id,
           title: orderSummary.workshop.title,
+            registrationDeadline:
+              orderSummary.workshop.registrationDeadline ?? null,
           deliveryMode: orderSummary.workshop.deliveryMode,
           coverImageUrl: orderSummary.workshop.coverImageUrl,
         },
@@ -2512,6 +2549,17 @@ export class WorkshopsService {
       );
     }
 
+    // Prevent payments after registration deadline
+    if (workshop.registrationDeadline) {
+      const now = new Date();
+      const deadline = new Date(workshop.registrationDeadline);
+      if (now > deadline) {
+        throw new BadRequestException(
+          'Registration for this workshop has closed. You cannot complete payment.',
+        );
+      }
+    }
+
     const reservedSeatsResult = await this.reservationsRepo
       .createQueryBuilder('r')
       .select('SUM(r.numberOfSeats)', 'total')
@@ -2579,6 +2627,7 @@ export class WorkshopsService {
         workshop: {
           id: workshop.id,
           title: workshop.title,
+          registrationDeadline: workshop.registrationDeadline ?? null,
         },
         numberOfAttendees: orderSummary.numberOfSeats,
         totalPrice: orderSummary.totalPrice,
@@ -2652,6 +2701,7 @@ export class WorkshopsService {
         workshop: {
           id: saved.workshop.id,
           title: saved.workshop.title,
+          registrationDeadline: saved.workshop.registrationDeadline ?? null,
         },
         numberOfAttendees: saved.numberOfSeats,
         totalPrice: saved.totalPrice,
@@ -3048,6 +3098,7 @@ export class WorkshopsService {
         workshop: {
           id: workshop.id,
           title: workshop.title,
+          registrationDeadline: workshop.registrationDeadline ?? null,
         },
         overview: {
           totalEnrolled,
@@ -4080,6 +4131,7 @@ export class WorkshopsService {
         id: w.id,
         title: w.title,
         shortBlurb: w.shortBlurb ?? null,
+          registrationDeadline: w.registrationDeadline ?? null,
         deliveryMode: w.deliveryMode,
         status: w.status,
         coverImageUrl: w.coverImageUrl ?? null,

@@ -103,6 +103,10 @@ export class Workshop {
   })
   groupDiscounts: WorkshopGroupDiscount[];
 
+  // Optional registration deadline: after this Date users cannot register/pay
+  @Column({ type: 'timestamptz', nullable: true })
+  registrationDeadline?: Date | null;
+
   // faculty assignment
   @ManyToMany(() => Faculty, { eager: true })
   @JoinTable({

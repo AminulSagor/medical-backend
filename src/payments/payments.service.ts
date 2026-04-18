@@ -789,6 +789,7 @@ export class PaymentsService {
           workshop: {
             id: workshop.id,
             title: workshop.title,
+            registrationDeadline: workshop.registrationDeadline ?? null,
           },
           orderSummaryId: orderSummary.id,
           numberOfAttendees: numberOfAttendees,
@@ -870,6 +871,7 @@ export class PaymentsService {
         workshop: {
           id: workshop.id,
           title: workshop.title,
+          registrationDeadline: workshop.registrationDeadline ?? null,
         },
         orderSummaryId: orderSummary.id,
         numberOfAttendees: numberOfAttendees,

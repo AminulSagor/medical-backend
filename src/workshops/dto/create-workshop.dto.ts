@@ -10,6 +10,7 @@ import {
   MaxLength,
   Min,
   ValidateNested,
+  IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -162,4 +163,8 @@ export class CreateWorkshopDto {
   @ValidateNested({ each: true })
   @Type(() => CreateWorkshopDayDto)
   days?: CreateWorkshopDayDto[]; // Optional for drafts
+
+  @IsOptional()
+  @IsDateString()
+  registrationDeadline?: string; // ISO datetime string, e.g. 2026-04-20T15:00:00Z
 }

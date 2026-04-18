@@ -9,6 +9,7 @@ import {
     MaxLength,
     Min,
     ValidateNested,
+    IsDateString,
 } from "class-validator";
 import { Type } from "class-transformer";
 import { WorkshopDeliveryMode, WorkshopStatus } from "../entities/workshop.entity";
@@ -155,4 +156,8 @@ export class UpdateWorkshopDto {
     @ValidateNested({ each: true })
     @Type(() => UpdateWorkshopDayDto)
     days?: UpdateWorkshopDayDto[];
+
+    @IsOptional()
+    @IsDateString()
+    registrationDeadline?: string;
 }
