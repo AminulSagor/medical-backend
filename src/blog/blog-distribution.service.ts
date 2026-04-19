@@ -157,8 +157,9 @@ export class BlogDistributionService {
           sourceTitleSnapshot: post.title,
           sourceExcerptSnapshot: post.excerpt || '',
           sourceAuthorSnapshot:
-            post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
-          sourceHeroImageUrlSnapshot: post.coverImageUrl,
+            post.authorName || post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
+          sourceHeroImageUrlSnapshot:
+            post.coverImages?.[0]?.imageUrl ?? null,
           sourcePublishedAtSnapshot: post.publishedAt || new Date(),
           ctaLabel: 'Read Full Analysis',
         });
@@ -219,8 +220,10 @@ export class BlogDistributionService {
           sourceTitleSnapshot: post.title,
           sourceExcerptSnapshot: post.excerpt || '',
           sourceAuthorSnapshot:
-            post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
-          sourceHeroImageUrlSnapshot: post.coverImageUrl,
+            post.authorName || post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
+          sourceHeroImageUrlSnapshot:
+            post.coverImages?.[0]?.imageUrl ?? nul
+            post.coverImages?.[0]?.imageUrl ?? null,
           sourcePublishedAtSnapshot: post.publishedAt || new Date(),
           ctaLabel: 'Read Full Analysis',
         });
@@ -275,8 +278,9 @@ export class BlogDistributionService {
           sourceTitleSnapshot: post.title,
           sourceExcerptSnapshot: post.excerpt || '',
           sourceAuthorSnapshot:
-            post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
-          sourceHeroImageUrlSnapshot: post.coverImageUrl,
+            post.authorName || post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
+          sourceHeroImageUrlSnapshot:
+            post.coverImages?.[0]?.imageUrl ?? null,
           sourcePublishedAtSnapshot: post.publishedAt || new Date(),
           ctaLabel: 'View Course Material',
         });

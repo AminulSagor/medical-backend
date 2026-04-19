@@ -122,11 +122,13 @@ export class BlogArticleSourceService {
   }
 
   private toSnapshot(post: BlogPost): BlogPostSnapshot {
-    const authorName = post.authors?.length
-      ? post.authors
-          .map((a: any) => a.fullLegalName ?? a.medicalEmail ?? a.id)
-          .join(', ')
-      : null;
+    const authorName =
+      post.authorName ||
+      (post.authors?.length
+        ? post.authors
+            .map((a: any) => a.fullLegalName ?? a.medicalEmail ?? a.id)
+            .join(', ')
+        : null);
 
     const kindLabel = this.deriveKindLabel(post);
     const estimatedReadMinutes = this.estimateReadMinutes(post.content);
@@ -137,7 +139,7 @@ export class BlogArticleSourceService {
       title: post.title,
       excerpt: post.excerpt ?? null,
       authorName,
-      heroImageUrl: post.coverImageUrl ?? null,
+      heroImageUrl: post.coverImages?.[0]?.imageUrl ?? null,
       publishedAt: post.publishedAt ?? null,
       estimatedReadMinutes,
       kindLabel,

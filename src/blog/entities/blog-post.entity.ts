@@ -32,8 +32,11 @@ export class BlogPost {
     @Column({ type: "text" })
     content: string;
 
-    @Column({ type: "text", nullable: true })
-    coverImageUrl?: string;
+    @Column({ type: "varchar", length: 200, nullable: true })
+    authorName?: string;
+
+    @Column({ type: "jsonb", nullable: true })
+    coverImages?: { imageUrl: string; imageType: string }[];
 
     @Index()
     @Column({

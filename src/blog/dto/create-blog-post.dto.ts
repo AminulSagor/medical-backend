@@ -4,13 +4,15 @@ import {
     IsEnum,
     IsBoolean,
     IsArray,
-    IsUUID,
     IsDateString,
     MaxLength,
     IsInt,
     Min,
+    ValidateNested,
 } from "class-validator";
+import { Type } from "class-transformer";
 import { PublishingStatus } from "../entities/blog-post.entity";
+import { BlogCoverImageDto } from "./blog-cover-image.dto";
 
 export class CreateBlogPostDto {
     @IsString()
@@ -21,8 +23,15 @@ export class CreateBlogPostDto {
     content: string;
 
     @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => BlogCoverImageDto)
+    coverImageUrl?: BlogCoverImageDto[];
+
+    @IsOptional()
     @IsString()
-    coverImageUrl?: string;
+    @MaxLength(200)
+    authorName?: string;
 
     @IsOptional()
     @IsEnum(PublishingStatus)
@@ -46,11 +55,6 @@ export class CreateBlogPostDto {
     readTimeMinutes?: number;
 
     // ── Relation IDs ──
-
-    @IsOptional()
-    @IsArray()
-    @IsUUID("4", { each: true })
-    authorIds?: string[];
 
     @IsOptional()
     @IsArray()
