@@ -59,7 +59,11 @@ export class CartService {
       throw new NotFoundException('Product not found or inactive');
     }
 
-    if (!product.backorder && quantity > product.stockQuantity) {
+    if (quantity <= 0) {
+      throw new BadRequestException('Quantity must be greater than 0.');
+    }
+
+    if (quantity > product.stockQuantity) {
       throw new BadRequestException(
         `Only ${product.stockQuantity} items available in stock.`,
       );
@@ -82,7 +86,6 @@ export class CartService {
   }
 
   async addToCart(userId: string, dto: AddToCartDto) {
-    // 1. Verify the product exists and is active
     const product = await this.productRepo.findOne({
       where: { id: dto.productId, isActive: true },
       relations: ['details'],
@@ -94,10 +97,12 @@ export class CartService {
       );
     }
 
-    // 2. Get or create the user's cart
+    if (dto.quantity <= 0) {
+      throw new BadRequestException('Quantity must be greater than 0.');
+    }
+
     const cart = await this.getOrCreateCart(userId);
 
-    // 3. Check if the item is already in the cart
     let cartItem = await this.cartItemRepo.findOne({
       where: { cartId: cart.id, productId: dto.productId },
     });
@@ -106,14 +111,12 @@ export class CartService {
       ? cartItem.quantity + dto.quantity
       : dto.quantity;
 
-    // 4. Verify Stock Availability
-    if (!product.backorder && newQuantity > product.stockQuantity) {
+    if (newQuantity > product.stockQuantity) {
       throw new BadRequestException(
-        `Cannot add ${dto.quantity} to cart. Only ${product.stockQuantity} items left in stock.`,
+        `Cannot add ${dto.quantity} to cart. Only ${product.stockQuantity} items available in stock.`,
       );
     }
 
-    // 5. Save the Cart Item
     if (cartItem) {
       cartItem.quantity = newQuantity;
       await this.cartItemRepo.save(cartItem);
@@ -126,7 +129,6 @@ export class CartService {
       await this.cartItemRepo.save(cartItem);
     }
 
-    // 6. Return the updated cart summary
     return this.getCart(userId);
   }
 

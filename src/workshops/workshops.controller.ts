@@ -47,8 +47,8 @@ export class WorkshopsController {
   @Get('stats')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
-  getWorkshopStats(@Query() query: WorkshopStatsQueryDto) {
-    return this.service.getWorkshopStats(query);
+  getWorkshopStats() {
+    return this.service.getWorkshopStats();
   }
 
   @Get(':id')

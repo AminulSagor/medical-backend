@@ -2117,27 +2117,34 @@ export class BroadcastsService {
   // }
 
   private ensureEditable(broadcast: NewsletterBroadcast): void {
-    const allowed = [
+    const editableStatuses = [
       NewsletterBroadcastStatus.DRAFT,
       NewsletterBroadcastStatus.REVIEW_PENDING,
       NewsletterBroadcastStatus.READY,
       NewsletterBroadcastStatus.SCHEDULED,
     ];
 
-    if (!allowed.includes(broadcast.status)) {
+    if (!editableStatuses.includes(broadcast.status)) {
       throw new UnprocessableEntityException(
         `Broadcast cannot be edited in ${broadcast.status} status`,
       );
     }
 
-    if (
-      broadcast.status === NewsletterBroadcastStatus.SCHEDULED &&
-      broadcast.scheduledAt &&
-      broadcast.scheduledAt <= new Date()
-    ) {
-      throw new UnprocessableEntityException(
-        'Broadcast cannot be edited after scheduled time has passed',
-      );
+    if (broadcast.status === NewsletterBroadcastStatus.SCHEDULED) {
+      if (!broadcast.scheduledAt) {
+        throw new UnprocessableEntityException(
+          'Scheduled broadcast is missing scheduled time',
+        );
+      }
+
+      const now = new Date();
+      const scheduledAt = new Date(broadcast.scheduledAt);
+
+      if (scheduledAt <= now) {
+        throw new UnprocessableEntityException(
+          'Broadcast cannot be edited after scheduled time has passed',
+        );
+      }
     }
   }
 

@@ -93,7 +93,8 @@ export class WorkshopsService {
   constructor(
     @InjectRepository(Workshop) private workshopsRepo: Repository<Workshop>,
     @InjectRepository(WorkshopDay) private daysRepo: Repository<WorkshopDay>,
-    @InjectRepository(WorkshopSegment) private segmentsRepo: Repository<WorkshopSegment>,
+    @InjectRepository(WorkshopSegment)
+    private segmentsRepo: Repository<WorkshopSegment>,
     @InjectRepository(WorkshopReservation)
     private reservationsRepo: Repository<WorkshopReservation>,
     @InjectRepository(WorkshopAttendee)
@@ -540,21 +541,26 @@ export class WorkshopsService {
     // For drafts, only validate provided fields
     if (dto.title !== undefined) {
       const title = dto.title?.trim();
-      if (!title) throw new BadRequestException('Workshop title cannot be empty');
+      if (!title)
+        throw new BadRequestException('Workshop title cannot be empty');
     }
 
     // Validate pricing only if provided
     if (dto.standardBaseRate !== undefined) {
       const baseRate = Number(dto.standardBaseRate);
       if (!Number.isFinite(baseRate) || baseRate <= 0) {
-        throw new BadRequestException('standardBaseRate must be greater than 0');
+        throw new BadRequestException(
+          'standardBaseRate must be greater than 0',
+        );
       }
     }
 
     // Validate capacity/alertAt relationship only if both are provided
     if (dto.capacity !== undefined && dto.alertAt !== undefined) {
       if (dto.alertAt > dto.capacity) {
-        throw new BadRequestException('alertAt cannot be greater than capacity');
+        throw new BadRequestException(
+          'alertAt cannot be greater than capacity',
+        );
       }
     }
 
@@ -603,7 +609,10 @@ export class WorkshopsService {
           );
         }
         // Only validate against baseRate if both are provided
-        if (dto.standardBaseRate !== undefined && rate >= Number(dto.standardBaseRate)) {
+        if (
+          dto.standardBaseRate !== undefined &&
+          rate >= Number(dto.standardBaseRate)
+        ) {
           throw new BadRequestException(
             'groupRatePerPerson must be less than standardBaseRate',
           );
@@ -619,56 +628,58 @@ export class WorkshopsService {
 
     // days/segments validation + time parsing (only if days are provided)
     if (dto.days !== undefined && dto.days.length === 0) {
-      throw new BadRequestException('At least one day is required when days are provided');
+      throw new BadRequestException(
+        'At least one day is required when days are provided',
+      );
     }
-    
+
     // Skip days validation if not provided (for drafts)
     let normalizedDays;
     if (dto.days?.length) {
       normalizedDays = dto.days.map((d) => {
-      if (!d.segments?.length) {
-        throw new BadRequestException(
-          `Day ${d.dayNumber} must have at least one segment`,
-        );
-      }
-
-      const segments = d.segments.map((s) => {
-        const start = parse12hToTime(s.startTime);
-        const end = parse12hToTime(s.endTime);
-        if (start >= end) {
+        if (!d.segments?.length) {
           throw new BadRequestException(
-            `Invalid segment time (day ${d.dayNumber}, segment ${s.segmentNumber}): startTime must be before endTime`,
+            `Day ${d.dayNumber} must have at least one segment`,
           );
+        }
+
+        const segments = d.segments.map((s) => {
+          const start = parse12hToTime(s.startTime);
+          const end = parse12hToTime(s.endTime);
+          if (start >= end) {
+            throw new BadRequestException(
+              `Invalid segment time (day ${d.dayNumber}, segment ${s.segmentNumber}): startTime must be before endTime`,
+            );
+          }
+
+          return {
+            segmentNumber: s.segmentNumber,
+            courseTopic: s.courseTopic?.trim(),
+            topicDetails: s.topicDetails?.trim() || undefined,
+            startTime: start,
+            endTime: end,
+          };
+        });
+
+        // Optional: ensure segmentNumber unique per day
+        const nums = new Set<number>();
+        for (const s of segments) {
+          if (!s.courseTopic)
+            throw new BadRequestException('courseTopic is required');
+          if (nums.has(s.segmentNumber)) {
+            throw new BadRequestException(
+              `Duplicate segmentNumber ${s.segmentNumber} in day ${d.dayNumber}`,
+            );
+          }
+          nums.add(s.segmentNumber);
         }
 
         return {
-          segmentNumber: s.segmentNumber,
-          courseTopic: s.courseTopic?.trim(),
-          topicDetails: s.topicDetails?.trim() || undefined,
-          startTime: start,
-          endTime: end,
+          date: d.date,
+          dayNumber: d.dayNumber,
+          segments,
         };
       });
-
-      // Optional: ensure segmentNumber unique per day
-      const nums = new Set<number>();
-      for (const s of segments) {
-        if (!s.courseTopic)
-          throw new BadRequestException('courseTopic is required');
-        if (nums.has(s.segmentNumber)) {
-          throw new BadRequestException(
-            `Duplicate segmentNumber ${s.segmentNumber} in day ${d.dayNumber}`,
-          );
-        }
-        nums.add(s.segmentNumber);
-      }
-
-      return {
-        date: d.date,
-        dayNumber: d.dayNumber,
-        segments,
-      };
-    });
     }
 
     // faculty assignment (existing only)
@@ -923,14 +934,11 @@ export class WorkshopsService {
     if (dto.groupDiscountEnabled !== undefined)
       updatePayload.groupDiscountEnabled = dto.groupDiscountEnabled;
 
-    // Update the workshop entity
-    Object.assign(workshop, updatePayload);
-
     // Handle days relationship - delete old days and create new ones
     if (normalizedDays !== undefined) {
       // Delete existing days (cascade will delete segments)
       await this.daysRepo.delete({ workshopId: id });
-      
+
       // Create new days with segments
       const newDays: WorkshopDay[] = [];
       for (const dayData of normalizedDays) {
@@ -940,7 +948,7 @@ export class WorkshopsService {
           dayNumber: dayData.dayNumber,
         });
         const savedDay = await this.daysRepo.save(day);
-        
+
         // Create segments for this day
         const segments = dayData.segments.map((s: any) =>
           this.segmentsRepo.create({
@@ -950,7 +958,7 @@ export class WorkshopsService {
             topicDetails: s.topicDetails,
             startTime: s.startTime,
             endTime: s.endTime,
-          })
+          }),
         );
         await this.segmentsRepo.save(segments);
         newDays.push(savedDay);
@@ -970,6 +978,9 @@ export class WorkshopsService {
     if (dto.registrationDeadline !== undefined) {
       updatePayload.registrationDeadline = new Date(dto.registrationDeadline);
     }
+
+    // Update the workshop entity
+    Object.assign(workshop, updatePayload);
 
     return await this.workshopsRepo.save(workshop);
   }
@@ -992,7 +1003,7 @@ export class WorkshopsService {
 
     if (activeReservation || activeEnrollment) {
       throw new BadRequestException(
-        'Cannot delete workshop with active reservations or enrollments'
+        'Cannot delete workshop with active reservations or enrollments',
       );
     }
 
@@ -1092,7 +1103,9 @@ export class WorkshopsService {
 
     // sorting
     const sortBy = query.sortBy ?? 'createdAt';
-    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
     qb.orderBy(`w.${sortBy}`, sortOrder);
 
     qb.skip(skip).take(limit);
@@ -1128,33 +1141,44 @@ export class WorkshopsService {
         ? await this.refundsRepo
             .createQueryBuilder('ref')
             .select('ref.workshopId', 'workshopId')
+            .addSelect('ref.status', 'status')
             .addSelect('ref.refundType', 'refundType')
             .addSelect('COUNT(ref.id)', 'count')
             .where('ref.workshopId IN (:...workshopIds)', { workshopIds })
             .groupBy('ref.workshopId')
+            .addGroupBy('ref.status')
             .addGroupBy('ref.refundType')
             .getRawMany()
         : [];
 
     const refundStatsMap = new Map<
       string,
-      { partialRefund: number; refunded: number }
+      { refundRequested: number; partialRefund: number; refunded: number }
     >();
+
     for (const row of refundStats) {
       const existing = refundStatsMap.get(row.workshopId) || {
+        refundRequested: 0,
         partialRefund: 0,
         refunded: 0,
       };
-      if (row.refundType === 'FULL') {
-        existing.refunded = parseInt(row.count, 10);
-      } else if (row.refundType === 'PARTIAL') {
-        existing.partialRefund = parseInt(row.count, 10);
+
+      const count = parseInt(row.count, 10);
+
+      if (row.status === 'PENDING') {
+        existing.refundRequested += count;
+      } else if (row.status === 'PROCESSED' && row.refundType === 'PARTIAL') {
+        existing.partialRefund += count;
+      } else if (row.status === 'PROCESSED' && row.refundType === 'FULL') {
+        existing.refunded += count;
       }
+
       refundStatsMap.set(row.workshopId, existing);
     }
 
     // ── Resolve full facility details in one batch query ──────────────────────
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const allFacilityIds = [
       ...new Set(
         workshops.flatMap((w) =>
@@ -1171,6 +1195,7 @@ export class WorkshopsService {
     const data = workshops.map((w) => {
       const reservedSeats = reservationMap.get(w.id) || 0;
       const refundInfo = refundStatsMap.get(w.id) || {
+        refundRequested: 0,
         partialRefund: 0,
         refunded: 0,
       };
@@ -1201,7 +1226,7 @@ export class WorkshopsService {
         // ✅ Enrollment & refund overview
         overview: {
           totalEnrolled: reservedSeats,
-          refundRequested: 0,
+          refundRequested: refundInfo.refundRequested,
           partialRefund: refundInfo.partialRefund,
           refunded: refundInfo.refunded,
         },
@@ -1309,7 +1334,9 @@ export class WorkshopsService {
 
     // ── Sorting ─────────────────────────────────────────────────────────────
     const sortBy = query.sortBy ?? 'date';
-    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as 'ASC' | 'DESC';
+    const sortOrder = (query.sortOrder ?? 'asc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
 
     if (sortBy === 'date') {
       qb.orderBy('days.date', sortOrder);
@@ -1348,7 +1375,8 @@ export class WorkshopsService {
     const todayStr = new Date().toISOString().slice(0, 10);
 
     // ── Resolve full facility details for all workshops in one batch query ────
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const allFacilityIds = [
       ...new Set(
         workshops.flatMap((w) =>
@@ -1486,7 +1514,8 @@ export class WorkshopsService {
   }
 
   private async getWorkshopFacilities(facilityIds: string[] = []) {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const validFacilityIds = facilityIds.filter((fid) => uuidRegex.test(fid));
 
     return validFacilityIds.length > 0
@@ -1616,10 +1645,10 @@ export class WorkshopsService {
           : null;
 
       // ✅ FIX: Fetch full facility details dynamically with UUID validation
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const validFacilityIds = workshop.facilityIds?.filter((id) =>
-        uuidRegex.test(id),
-      ) || [];
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validFacilityIds =
+        workshop.facilityIds?.filter((id) => uuidRegex.test(id)) || [];
 
       const facilities =
         validFacilityIds.length > 0
@@ -1701,12 +1730,12 @@ export class WorkshopsService {
       };
     } catch (error) {
       console.error('Error fetching workshop:', error);
-      
+
       // If it's already a NestJS exception, re-throw it
       if (error instanceof NotFoundException) {
         throw error;
       }
-      
+
       // If it's a known error, provide a meaningful message
       if (error instanceof Error) {
         throw new BadRequestException({
@@ -1715,11 +1744,12 @@ export class WorkshopsService {
           error: 'Bad Request',
         });
       }
-      
+
       // Generic error handler
       throw new BadRequestException({
         statusCode: 400,
-        message: 'An error occurred while fetching workshop details. Please try again later.',
+        message:
+          'An error occurred while fetching workshop details. Please try again later.',
         error: 'Bad Request',
       });
     }
@@ -2035,8 +2065,8 @@ export class WorkshopsService {
             isEnrolled: false,
             enrolledAt,
             startDate,
-              endDate,
-              registrationDeadline: workshop.registrationDeadline ?? null,
+            endDate,
+            registrationDeadline: workshop.registrationDeadline ?? null,
             completedOn: null,
             totalHours,
             cmeCredits: workshop.offersCmeCredits ? totalHours : 0,
@@ -2495,8 +2525,8 @@ export class WorkshopsService {
         workshop: {
           id: orderSummary.workshop.id,
           title: orderSummary.workshop.title,
-            registrationDeadline:
-              orderSummary.workshop.registrationDeadline ?? null,
+          registrationDeadline:
+            orderSummary.workshop.registrationDeadline ?? null,
           deliveryMode: orderSummary.workshop.deliveryMode,
           coverImageUrl: orderSummary.workshop.coverImageUrl,
         },
@@ -2797,7 +2827,9 @@ export class WorkshopsService {
         .andWhere('r.status != :cancelledStatus', {
           cancelledStatus: 'cancelled',
         })
-        .andWhere('r.id != :reservationId', { reservationId: existingReservation.id })
+        .andWhere('r.id != :reservationId', {
+          reservationId: existingReservation.id,
+        })
         .getRawOne();
 
       const otherReservedSeats = parseInt(
@@ -2972,7 +3004,7 @@ export class WorkshopsService {
   ) {
     const workshop = await this.workshopsRepo.findOne({
       where: { id: workshopId },
-      select: ['id', 'title'],
+      select: ['id', 'title', 'registrationDeadline'],
     });
 
     if (!workshop) {
@@ -2989,56 +3021,75 @@ export class WorkshopsService {
       order: { createdAt: 'DESC' },
     });
 
-    const refundItems = await this.refundItemsRepo
+    const refunds = await this.refundsRepo.find({
+      where: { workshopId },
+      order: { createdAt: 'DESC' },
+    });
+
+    const processedRefundItems = await this.refundItemsRepo
       .createQueryBuilder('item')
       .leftJoinAndSelect('item.refund', 'refund')
       .where('refund.workshopId = :workshopId', { workshopId })
+      .andWhere('refund.status = :processedStatus', {
+        processedStatus: WorkshopRefundStatus.PROCESSED,
+      })
       .getMany();
 
-    // Get pending refund requests for reservation status
-    const pendingRefunds = await this.refundsRepo.find({
-      where: { 
-        workshopId,
-        status: WorkshopRefundStatus.PENDING 
-      },
-    });
-
-    const reservationRefundRequestMap = new Map<string, boolean>();
-    for (const refund of pendingRefunds) {
-      reservationRefundRequestMap.set(refund.reservationId, true);
+    const latestRefundByReservation = new Map<string, WorkshopRefund>();
+    for (const refund of refunds) {
+      if (!latestRefundByReservation.has(refund.reservationId)) {
+        latestRefundByReservation.set(refund.reservationId, refund);
+      }
     }
 
     const attendeeRefundMap = new Map<
       string,
-      { status: 'REFUNDED' | 'PARTIAL_REFUNDED'; refundAmount: string }
+      { status: 'REFUNDED'; refundedAmount: number }
     >();
 
-    for (const item of refundItems) {
+    for (const item of processedRefundItems) {
+      const existing = attendeeRefundMap.get(item.attendeeId);
+
       attendeeRefundMap.set(item.attendeeId, {
-        status: item.status,
-        refundAmount: item.refundAmount,
+        status: 'REFUNDED',
+        refundedAmount:
+          (existing?.refundedAmount ?? 0) + this.toMoney(item.refundAmount),
       });
     }
 
     const transformed = reservations.map((reservation) => {
-      const members = (reservation.attendees ?? []).map((attendee) => {
+      const bookingType =
+        reservation.bookingType ??
+        ((reservation.attendees?.length ?? reservation.numberOfSeats) > 1
+          ? 'group'
+          : 'single');
+
+      const allMembers = (reservation.attendees ?? []).map((attendee) => {
         const refundInfo = attendeeRefundMap.get(attendee.id);
+        const isRefunded = Boolean(refundInfo);
 
         return {
           attendeeId: attendee.id,
           fullName: attendee.fullName,
           email: attendee.email,
           institutionOrHospital: reservation.institutionOrHospital ?? null,
-          status:
-            refundInfo?.status === 'REFUNDED'
-              ? 'REFUNDED'
-              : 'CONFIRMED', // Individual members are either REFUNDED or CONFIRMED
+          status: isRefunded ? 'REFUNDED' : 'CONFIRMED',
+          refundedAmount: isRefunded
+            ? this.toMoneyString(refundInfo!.refundedAmount)
+            : null,
         };
       });
 
-      const refundedCount = members.filter(
-        (m) => m.status === 'REFUNDED',
-      ).length;
+      const activeMembers = allMembers.filter(
+        (member) => member.status !== 'REFUNDED',
+      );
+
+      const refundedMembers = allMembers.filter(
+        (member) => member.status === 'REFUNDED',
+      );
+
+      const refundedCount = refundedMembers.length;
+      const latestRefund = latestRefundByReservation.get(reservation.id);
 
       let status:
         | 'BOOKED'
@@ -3046,21 +3097,25 @@ export class WorkshopsService {
         | 'PARTIAL_REFUNDED'
         | 'REFUNDED' = 'BOOKED';
 
-      // Check for refund requests first
-      if (reservationRefundRequestMap.has(reservation.id)) {
+      if (latestRefund?.status === WorkshopRefundStatus.PENDING) {
         status = 'REFUND_REQUESTED';
-      } else if (members.length > 0 && refundedCount === members.length) {
+      } else if (bookingType === 'single') {
+        status = refundedCount > 0 ? 'REFUNDED' : 'BOOKED';
+      } else if (refundedCount === 0) {
+        status = 'BOOKED';
+      } else if (refundedCount < allMembers.length) {
+        status = 'PARTIAL_REFUNDED';
+      } else {
         status = 'REFUNDED';
-      } else if (refundedCount > 0 && refundedCount < members.length) {
-        status = 'PARTIAL_REFUNDED'; // Only some members refunded
       }
-
-      const bookingType = reservation.numberOfSeats > 1 ? 'group' : 'single';
 
       return {
         reservationId: reservation.id,
         bookingType,
-        groupSize: reservation.numberOfSeats,
+        groupSize: activeMembers.length,
+        originalGroupSize: allMembers.length || reservation.numberOfSeats,
+        activeMemberCount: activeMembers.length,
+        refundedMemberCount: refundedCount,
         studentInfo: {
           fullName:
             reservation.bookerFullName ??
@@ -3078,7 +3133,8 @@ export class WorkshopsService {
         status,
         paymentGateway: reservation.paymentGateway ?? null,
         transactionId: reservation.paymentTransactionId ?? null,
-        members,
+        members: activeMembers,
+        refundedMembers,
       };
     });
 
@@ -3093,7 +3149,7 @@ export class WorkshopsService {
           item.studentInfo.email?.toLowerCase().includes(q) ||
           item.institutionOrHospital?.toLowerCase().includes(q);
 
-        const matchesMember = item.members.some(
+        const matchesMember = [...item.members, ...item.refundedMembers].some(
           (member) =>
             member.fullName.toLowerCase().includes(q) ||
             member.email.toLowerCase().includes(q),
@@ -3113,17 +3169,24 @@ export class WorkshopsService {
       filtered = filtered.filter(
         (item) => item.status === query.enrollmentStatus,
       );
+    } else {
+      // Default list should show active / actionable rows only.
+      filtered = filtered.filter((item) => item.status !== 'REFUNDED');
     }
 
     const totalEnrolled = transformed.reduce(
-      (sum, item) => sum + (item.groupSize || 0),
+      (sum, item) => sum + item.activeMemberCount,
       0,
     );
 
-    const refundRequested = pendingRefunds.length;
+    const refundRequested = Array.from(
+      latestRefundByReservation.values(),
+    ).filter((refund) => refund.status === WorkshopRefundStatus.PENDING).length;
+
     const partialRefund = transformed.filter(
       (item) => item.status === 'PARTIAL_REFUNDED',
     ).length;
+
     const refunded = transformed.filter(
       (item) => item.status === 'REFUNDED',
     ).length;
@@ -3279,77 +3342,157 @@ export class WorkshopsService {
       );
     }
 
-    const existingRefundItems = await this.refundItemsRepo
+    const totalRefundAmount = this.toMoney(dto.refundAmount);
+    if (totalRefundAmount <= 0) {
+      throw new BadRequestException('refundAmount must be greater than 0');
+    }
+
+    const existingProcessedRefundItems = await this.refundItemsRepo
       .createQueryBuilder('item')
-      .leftJoinAndSelect('item.refund', 'refund')
+      .leftJoin('item.refund', 'refund')
       .where('refund.reservationId = :reservationId', {
         reservationId: dto.reservationId,
       })
-      .andWhere('item.attendeeId IN (:...attendeeIds)', {
-        attendeeIds: dto.attendeeIds,
+      .andWhere('refund.status = :processedStatus', {
+        processedStatus: WorkshopRefundStatus.PROCESSED,
       })
       .getMany();
 
     const alreadyRefundedIds = new Set(
-      existingRefundItems
-        .filter((item) => item.status === 'REFUNDED')
-        .map((item) => item.attendeeId),
+      existingProcessedRefundItems.map((item) => item.attendeeId),
     );
 
-    if (alreadyRefundedIds.size > 0) {
+    const invalidSelectedIds = dto.attendeeIds.filter((id) =>
+      alreadyRefundedIds.has(id),
+    );
+
+    if (invalidSelectedIds.length > 0) {
       throw new BadRequestException(
         'One or more selected attendees are already fully refunded',
       );
     }
 
+    const reservationAttendeeIds = (reservation.attendees ?? []).map(
+      (attendee) => attendee.id,
+    );
+
+    const refundableAttendeeIds = reservationAttendeeIds.filter(
+      (id) => !alreadyRefundedIds.has(id),
+    );
+
+    if (dto.attendeeIds.length > refundableAttendeeIds.length) {
+      throw new BadRequestException(
+        'Selected attendee count exceeds the remaining refundable attendees',
+      );
+    }
+
     const refundType =
-      dto.attendeeIds.length === reservation.numberOfSeats
+      dto.attendeeIds.length === refundableAttendeeIds.length
         ? WorkshopRefundType.FULL
         : WorkshopRefundType.PARTIAL;
 
-    const refund = this.refundsRepo.create({
-      workshopId,
-      reservationId: dto.reservationId,
-      processedByAdminId: adminId,
-      refundType,
-      refundAmount: dto.refundAmount,
-      adjustmentNote: dto.adjustmentNote,
-      paymentGateway: dto.paymentGateway,
-      transactionId: dto.transactionId,
-      status: WorkshopRefundStatus.PROCESSED,
-      processedAt: new Date(),
-      items: attendees.map((attendee) =>
-        this.refundItemsRepo.create({
-          attendeeId: attendee.id,
-          refundAmount: this.toMoneyString(
-            this.toMoney(dto.refundAmount) / dto.attendeeIds.length,
-          ),
-          status: WorkshopRefundItemStatus.REFUNDED, // Individual attendees are always REFUNDED
-        }),
-      ),
+    const perAttendeeAmount = totalRefundAmount / dto.attendeeIds.length;
+    const processedAt = new Date();
+
+    const pendingRefund = await this.refundsRepo.findOne({
+      where: {
+        workshopId,
+        reservationId: dto.reservationId,
+        status: WorkshopRefundStatus.PENDING,
+      },
+      order: { createdAt: 'DESC' },
     });
 
-    await this.refundsRepo.save(refund);
+    let refund: WorkshopRefund;
 
-    if (refundType === WorkshopRefundType.FULL) {
-      reservation.status = ReservationStatus.CANCELLED;
-      await this.reservationsRepo.save(reservation);
+    if (pendingRefund) {
+      refund = pendingRefund;
+      refund.processedByAdminId = adminId;
+      refund.refundType = refundType;
+      refund.refundAmount = dto.refundAmount;
+      refund.adjustmentNote = dto.adjustmentNote;
+      refund.paymentGateway = dto.paymentGateway;
+      refund.transactionId = dto.transactionId;
+      refund.status = WorkshopRefundStatus.PROCESSED;
+      refund.processedAt = processedAt;
+      refund.items = attendees.map((attendee) =>
+        this.refundItemsRepo.create({
+          attendeeId: attendee.id,
+          refundAmount: this.toMoneyString(perAttendeeAmount),
+          status: WorkshopRefundItemStatus.REFUNDED,
+        }),
+      );
+    } else {
+      refund = this.refundsRepo.create({
+        workshopId,
+        reservationId: dto.reservationId,
+        processedByAdminId: adminId,
+        refundType,
+        refundAmount: dto.refundAmount,
+        adjustmentNote: dto.adjustmentNote,
+        paymentGateway: dto.paymentGateway,
+        transactionId: dto.transactionId,
+        status: WorkshopRefundStatus.PROCESSED,
+        processedAt,
+        items: attendees.map((attendee) =>
+          this.refundItemsRepo.create({
+            attendeeId: attendee.id,
+            refundAmount: this.toMoneyString(perAttendeeAmount),
+            status: WorkshopRefundItemStatus.REFUNDED,
+          }),
+        ),
+      });
     }
+
+    const savedRefund = await this.refundsRepo.save(refund);
+
+    const allRefundedIds = new Set([
+      ...Array.from(alreadyRefundedIds),
+      ...dto.attendeeIds,
+    ]);
+
+    const remainingActiveMembers = (reservation.attendees ?? []).filter(
+      (attendee) => !allRefundedIds.has(attendee.id),
+    );
+
+    reservation.numberOfSeats = remainingActiveMembers.length;
+    reservation.status =
+      remainingActiveMembers.length === 0
+        ? ReservationStatus.CANCELLED
+        : ReservationStatus.CONFIRMED;
+
+    await this.reservationsRepo.save(reservation);
+
+    const bookingType =
+      reservation.bookingType ??
+      ((reservation.attendees?.length ?? 0) > 1 ? 'group' : 'single');
+
+    const enrollmentStatus: 'REFUNDED' | 'PARTIAL_REFUNDED' =
+      remainingActiveMembers.length === 0 ? 'REFUNDED' : 'PARTIAL_REFUNDED';
 
     return {
       message: 'Refund status updated successfully',
       data: {
+        refundId: savedRefund.id,
+        requestId: savedRefund.requestId ?? null,
+        workshopId,
         reservationId: reservation.id,
+        bookingType,
         bookingOwnerName:
           reservation.bookerFullName ??
           reservation.attendees?.[0]?.fullName ??
           'Unknown',
+        originalGroupSize: reservation.attendees?.length ?? 0,
+        processedMemberCount: dto.attendeeIds.length,
+        remainingEnrolledCount: remainingActiveMembers.length,
         refundedAmount: dto.refundAmount,
+        refundType,
+        enrollmentStatus,
+        reservationLifecycleStatus: reservation.status,
         paymentGateway: dto.paymentGateway,
         transactionId: dto.transactionId,
-        processedMemberCount: dto.attendeeIds.length,
-        emailNotificationSent: true,
-        processedAt: refund.processedAt,
+        emailNotificationSent: false,
+        processedAt: savedRefund.processedAt,
       },
     };
   }
@@ -4167,7 +4310,7 @@ export class WorkshopsService {
         id: w.id,
         title: w.title,
         shortBlurb: w.shortBlurb ?? null,
-          registrationDeadline: w.registrationDeadline ?? null,
+        registrationDeadline: w.registrationDeadline ?? null,
         deliveryMode: w.deliveryMode,
         status: w.status,
         coverImageUrl: w.coverImageUrl ?? null,
@@ -4539,7 +4682,9 @@ export class WorkshopsService {
     });
 
     if (!reservation) {
-      throw new NotFoundException('No confirmed reservation found for this course.');
+      throw new NotFoundException(
+        'No confirmed reservation found for this course.',
+      );
     }
 
     // 3. Generate unique RefundRequestId (#REF-REQ-XXX)
@@ -5071,109 +5216,115 @@ export class WorkshopsService {
     doc.end();
   }
 
-  async getWorkshopStats(query: WorkshopStatsQueryDto) {
-    let workshops: any[];
-    let periodInfo: any;
+  async getWorkshopStats() {
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
 
-    if (query.startDate) {
-      // Date range mode
-      const startDate = new Date(query.startDate);
-      const endDate = new Date(startDate);
-      endDate.setDate(endDate.getDate() + (query.days ?? 5));
+    // 1. Next Workshop (Earliest upcoming published workshop)
+    const nextWorkshopRaw = await this.workshopsRepo
+      .createQueryBuilder('w')
+      .leftJoinAndSelect('w.days', 'wd')
+      .where('w.status = :status', { status: WorkshopStatus.PUBLISHED })
+      .andWhere('wd.date >= :today', { today: todayStr })
+      .orderBy('wd.date', 'ASC')
+      .getOne();
 
-      // Get workshops within the date range
-      workshops = await this.workshopsRepo
-        .createQueryBuilder('w')
-        .leftJoin('w.days', 'wd')
-        .where('w.status = :status', { status: WorkshopStatus.PUBLISHED })
-        .andWhere('wd.date >= :startDate AND wd.date <= :endDate', {
-          startDate: startDate.toISOString().split('T')[0],
-          endDate: endDate.toISOString().split('T')[0]
-        })
-        .select(['w.id', 'w.title', 'w.capacity'])
-        .distinct(true)
-        .getMany();
+    // ✅ FIX: Explicitly type the variables to accept number/string OR null
+    let nextWorkshopDaysRemaining: number | null = null;
+    let nextWorkshopDate: string | null = null;
 
-      periodInfo = {
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
-        days: query.days ?? 5
-      };
-    } else {
-      // Lifetime mode - show all published workshops
-      workshops = await this.workshopsRepo.find({
-        where: { status: WorkshopStatus.PUBLISHED },
-        select: ['id', 'title', 'capacity']
-      });
+    if (
+      nextWorkshopRaw &&
+      nextWorkshopRaw.days &&
+      nextWorkshopRaw.days.length > 0
+    ) {
+      // Ensure we sort days just in case DB returns them out of order
+      const sortedDays = [...nextWorkshopRaw.days].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      );
 
-      periodInfo = {
-        startDate: null,
-        endDate: null,
-        days: null,
-        lifetime: true
-      };
-    }
+      const nextDateStr = sortedDays[0].date;
+      const nextDate = new Date(`${nextDateStr}T00:00:00`);
+      const todayDate = new Date(`${todayStr}T00:00:00`);
 
-    const workshopStats: any[] = [];
+      const timeDiff = nextDate.getTime() - todayDate.getTime();
+      nextWorkshopDaysRemaining = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
-    for (const workshop of workshops) {
-      // Get workshop days for date calculation
-      const workshopWithDays = await this.workshopsRepo.findOne({
-        where: { id: workshop.id },
-        relations: ['days'],
-        select: ['id']
-      });
-
-      // Get total enrolled seats
-      const totalEnrolled = await this.reservationsRepo
-        .createQueryBuilder('r')
-        .leftJoin('r.attendees', 'a')
-        .where('r.workshopId = :workshopId', { workshopId: workshop.id })
-        .andWhere('r.status IN (:...statuses)', { statuses: ['confirmed', 'pending'] })
-        .getCount();
-
-      // Get total capacity (sum of all days capacity, but use workshop capacity)
-      const totalCapacity = workshop.capacity;
-
-      // Get total refund requests
-      const totalRefundRequests = await this.refundsRepo
-        .createQueryBuilder('r')
-        .where('r.workshopId = :workshopId', { workshopId: workshop.id })
-        .andWhere('r.status = :status', { status: 'PENDING' })
-        .getCount();
-
-      workshopStats.push({
-        workshopId: workshop.id,
-        title: workshop.title,
-        startDate: workshopWithDays?.days?.[0]?.date || null,
-        endDate: workshopWithDays?.days?.[workshopWithDays.days.length - 1]?.date || null,
-        totalActiveSeats: totalCapacity,
-        totalFilledSeats: totalEnrolled,
-        totalRefundRequests,
-        availableSeats: totalCapacity - totalEnrolled,
-        occupancyRate: totalCapacity > 0 ? Math.round((totalEnrolled / totalCapacity) * 100) : 0
+      // Format like "Mar 12, 2026"
+      nextWorkshopDate = nextDate.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
       });
     }
 
-    // Sort by start date
-    workshopStats.sort((a, b) =>
-      new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
+    // 2. Total Active Seats (Aggregate of all published workshops)
+    const activeWorkshops = await this.workshopsRepo.find({
+      where: { status: WorkshopStatus.PUBLISHED },
+      select: ['id', 'capacity'],
+    });
+
+    const totalCapacity = activeWorkshops.reduce(
+      (sum, w) => sum + (w.capacity || 0),
+      0,
     );
 
+    // Get total filled seats for these active workshops
+    let totalFilledSeats = 0;
+    if (activeWorkshops.length > 0) {
+      const activeWorkshopIds = activeWorkshops.map((w) => w.id);
+
+      // Using query builder to sum the numberOfSeats from reservations
+      const filledSeatsRaw = await this.reservationsRepo
+        .createQueryBuilder('r')
+        .select('SUM(r.numberOfSeats)', 'total')
+        .where('r.workshopId IN (:...ids)', { ids: activeWorkshopIds })
+        .andWhere('r.status IN (:...statuses)', {
+          statuses: ['confirmed', 'pending'],
+        }) // Assuming pending takes a seat
+        .getRawOne();
+
+      totalFilledSeats = parseInt(filledSeatsRaw?.total || '0', 10);
+    }
+
+    const openSeats = Math.max(0, totalCapacity - totalFilledSeats);
+
+    // 3. Refund Requests (Total pending review)
+    let pendingRefunds = 0;
+
+    try {
+      // ✅ FIX: Using workshopsRepo.manager instead of dataSource
+      pendingRefunds = await this.workshopsRepo.manager
+        .createQueryBuilder('workshop_refund_requests', 'rr')
+        .where('rr.status = :status', { status: 'PENDING' })
+        .getCount();
+    } catch (e) {
+      // If table doesn't exist yet, default to 0
+      pendingRefunds = 0;
+    }
+
     return {
-      period: periodInfo,
-      summary: {
-        totalWorkshops: workshopStats.length,
-        totalActiveSeats: workshopStats.reduce((sum, w) => sum + w.totalActiveSeats, 0),
-        totalFilledSeats: workshopStats.reduce((sum, w) => sum + w.totalFilledSeats, 0),
-        totalRefundRequests: workshopStats.reduce((sum, w) => sum + w.totalRefundRequests, 0),
-        overallOccupancyRate: workshopStats.length > 0
-          ? Math.round(
-              workshopStats.reduce((sum, w) => sum + w.occupancyRate, 0) / workshopStats.length
-            )
-          : 0
+      message: 'Dashboard stats fetched successfully',
+      data: {
+        nextWorkshop: {
+          daysRemaining: nextWorkshopDaysRemaining,
+          targetDate: nextWorkshopDate,
+          label:
+            nextWorkshopDaysRemaining === null
+              ? 'No upcoming workshops'
+              : nextWorkshopDaysRemaining === 0
+                ? 'Starts Today'
+                : `In ${nextWorkshopDaysRemaining} Day${nextWorkshopDaysRemaining > 1 ? 's' : ''}`,
+        },
+        activeSeats: {
+          open: openSeats,
+          filled: totalFilledSeats,
+          totalCapacity: totalCapacity,
+        },
+        refundRequests: {
+          pendingReview: pendingRefunds,
+        },
       },
-      workshops: workshopStats
     };
   }
 }
