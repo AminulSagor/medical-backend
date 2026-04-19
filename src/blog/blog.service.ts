@@ -115,6 +115,7 @@ export class BlogService {
     return {
       ...post,
       authors: post.authors?.map((a) => this.sanitizeAuthor(a)) ?? [],
+      authorName: post.authorName ?? null,
     };
   }
 
@@ -136,7 +137,8 @@ export class BlogService {
       id: post.id,
       title: post.title,
       description: post.excerpt || post.content?.substring(0, 200),
-      coverImageUrl: post.coverImageUrl,
+      coverImageUrl: post.coverImages ?? [],
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName || null,
       categories:
         post.categories?.map((cat) => ({
           id: cat.id,
@@ -164,14 +166,6 @@ export class BlogService {
       );
     }
 
-    let authors: User[] = [];
-    if (dto.authorIds?.length) {
-      authors = await this.userRepo.findBy({ id: In(dto.authorIds) });
-      if (authors.length !== dto.authorIds.length) {
-        throw new BadRequestException('One or more authorIds are invalid');
-      }
-    }
-
     let categories: BlogCategory[] = [];
     if (dto.categoryIds?.length) {
       categories = await this.categoryRepo.findBy({ id: In(dto.categoryIds) });
@@ -196,7 +190,8 @@ export class BlogService {
     const post = this.postRepo.create({
       title: dto.title,
       content: dto.content,
-      coverImageUrl: dto.coverImageUrl,
+      coverImages: dto.coverImageUrl,
+      authorName: dto.authorName?.trim() || undefined,
       publishingStatus: dto.publishingStatus ?? PublishingStatus.DRAFT,
       scheduledPublishDate: dto.scheduledPublishDate
         ? new Date(dto.scheduledPublishDate)
@@ -205,7 +200,6 @@ export class BlogService {
       excerpt: dto.excerpt,
       readTimeMinutes: dto.readTimeMinutes ?? 5,
       publishedAt,
-      authors,
       categories,
       tags,
       seo: {
@@ -240,7 +234,8 @@ export class BlogService {
 
     if (dto.title !== undefined) post.title = dto.title;
     if (dto.content !== undefined) post.content = dto.content;
-    if (dto.coverImageUrl !== undefined) post.coverImageUrl = dto.coverImageUrl;
+    if (dto.coverImageUrl !== undefined) post.coverImages = dto.coverImageUrl;
+    if (dto.authorName !== undefined) post.authorName = dto.authorName?.trim() || undefined;
     if (dto.publishingStatus !== undefined)
       post.publishingStatus = dto.publishingStatus;
     if (dto.scheduledPublishDate !== undefined)
@@ -255,11 +250,6 @@ export class BlogService {
       post.publishedAt = new Date();
     }
 
-    if (dto.authorIds !== undefined) {
-      post.authors = dto.authorIds.length
-        ? await this.userRepo.findBy({ id: In(dto.authorIds) })
-        : [];
-    }
     if (dto.categoryIds !== undefined) {
       post.categories = dto.categoryIds.length
         ? await this.categoryRepo.findBy({ id: In(dto.categoryIds) })
@@ -439,7 +429,8 @@ export class BlogService {
       title: post.title,
       content: post.content,
       description: post.excerpt,
-      coverImageUrl: post.coverImageUrl,
+      coverImageUrl: post.coverImages ?? [],
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName || null,
       categories:
         post.categories?.map((cat) => ({ id: cat.id, name: cat.name })) ?? [],
       tags: post.tags?.map((tag) => ({ id: tag.id, name: tag.name })) ?? [],

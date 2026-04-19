@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -60,6 +61,16 @@ export class BlogController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
   update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateBlogPostDto,
+  ) {
+    return this.blogService.update(id, dto);
+  }
+
+  @Put(':id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  replace(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBlogPostDto,
   ) {
