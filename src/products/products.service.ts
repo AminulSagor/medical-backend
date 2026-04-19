@@ -631,9 +631,12 @@ export class ProductsService {
       // Category filter by IDs - validate UUIDs first
       if (query.categoryIds && query.categoryIds.length > 0) {
         // UUID v4 regex pattern
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-        const validCategoryIds = query.categoryIds.filter((id) => uuidRegex.test(id));
-        
+        const uuidRegex =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const validCategoryIds = query.categoryIds.filter((id) =>
+          uuidRegex.test(id),
+        );
+
         if (validCategoryIds.length > 0) {
           qb.andWhere('p.categoryId && :categoryIds', {
             categoryIds: validCategoryIds,
@@ -683,36 +686,36 @@ export class ProductsService {
       const total = await qb.getCount();
       const products = await qb.skip(skip).take(limit).getMany();
 
-    // Get category names for products
-    const categoryIds = [
-      ...new Set(products.flatMap((p) => p.categoryId || [])),
-    ];
-    let categoryMap = new Map<string, string>();
+      // Get category names for products
+      const categoryIds = [
+        ...new Set(products.flatMap((p) => p.categoryId || [])),
+      ];
+      let categoryMap = new Map<string, string>();
 
-    if (categoryIds.length > 0) {
-      const categories = await this.categoriesRepo.find({
-        where: categoryIds.map((id) => ({ id })),
-      });
-      categoryMap = new Map(categories.map((c) => [c.id, c.name]));
-    }
+      if (categoryIds.length > 0) {
+        const categories = await this.categoriesRepo.find({
+          where: categoryIds.map((id) => ({ id })),
+        });
+        categoryMap = new Map(categories.map((c) => [c.id, c.name]));
+      }
 
       const items = products.map((p) => ({
         id: p.id,
         photo: p.details?.images?.[0] || null,
         category: (p.categoryId || [])
           .map((id) => categoryMap.get(id))
-        .filter(Boolean)
-        .join(', '),
-      title: p.name,
-      description: p.clinicalDescription,
-      price: p.actualPrice,
-      discountedPrice: p.offerPrice,
-      brand: p.brand,
-      inStock: p.stockQuantity > 0,
-      badge:
-        p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') ||
-        null,
-    }));
+          .filter(Boolean)
+          .join(', '),
+        title: p.name,
+        description: p.clinicalDescription,
+        price: p.actualPrice,
+        discountedPrice: p.offerPrice,
+        brand: p.brand,
+        inStock: p.stockQuantity > 0,
+        badge:
+          p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') ||
+          null,
+      }));
 
       return {
         items,
@@ -725,7 +728,7 @@ export class ProductsService {
       };
     } catch (error) {
       console.error('Error fetching products:', error);
-      
+
       if (error instanceof BadRequestException) {
         throw error;
       }
@@ -837,6 +840,7 @@ export class ProductsService {
         name: product.name,
         sku: product.sku,
         inStock: product.stockQuantity > 0,
+        availableQuantity: product.stockQuantity,
         price: product.offerPrice || product.actualPrice,
         quantity: item.quantity,
         itemTotal: itemTotal.toFixed(2),
