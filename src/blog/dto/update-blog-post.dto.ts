@@ -6,6 +6,7 @@ import {
     IsArray,
     IsDateString,
     MaxLength,
+    IsUUID,
     ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
