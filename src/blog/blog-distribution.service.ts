@@ -222,7 +222,6 @@ export class BlogDistributionService {
           sourceAuthorSnapshot:
             post.authorName || post.authors?.[0]?.fullLegalName || 'Texas Airway Institute',
           sourceHeroImageUrlSnapshot:
-            post.coverImages?.[0]?.imageUrl ?? nul
             post.coverImages?.[0]?.imageUrl ?? null,
           sourcePublishedAtSnapshot: post.publishedAt || new Date(),
           ctaLabel: 'Read Full Analysis',
