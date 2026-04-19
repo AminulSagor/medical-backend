@@ -57,6 +57,7 @@ import { Logger } from '@nestjs/common';
 import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
 import { User } from 'src/users/entities/user.entity';
 import * as path from 'path';
+import { WorkshopGroupDiscount } from './entities/workshop-group-discount.entity';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -112,6 +113,8 @@ export class WorkshopsService {
     @InjectRepository(Facility) private facilitiesRepo: Repository<Facility>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
     @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(WorkshopGroupDiscount)
+    private groupDiscountsRepo: Repository<WorkshopGroupDiscount>,
     private readonly configService: ConfigService,
   ) {
     // Initialize SES Client
@@ -734,20 +737,22 @@ export class WorkshopsService {
   }
 
   async update(id: string, dto: UpdateWorkshopDto) {
-    // Find existing workshop
-    const workshop = await this.workshopsRepo.findOne({ where: { id } });
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id },
+      relations: ['groupDiscounts', 'days', 'faculty'],
+    });
+
     if (!workshop) {
       throw new NotFoundException(`Workshop with ID ${id} not found`);
     }
 
-    // Validate title if provided
     if (dto.title !== undefined) {
       const title = dto.title?.trim();
-      if (!title)
+      if (!title) {
         throw new BadRequestException('Workshop title cannot be empty');
+      }
     }
 
-    // Validate base rate if provided
     if (dto.standardBaseRate !== undefined) {
       const baseRate = Number(dto.standardBaseRate ?? '0');
       if (!Number.isFinite(baseRate) || baseRate <= 0) {
@@ -757,14 +762,12 @@ export class WorkshopsService {
       }
     }
 
-    // Validate alertAt vs capacity
     const newCapacity = dto.capacity ?? workshop.capacity;
     const newAlertAt = dto.alertAt ?? workshop.alertAt;
     if (newAlertAt > newCapacity) {
       throw new BadRequestException('alertAt cannot be greater than capacity');
     }
 
-    // Handle facilityIds based on delivery mode
     let facilityIds: string[] | undefined;
     if (dto.facilityIds !== undefined) {
       facilityIds = dto.facilityIds;
@@ -785,6 +788,7 @@ export class WorkshopsService {
           const facility = await this.facilitiesRepo.findOne({
             where: { id: fid },
           });
+
           if (!facility) {
             throw new BadRequestException(`Invalid facilityId: ${fid}`);
           }
@@ -792,7 +796,6 @@ export class WorkshopsService {
       }
     }
 
-    // Group discount validation
     if (
       dto.groupDiscountEnabled !== undefined ||
       dto.groupDiscounts !== undefined
@@ -819,6 +822,7 @@ export class WorkshopsService {
               'groupRatePerPerson must be greater than 0',
             );
           }
+
           if (rate >= baseRate) {
             throw new BadRequestException(
               'groupRatePerPerson must be less than standardBaseRate',
@@ -834,11 +838,11 @@ export class WorkshopsService {
       }
     }
 
-    // Days/segments validation + time parsing if provided
     let normalizedDays;
     if (dto.days !== undefined) {
-      if (!dto.days?.length)
+      if (!dto.days?.length) {
         throw new BadRequestException('At least one day is required');
+      }
 
       normalizedDays = dto.days.map((d) => {
         if (!d.segments?.length) {
@@ -850,6 +854,7 @@ export class WorkshopsService {
         const segments = d.segments.map((s) => {
           const start = parse12hToTime(s.startTime);
           const end = parse12hToTime(s.endTime);
+
           if (start >= end) {
             throw new BadRequestException(
               `Invalid segment time (day ${d.dayNumber}, segment ${s.segmentNumber}): startTime must be before endTime`,
@@ -865,16 +870,18 @@ export class WorkshopsService {
           };
         });
 
-        // Ensure segmentNumber unique per day
         const nums = new Set<number>();
         for (const s of segments) {
-          if (!s.courseTopic)
+          if (!s.courseTopic) {
             throw new BadRequestException('courseTopic is required');
+          }
+
           if (nums.has(s.segmentNumber)) {
             throw new BadRequestException(
               `Duplicate segmentNumber ${s.segmentNumber} in day ${d.dayNumber}`,
             );
           }
+
           nums.add(s.segmentNumber);
         }
 
@@ -886,13 +893,13 @@ export class WorkshopsService {
       });
     }
 
-    // Faculty assignment validation if provided
     let facultyEntities: Faculty[] | undefined;
     if (dto.facultyIds !== undefined) {
       if (dto.facultyIds.length > 0) {
         facultyEntities = await this.facultyRepo.find({
           where: { id: In(dto.facultyIds) },
         });
+
         if (facultyEntities.length !== dto.facultyIds.length) {
           throw new BadRequestException('One or more facultyIds are invalid');
         }
@@ -901,55 +908,70 @@ export class WorkshopsService {
       }
     }
 
-    // Build update payload
-    const updatePayload: any = {};
+    const updatePayload: Partial<Workshop> = {};
 
     if (dto.deliveryMode !== undefined)
       updatePayload.deliveryMode = dto.deliveryMode;
     if (dto.status !== undefined) updatePayload.status = dto.status;
     if (dto.title !== undefined) updatePayload.title = dto.title.trim();
-    if (dto.shortBlurb !== undefined)
+    if (dto.shortBlurb !== undefined) {
       updatePayload.shortBlurb = dto.shortBlurb?.trim() || undefined;
-    if (dto.coverImageUrl !== undefined)
+    }
+    if (dto.coverImageUrl !== undefined) {
       updatePayload.coverImageUrl = dto.coverImageUrl?.trim() || undefined;
-    if (dto.learningObjectives !== undefined)
+    }
+    if (dto.learningObjectives !== undefined) {
       updatePayload.learningObjectives = dto.learningObjectives ?? undefined;
-    if (dto.offersCmeCredits !== undefined)
+    }
+    if (dto.offersCmeCredits !== undefined) {
       updatePayload.offersCmeCredits = dto.offersCmeCredits;
-    if (dto.cmeCreditsCount !== undefined)
+    }
+    if (dto.cmeCreditsCount !== undefined) {
       updatePayload.cmeCreditsCount = dto.cmeCreditsCount;
-    if (facilityIds !== undefined) updatePayload.facilityIds = facilityIds;
-    if (dto.webinarPlatform !== undefined)
+    }
+    if (facilityIds !== undefined) {
+      updatePayload.facilityIds = facilityIds;
+    }
+    if (dto.webinarPlatform !== undefined) {
       updatePayload.webinarPlatform = dto.webinarPlatform?.trim() || undefined;
-    if (dto.meetingLink !== undefined)
+    }
+    if (dto.meetingLink !== undefined) {
       updatePayload.meetingLink = dto.meetingLink?.trim() || undefined;
-    if (dto.meetingPassword !== undefined)
+    }
+    if (dto.meetingPassword !== undefined) {
       updatePayload.meetingPassword = dto.meetingPassword?.trim() || undefined;
-    if (dto.autoRecordSession !== undefined)
+    }
+    if (dto.autoRecordSession !== undefined) {
       updatePayload.autoRecordSession = dto.autoRecordSession;
+    }
     if (dto.capacity !== undefined) updatePayload.capacity = dto.capacity;
     if (dto.alertAt !== undefined) updatePayload.alertAt = dto.alertAt;
-    if (dto.standardBaseRate !== undefined)
+    if (dto.standardBaseRate !== undefined) {
       updatePayload.standardBaseRate = dto.standardBaseRate;
-    if (dto.groupDiscountEnabled !== undefined)
+    }
+    if (dto.groupDiscountEnabled !== undefined) {
       updatePayload.groupDiscountEnabled = dto.groupDiscountEnabled;
+    }
+    if (dto.registrationDeadline !== undefined) {
+      updatePayload.registrationDeadline = new Date(dto.registrationDeadline);
+    }
 
-    // Handle days relationship - delete old days and create new ones
+    Object.assign(workshop, updatePayload);
+
+    const savedWorkshop = await this.workshopsRepo.save(workshop);
+
     if (normalizedDays !== undefined) {
-      // Delete existing days (cascade will delete segments)
       await this.daysRepo.delete({ workshopId: id });
 
-      // Create new days with segments
-      const newDays: WorkshopDay[] = [];
       for (const dayData of normalizedDays) {
         const day = this.daysRepo.create({
           workshopId: id,
           date: dayData.date,
           dayNumber: dayData.dayNumber,
         });
+
         const savedDay = await this.daysRepo.save(day);
 
-        // Create segments for this day
         const segments = dayData.segments.map((s: any) =>
           this.segmentsRepo.create({
             dayId: savedDay.id,
@@ -960,29 +982,47 @@ export class WorkshopsService {
             endTime: s.endTime,
           }),
         );
+
         await this.segmentsRepo.save(segments);
-        newDays.push(savedDay);
       }
-      workshop.days = newDays;
     }
-    if (dto.groupDiscounts !== undefined) {
-      workshop.groupDiscounts = dto.groupDiscounts.map((g) => ({
-        minimumAttendees: g.minimumAttendees,
-        groupRatePerPerson: g.groupRatePerPerson,
-      })) as any;
+
+    if (
+      dto.groupDiscounts !== undefined ||
+      dto.groupDiscountEnabled === false
+    ) {
+      await this.groupDiscountsRepo.delete({ workshopId: id });
+
+      if (
+        (dto.groupDiscountEnabled ?? savedWorkshop.groupDiscountEnabled) ===
+        true
+      ) {
+        const discountsToCreate = (dto.groupDiscounts ?? []).map((g) =>
+          this.groupDiscountsRepo.create({
+            workshopId: id,
+            minimumAttendees: g.minimumAttendees,
+            groupRatePerPerson: g.groupRatePerPerson,
+          }),
+        );
+
+        if (discountsToCreate.length > 0) {
+          await this.groupDiscountsRepo.save(discountsToCreate);
+        }
+      }
     }
+
     if (facultyEntities !== undefined) {
-      workshop.faculty = facultyEntities;
+      savedWorkshop.faculty = facultyEntities;
+      await this.workshopsRepo.save(savedWorkshop);
     }
 
-    if (dto.registrationDeadline !== undefined) {
-      updatePayload.registrationDeadline = new Date(dto.registrationDeadline);
-    }
-
-    // Update the workshop entity
-    Object.assign(workshop, updatePayload);
-
-    return await this.workshopsRepo.save(workshop);
+    return await this.workshopsRepo.findOne({
+      where: { id },
+      relations: ['days', 'days.segments', 'groupDiscounts', 'faculty'],
+      order: {
+        days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
+      },
+    });
   }
 
   async remove(id: string) {
@@ -2308,7 +2348,6 @@ export class WorkshopsService {
   }
 
   async createOrderSummary(userId: string, dto: CheckoutOrderSummaryDto) {
-    // Validate workshop exists and is published
     const workshop = await this.workshopsRepo.findOne({
       where: { id: dto.workshopId, status: WorkshopStatus.PUBLISHED },
       relations: ['groupDiscounts'],
@@ -2320,21 +2359,10 @@ export class WorkshopsService {
       );
     }
 
-    // Prevent creating reservations after registration deadline
     if (workshop.registrationDeadline) {
       const now = new Date();
       const deadline = new Date(workshop.registrationDeadline);
-      if (now > deadline) {
-        throw new BadRequestException(
-          'Registration for this workshop has closed. You cannot create or modify reservations.',
-        );
-      }
-    }
 
-    // Prevent creating order summaries after registration deadline
-    if (workshop.registrationDeadline) {
-      const now = new Date();
-      const deadline = new Date(workshop.registrationDeadline);
       if (now > deadline) {
         throw new BadRequestException(
           'Registration for this workshop has closed. You cannot purchase this course anymore.',
@@ -2342,18 +2370,81 @@ export class WorkshopsService {
       }
     }
 
-    // Validate attendees
     if (!dto.attendees || dto.attendees.length === 0) {
       throw new BadRequestException('At least one attendee is required');
     }
 
-    // Check available seats
+    const normalizedEmails = dto.attendees.map((attendee) =>
+      attendee.email.trim().toLowerCase(),
+    );
+
+    const duplicateEmailsInPayload = normalizedEmails.filter(
+      (email, index) => normalizedEmails.indexOf(email) !== index,
+    );
+
+    if (duplicateEmailsInPayload.length > 0) {
+      const uniqueDuplicates = [...new Set(duplicateEmailsInPayload)];
+      throw new BadRequestException(
+        `Duplicate attendee email(s) in request: ${uniqueDuplicates.join(', ')}`,
+      );
+    }
+
+    // Check if any provided attendee email is already actively enrolled
+    // in the same workshop through a confirmed reservation and not fully refunded.
+    const alreadyEnrolledRows = await this.attendeesRepo
+      .createQueryBuilder('att')
+      .innerJoin(
+        WorkshopReservation,
+        'res',
+        'res.id = att.reservationId AND res.workshopId = :workshopId AND res.status = :confirmedStatus',
+        {
+          workshopId: dto.workshopId,
+          confirmedStatus: ReservationStatus.CONFIRMED,
+        },
+      )
+      .leftJoin(
+        WorkshopRefundItem,
+        'ri',
+        'ri.attendeeId = att.id AND ri.status = :refundedItemStatus',
+        {
+          refundedItemStatus: WorkshopRefundItemStatus.REFUNDED,
+        },
+      )
+      .leftJoin(
+        WorkshopRefund,
+        'rf',
+        'rf.id = ri.refundId AND rf.status = :processedRefundStatus',
+        {
+          processedRefundStatus: WorkshopRefundStatus.PROCESSED,
+        },
+      )
+      .where('LOWER(att.email) IN (:...emails)', { emails: normalizedEmails })
+      .andWhere('rf.id IS NULL')
+      .select([
+        'att.email AS email',
+        'att.fullName AS "fullName"',
+        'res.id AS "reservationId"',
+      ])
+      .getRawMany();
+
+    if (alreadyEnrolledRows.length > 0) {
+      const enrolledEmails = [
+        ...new Set(
+          alreadyEnrolledRows.map((row) => String(row.email).toLowerCase()),
+        ),
+      ];
+
+      throw new BadRequestException(
+        `These attendee email(s) are already enrolled in this workshop: ${enrolledEmails.join(', ')}. You can continue enrollment for other attendees only.`,
+      );
+    }
+
     const reservedSeatsResult = await this.reservationsRepo
       .createQueryBuilder('r')
       .select('SUM(r.numberOfSeats)', 'total')
       .where('r.workshopId = :workshopId', { workshopId: dto.workshopId })
       .andWhere('r.status != :cancelledStatus', {
-        cancelledStatus: 'cancelled',
+        cancelledStatus: ReservationStatus.CANCELLED,
       })
       .getRawOne();
 
@@ -2367,13 +2458,11 @@ export class WorkshopsService {
       );
     }
 
-    // Calculate pricing
     const standardPricePerSeat = Number(workshop.standardBaseRate);
     let appliedPricePerSeat = standardPricePerSeat;
     let discountApplied = false;
     let discountInfo: any = null;
 
-    // Check if group discount applies
     if (workshop.groupDiscountEnabled && workshop.groupDiscounts?.length > 0) {
       const applicableDiscounts = workshop.groupDiscounts
         .filter((d) => numberOfSeats >= d.minimumAttendees)
@@ -2402,8 +2491,6 @@ export class WorkshopsService {
     const subtotal = appliedPricePerSeat * numberOfSeats;
     const totalPrice = subtotal;
 
-    // Upsert behavior: update existing pending summary for same user+workshop,
-    // otherwise create a fresh pending summary.
     const existingPendingSummary = await this.orderSummariesRepo.findOne({
       where: {
         workshopId: dto.workshopId,
@@ -2420,7 +2507,6 @@ export class WorkshopsService {
     if (existingPendingSummary) {
       upsertAction = 'updated';
 
-      // Replace previous attendee list with the new payload.
       if (existingPendingSummary.attendees?.length) {
         await this.orderAttendeesRepo.delete({
           orderSummaryId: existingPendingSummary.id,
@@ -2439,7 +2525,7 @@ export class WorkshopsService {
         fullName: attendee.fullName,
         professionalRole: attendee.professionalRole,
         npiNumber: attendee.npiNumber,
-        email: attendee.email,
+        email: attendee.email.trim().toLowerCase(),
       })) as any;
 
       saved = await this.orderSummariesRepo.save(existingPendingSummary);
@@ -2457,7 +2543,7 @@ export class WorkshopsService {
           fullName: attendee.fullName,
           professionalRole: attendee.professionalRole,
           npiNumber: attendee.npiNumber,
-          email: attendee.email,
+          email: attendee.email.trim().toLowerCase(),
         })),
       } as DeepPartial<WorkshopOrderSummary>);
 
@@ -4637,7 +4723,30 @@ export class WorkshopsService {
       : `${firstMonth} ${firstDay.getDate()} - ${lastMonth} ${lastDay.getDate()}`;
   }
 
-  // ── 4. SUBMIT REFUND REQUEST API ──
+  private async generateNextRefundRequestId(): Promise<string> {
+    const raw = await this.refundsRepo
+      .createQueryBuilder('refund')
+      .select(
+        `MAX(CAST(regexp_replace(refund."requestId", '\\D', '', 'g') AS INTEGER))`,
+        'maxNumber',
+      )
+      .where('refund."requestId" IS NOT NULL')
+      .getRawOne();
+
+    const nextNumber = Number(raw?.maxNumber ?? 0) + 1;
+
+    return `#REF-REQ-${String(nextNumber).padStart(3, '0')}`;
+  }
+
+  private isDuplicateRequestIdError(error: unknown): boolean {
+    const dbError = (error as any)?.driverError;
+
+    return (
+      dbError?.code === '23505' &&
+      String(dbError?.detail ?? '').includes('(requestId)')
+    );
+  }
+
   async submitRefundRequest(
     userId: string,
     courseId: string,
@@ -4660,13 +4769,13 @@ export class WorkshopsService {
     const estimatedMax = parseFloat(
       estimation.financials.estimatedRefund.replace('$', ''),
     );
+
     if (dto.refundAmount > estimatedMax) {
       throw new BadRequestException(
         `Requested amount ($${dto.refundAmount}) exceeds eligible refund amount ($${estimatedMax}).`,
       );
     }
 
-    // 1. Fetch User and Workshop details for the email
     const user = await this.userRepo.findOne({ where: { id: userId } });
     const workshop = await this.workshopsRepo.findOne({
       where: { id: courseId },
@@ -4676,7 +4785,6 @@ export class WorkshopsService {
       throw new NotFoundException('User or Workshop not found.');
     }
 
-    // 2. Get the reservation to link the refund request
     const reservation = await this.reservationsRepo.findOne({
       where: { userId, workshopId: courseId, status: 'confirmed' as any },
     });
@@ -4687,39 +4795,58 @@ export class WorkshopsService {
       );
     }
 
-    // 3. Generate unique RefundRequestId (#REF-REQ-XXX)
-    const lastRefund = await this.refundsRepo.findOne({
-      where: { status: 'PENDING' as any },
+    const existingPendingRefund = await this.refundsRepo.findOne({
+      where: {
+        workshopId: courseId,
+        reservationId: reservation.id,
+        userId,
+        status: WorkshopRefundStatus.PENDING,
+      },
       order: { createdAt: 'DESC' },
     });
 
-    let nextNumber = 1;
-    if (lastRefund?.requestId) {
-      const match = lastRefund.requestId.match(/\d+/);
-      if (match) {
-        nextNumber = parseInt(match[0], 10) + 1;
+    if (existingPendingRefund) {
+      throw new BadRequestException(
+        `A refund request is already pending for this course. Request ID: ${existingPendingRefund.requestId}`,
+      );
+    }
+
+    let savedRefund: WorkshopRefund | null = null;
+    let requestId = '';
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      requestId = await this.generateNextRefundRequestId();
+
+      const refund = new WorkshopRefund();
+      refund.requestId = requestId;
+      refund.workshopId = courseId;
+      refund.reservationId = reservation.id;
+      refund.userId = userId;
+      refund.refundAmount = dto.refundAmount.toString();
+      refund.reason = dto.reason;
+      refund.status = WorkshopRefundStatus.PENDING;
+
+      try {
+        savedRefund = await this.refundsRepo.save(refund);
+        break;
+      } catch (error) {
+        if (this.isDuplicateRequestIdError(error) && attempt < 2) {
+          continue;
+        }
+        throw error;
       }
     }
 
-    const requestId = `#REF-REQ-${String(nextNumber).padStart(3, '0')}`;
-
-    // 4. Create WorkshopRefund record with PENDING status
-    const refund = new WorkshopRefund();
-    refund.requestId = requestId;
-    refund.workshopId = courseId;
-    refund.reservationId = reservation.id;
-    refund.userId = userId;
-    refund.refundAmount = dto.refundAmount.toString();
-    refund.reason = dto.reason;
-    refund.status = WorkshopRefundStatus.PENDING;
-
-    const savedRefund = await this.refundsRepo.save(refund);
+    if (!savedRefund) {
+      throw new BadRequestException(
+        'Could not create refund request. Please try again.',
+      );
+    }
 
     const userFullName = user.fullLegalName || 'Student';
     const userEmail = user.medicalEmail || '';
     const courseTitle = workshop.title;
 
-    // 5. Prepare SES variables
     const fromEmail = this.configService.get<string>('SES_FROM_EMAIL');
     const adminEmail = this.configService.get<string>(
       'SES_CONTACT_RECEIVER_EMAIL',
@@ -4738,58 +4865,55 @@ export class WorkshopsService {
       const safeReason = escapeHtml(dto.reason);
       const safeAmount = `$${dto.refundAmount.toFixed(2)}`;
 
-      // --- Admin Notification Email HTML ---
       const adminHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #1d4ed8; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">New Refund Request</h2>
-          <p>A new refund request has been submitted by a student. Please review the details below:</p>
-          
-          <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-            <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Request ID:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold; font-size: 14px;">${escapeHtml(requestId)}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Student Name:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userFullName)}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Email:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userEmail)}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Course:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(courseTitle)}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Requested Amount:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold;">${safeAmount}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">System Estimated Max:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">$${estimatedMax.toFixed(2)}</td></tr>
-          </table>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <h2 style="color: #1d4ed8; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">New Refund Request</h2>
+        <p>A new refund request has been submitted by a student. Please review the details below:</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+          <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Request ID:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold; font-size: 14px;">${escapeHtml(requestId)}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; width: 150px; border-bottom: 1px solid #eee;">Student Name:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userFullName)}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Email:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(userEmail)}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Course:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(courseTitle)}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">Requested Amount:</td><td style="padding: 8px; border-bottom: 1px solid #eee; color: #d97706; font-weight: bold;">${safeAmount}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; border-bottom: 1px solid #eee;">System Estimated Max:</td><td style="padding: 8px; border-bottom: 1px solid #eee;">$${estimatedMax.toFixed(2)}</td></tr>
+        </table>
 
-          <div style="margin-top: 20px; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
-            <p style="margin-top: 0; font-weight: bold; color: #475569;">Reason for Refund:</p>
-            <p style="margin-bottom: 0; color: #1e293b; white-space: pre-line;">${safeReason}</p>
-          </div>
-          
-          <p style="margin-top: 30px; font-size: 12px; color: #64748b;">This request needs to be manually processed from the Admin Dashboard.</p>
+        <div style="margin-top: 20px; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
+          <p style="margin-top: 0; font-weight: bold; color: #475569;">Reason for Refund:</p>
+          <p style="margin-bottom: 0; color: #1e293b; white-space: pre-line;">${safeReason}</p>
         </div>
-      `;
+        
+        <p style="margin-top: 30px; font-size: 12px; color: #64748b;">This request needs to be manually processed from the Admin Dashboard.</p>
+      </div>
+    `;
 
-      // --- User Confirmation Email HTML ---
       const userHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <h2 style="color: #0ea5e9;">Refund Request Received</h2>
-          <p>Hello ${escapeHtml(userFullName)},</p>
-          <p>We have successfully received your refund request for the course <strong>${escapeHtml(courseTitle)}</strong>.</p>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <h2 style="color: #0ea5e9;">Refund Request Received</h2>
+        <p>Hello ${escapeHtml(userFullName)},</p>
+        <p>We have successfully received your refund request for the course <strong>${escapeHtml(courseTitle)}</strong>.</p>
 
-          <div style="margin: 20px 0; background-color: #f0f9ff; padding: 15px; border-radius: 6px; border: 2px solid #0ea5e9;">
-            <p style="margin: 0; font-size: 14px;"><strong>Your Request ID:</strong></p>
-            <p style="margin: 8px 0 0 0; font-size: 18px; font-weight: bold; color: #0ea5e9;">${escapeHtml(requestId)}</p>
-          </div>
-          
-          <div style="margin: 20px 0; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
-            <p style="margin: 0 0 10px 0;"><strong>Requested Amount:</strong> ${safeAmount}</p>
-            <p style="margin: 0;"><strong>Reason:</strong> ${safeReason}</p>
-          </div>
-
-          <p>Our team will review your request and process it within <strong>3-5 business days</strong>. You will receive another notification once the refund has been processed to your original payment method.</p>
-          <p>Please keep your request ID <strong>${escapeHtml(requestId)}</strong> for your records.</p>
-          <p>If you have any questions, please reply to this email or contact our support team.</p>
-          
-          <p style="margin-top: 30px; margin-bottom: 0;">Best regards,</p>
-          <p style="margin-top: 5px; font-weight: bold;">The Texas Airway Team</p>
+        <div style="margin: 20px 0; background-color: #f0f9ff; padding: 15px; border-radius: 6px; border: 2px solid #0ea5e9;">
+          <p style="margin: 0; font-size: 14px;"><strong>Your Request ID:</strong></p>
+          <p style="margin: 8px 0 0 0; font-size: 18px; font-weight: bold; color: #0ea5e9;">${escapeHtml(requestId)}</p>
         </div>
-      `;
+        
+        <div style="margin: 20px 0; background-color: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;">
+          <p style="margin: 0 0 10px 0;"><strong>Requested Amount:</strong> ${safeAmount}</p>
+          <p style="margin: 0;"><strong>Reason:</strong> ${safeReason}</p>
+        </div>
+
+        <p>Our team will review your request and process it within <strong>3-5 business days</strong>. You will receive another notification once the refund has been processed to your original payment method.</p>
+        <p>Please keep your request ID <strong>${escapeHtml(requestId)}</strong> for your records.</p>
+        <p>If you have any questions, please reply to this email or contact our support team.</p>
+        
+        <p style="margin-top: 30px; margin-bottom: 0;">Best regards,</p>
+        <p style="margin-top: 5px; font-weight: bold;">The Texas Airway Team</p>
+      </div>
+    `;
 
       try {
-        // Send to Admin
         await this.ses.send(
           new SendEmailCommand({
             FromEmailAddress: fromEmail,
@@ -4806,7 +4930,6 @@ export class WorkshopsService {
           }),
         );
 
-        // Send Confirmation to User
         await this.ses.send(
           new SendEmailCommand({
             FromEmailAddress: fromEmail,
@@ -4826,8 +4949,6 @@ export class WorkshopsService {
           'Failed to send refund emails via SES',
           error instanceof Error ? error.stack : String(error),
         );
-        // We don't throw an error here because the refund request itself is valid.
-        // We just log it so we know the email failed.
       }
     }
 
