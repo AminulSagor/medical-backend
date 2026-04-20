@@ -1034,11 +1034,38 @@ export class WorkshopsService {
     }
 
     if (facultyEntities !== undefined) {
-      await this.workshopsRepo
+      const currentFaculty = await this.workshopsRepo
         .createQueryBuilder()
         .relation(Workshop, 'faculty')
         .of(id)
-        .set(facultyEntities.map((f) => f.id));
+        .loadMany<Faculty>();
+
+      const currentFacultyIds = currentFaculty.map((f) => f.id);
+      const nextFacultyIds = facultyEntities.map((f) => f.id);
+
+      const facultyIdsToRemove = currentFacultyIds.filter(
+        (facultyId) => !nextFacultyIds.includes(facultyId),
+      );
+
+      const facultyIdsToAdd = nextFacultyIds.filter(
+        (facultyId) => !currentFacultyIds.includes(facultyId),
+      );
+
+      if (facultyIdsToRemove.length > 0) {
+        await this.workshopsRepo
+          .createQueryBuilder()
+          .relation(Workshop, 'faculty')
+          .of(id)
+          .remove(facultyIdsToRemove);
+      }
+
+      if (facultyIdsToAdd.length > 0) {
+        await this.workshopsRepo
+          .createQueryBuilder()
+          .relation(Workshop, 'faculty')
+          .of(id)
+          .add(facultyIdsToAdd);
+      }
     }
 
     return await this.workshopsRepo.findOne({
@@ -5366,7 +5393,6 @@ export class WorkshopsService {
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
 
-    // 1. Next Workshop (Earliest upcoming published workshop)
     const nextWorkshopRaw = await this.workshopsRepo
       .createQueryBuilder('w')
       .leftJoinAndSelect('w.days', 'wd')
@@ -5375,7 +5401,6 @@ export class WorkshopsService {
       .orderBy('wd.date', 'ASC')
       .getOne();
 
-    // ✅ FIX: Explicitly type the variables to accept number/string OR null
     let nextWorkshopDaysRemaining: number | null = null;
     let nextWorkshopDate: string | null = null;
 
@@ -5384,7 +5409,6 @@ export class WorkshopsService {
       nextWorkshopRaw.days &&
       nextWorkshopRaw.days.length > 0
     ) {
-      // Ensure we sort days just in case DB returns them out of order
       const sortedDays = [...nextWorkshopRaw.days].sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
       );
@@ -5396,7 +5420,6 @@ export class WorkshopsService {
       const timeDiff = nextDate.getTime() - todayDate.getTime();
       nextWorkshopDaysRemaining = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
-      // Format like "Mar 12, 2026"
       nextWorkshopDate = nextDate.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -5404,30 +5427,28 @@ export class WorkshopsService {
       });
     }
 
-    // 2. Total Active Seats (Aggregate of all published workshops)
     const activeWorkshops = await this.workshopsRepo.find({
       where: { status: WorkshopStatus.PUBLISHED },
       select: ['id', 'capacity'],
     });
 
     const totalCapacity = activeWorkshops.reduce(
-      (sum, w) => sum + (w.capacity || 0),
+      (sum, workshop) => sum + (workshop.capacity || 0),
       0,
     );
 
-    // Get total filled seats for these active workshops
     let totalFilledSeats = 0;
-    if (activeWorkshops.length > 0) {
-      const activeWorkshopIds = activeWorkshops.map((w) => w.id);
 
-      // Using query builder to sum the numberOfSeats from reservations
+    if (activeWorkshops.length > 0) {
+      const activeWorkshopIds = activeWorkshops.map((workshop) => workshop.id);
+
       const filledSeatsRaw = await this.reservationsRepo
         .createQueryBuilder('r')
         .select('SUM(r.numberOfSeats)', 'total')
         .where('r.workshopId IN (:...ids)', { ids: activeWorkshopIds })
         .andWhere('r.status IN (:...statuses)', {
           statuses: ['confirmed', 'pending'],
-        }) // Assuming pending takes a seat
+        })
         .getRawOne();
 
       totalFilledSeats = parseInt(filledSeatsRaw?.total || '0', 10);
@@ -5435,19 +5456,11 @@ export class WorkshopsService {
 
     const openSeats = Math.max(0, totalCapacity - totalFilledSeats);
 
-    // 3. Refund Requests (Total pending review)
-    let pendingRefunds = 0;
-
-    try {
-      // ✅ FIX: Using workshopsRepo.manager instead of dataSource
-      pendingRefunds = await this.workshopsRepo.manager
-        .createQueryBuilder('workshop_refund_requests', 'rr')
-        .where('rr.status = :status', { status: 'PENDING' })
-        .getCount();
-    } catch (e) {
-      // If table doesn't exist yet, default to 0
-      pendingRefunds = 0;
-    }
+    const pendingRefunds = await this.refundsRepo.count({
+      where: {
+        status: WorkshopRefundStatus.PENDING,
+      },
+    });
 
     return {
       message: 'Dashboard stats fetched successfully',
@@ -5465,7 +5478,7 @@ export class WorkshopsService {
         activeSeats: {
           open: openSeats,
           filled: totalFilledSeats,
-          totalCapacity: totalCapacity,
+          totalCapacity,
         },
         refundRequests: {
           pendingReview: pendingRefunds,
