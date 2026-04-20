@@ -739,7 +739,6 @@ export class WorkshopsService {
   async update(id: string, dto: UpdateWorkshopDto) {
     const workshop = await this.workshopsRepo.findOne({
       where: { id },
-      relations: ['groupDiscounts', 'days', 'faculty'],
     });
 
     if (!workshop) {
@@ -764,11 +763,13 @@ export class WorkshopsService {
 
     const newCapacity = dto.capacity ?? workshop.capacity;
     const newAlertAt = dto.alertAt ?? workshop.alertAt;
+
     if (newAlertAt > newCapacity) {
       throw new BadRequestException('alertAt cannot be greater than capacity');
     }
 
     let facilityIds: string[] | undefined;
+
     if (dto.facilityIds !== undefined) {
       facilityIds = dto.facilityIds;
       const deliveryMode = dto.deliveryMode ?? workshop.deliveryMode;
@@ -796,14 +797,18 @@ export class WorkshopsService {
       }
     }
 
+    let existingGroupDiscounts: WorkshopGroupDiscount[] = [];
     if (
       dto.groupDiscountEnabled !== undefined ||
       dto.groupDiscounts !== undefined
     ) {
+      existingGroupDiscounts = await this.groupDiscountsRepo.find({
+        where: { workshopId: id },
+      });
+
       const groupDiscountEnabled =
         dto.groupDiscountEnabled ?? workshop.groupDiscountEnabled;
-      const groupDiscounts =
-        dto.groupDiscounts ?? workshop.groupDiscounts ?? [];
+      const groupDiscounts = dto.groupDiscounts ?? existingGroupDiscounts;
       const baseRate = dto.standardBaseRate
         ? Number(dto.standardBaseRate)
         : Number(workshop.standardBaseRate);
@@ -838,9 +843,22 @@ export class WorkshopsService {
       }
     }
 
-    let normalizedDays;
+    let normalizedDays:
+      | {
+          date: string;
+          dayNumber: number;
+          segments: {
+            segmentNumber: number;
+            courseTopic: string;
+            topicDetails?: string;
+            startTime: string;
+            endTime: string;
+          }[];
+        }[]
+      | undefined;
+
     if (dto.days !== undefined) {
-      if (!dto.days?.length) {
+      if (!dto.days.length) {
         throw new BadRequestException('At least one day is required');
       }
 
@@ -908,73 +926,78 @@ export class WorkshopsService {
       }
     }
 
-    const updatePayload: Partial<Workshop> = {};
-
-    if (dto.deliveryMode !== undefined)
-      updatePayload.deliveryMode = dto.deliveryMode;
-    if (dto.status !== undefined) updatePayload.status = dto.status;
-    if (dto.title !== undefined) updatePayload.title = dto.title.trim();
+    if (dto.deliveryMode !== undefined) {
+      workshop.deliveryMode = dto.deliveryMode;
+    }
+    if (dto.status !== undefined) {
+      workshop.status = dto.status;
+    }
+    if (dto.title !== undefined) {
+      workshop.title = dto.title.trim();
+    }
     if (dto.shortBlurb !== undefined) {
-      updatePayload.shortBlurb = dto.shortBlurb?.trim() || undefined;
+      workshop.shortBlurb = dto.shortBlurb?.trim() || undefined;
     }
     if (dto.coverImageUrl !== undefined) {
-      updatePayload.coverImageUrl = dto.coverImageUrl?.trim() || undefined;
+      workshop.coverImageUrl = dto.coverImageUrl?.trim() || undefined;
     }
     if (dto.learningObjectives !== undefined) {
-      updatePayload.learningObjectives = dto.learningObjectives ?? undefined;
+      workshop.learningObjectives = dto.learningObjectives ?? undefined;
     }
     if (dto.offersCmeCredits !== undefined) {
-      updatePayload.offersCmeCredits = dto.offersCmeCredits;
+      workshop.offersCmeCredits = dto.offersCmeCredits;
     }
     if (dto.cmeCreditsCount !== undefined) {
-      updatePayload.cmeCreditsCount = dto.cmeCreditsCount;
+      workshop.cmeCreditsCount = dto.cmeCreditsCount;
     }
     if (facilityIds !== undefined) {
-      updatePayload.facilityIds = facilityIds;
+      workshop.facilityIds = facilityIds;
     }
     if (dto.webinarPlatform !== undefined) {
-      updatePayload.webinarPlatform = dto.webinarPlatform?.trim() || undefined;
+      workshop.webinarPlatform = dto.webinarPlatform?.trim() || undefined;
     }
     if (dto.meetingLink !== undefined) {
-      updatePayload.meetingLink = dto.meetingLink?.trim() || undefined;
+      workshop.meetingLink = dto.meetingLink?.trim() || undefined;
     }
     if (dto.meetingPassword !== undefined) {
-      updatePayload.meetingPassword = dto.meetingPassword?.trim() || undefined;
+      workshop.meetingPassword = dto.meetingPassword?.trim() || undefined;
     }
     if (dto.autoRecordSession !== undefined) {
-      updatePayload.autoRecordSession = dto.autoRecordSession;
+      workshop.autoRecordSession = dto.autoRecordSession;
     }
-    if (dto.capacity !== undefined) updatePayload.capacity = dto.capacity;
-    if (dto.alertAt !== undefined) updatePayload.alertAt = dto.alertAt;
+    if (dto.capacity !== undefined) {
+      workshop.capacity = dto.capacity;
+    }
+    if (dto.alertAt !== undefined) {
+      workshop.alertAt = dto.alertAt;
+    }
     if (dto.standardBaseRate !== undefined) {
-      updatePayload.standardBaseRate = dto.standardBaseRate;
+      workshop.standardBaseRate = dto.standardBaseRate;
     }
     if (dto.groupDiscountEnabled !== undefined) {
-      updatePayload.groupDiscountEnabled = dto.groupDiscountEnabled;
+      workshop.groupDiscountEnabled = dto.groupDiscountEnabled;
     }
     if (dto.registrationDeadline !== undefined) {
-      updatePayload.registrationDeadline = new Date(dto.registrationDeadline);
+      workshop.registrationDeadline = new Date(dto.registrationDeadline);
     }
 
-    Object.assign(workshop, updatePayload);
-
-    const savedWorkshop = await this.workshopsRepo.save(workshop);
+    await this.workshopsRepo.save(workshop);
 
     if (normalizedDays !== undefined) {
       await this.daysRepo.delete({ workshopId: id });
 
       for (const dayData of normalizedDays) {
-        const day = this.daysRepo.create({
-          workshopId: id,
-          date: dayData.date,
-          dayNumber: dayData.dayNumber,
-        });
+        const day = await this.daysRepo.save(
+          this.daysRepo.create({
+            workshopId: id,
+            date: dayData.date,
+            dayNumber: dayData.dayNumber,
+          }),
+        );
 
-        const savedDay = await this.daysRepo.save(day);
-
-        const segments = dayData.segments.map((s: any) =>
+        const segments = dayData.segments.map((s) =>
           this.segmentsRepo.create({
-            dayId: savedDay.id,
+            dayId: day.id,
             segmentNumber: s.segmentNumber,
             courseTopic: s.courseTopic,
             topicDetails: s.topicDetails,
@@ -994,8 +1017,7 @@ export class WorkshopsService {
       await this.groupDiscountsRepo.delete({ workshopId: id });
 
       if (
-        (dto.groupDiscountEnabled ?? savedWorkshop.groupDiscountEnabled) ===
-        true
+        (dto.groupDiscountEnabled ?? workshop.groupDiscountEnabled) === true
       ) {
         const discountsToCreate = (dto.groupDiscounts ?? []).map((g) =>
           this.groupDiscountsRepo.create({
@@ -1012,8 +1034,11 @@ export class WorkshopsService {
     }
 
     if (facultyEntities !== undefined) {
-      savedWorkshop.faculty = facultyEntities;
-      await this.workshopsRepo.save(savedWorkshop);
+      await this.workshopsRepo
+        .createQueryBuilder()
+        .relation(Workshop, 'faculty')
+        .of(id)
+        .set(facultyEntities.map((f) => f.id));
     }
 
     return await this.workshopsRepo.findOne({
