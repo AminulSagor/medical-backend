@@ -1,15 +1,17 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
-import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
   private readonly ses: SESv2Client;
-  private from: string;
-  private isSesConfigured: boolean;
-  private smtpTransporter: any;
-  private isSmtpConfigured: boolean;
+  private readonly from: string;
+  private readonly isSesConfigured: boolean;
 
   constructor(private readonly config: ConfigService) {
     const region =
@@ -17,54 +19,42 @@ export class MailService {
       this.config.get<string>('AWS_S3_REGION');
 
     const accessKeyId = this.config.get<string>('AWS_ACCESS_KEY_ID');
-    const secretAccessKey = this.config.get<string>(
-      'AWS_SECRET_ACCESS_KEY',
+    const secretAccessKey = this.config.get<string>('AWS_SECRET_ACCESS_KEY');
+    this.from = this.config.get<string>('SES_FROM_EMAIL') || '';
+
+    this.isSesConfigured = Boolean(
+      region && accessKeyId && secretAccessKey && this.from,
     );
 
-    this.from = this.config.get<string>('SES_FROM_EMAIL') || this.config.get<string>('SMTP_FROM') || '';
+    if (!this.isSesConfigured || !region || !accessKeyId || !secretAccessKey) {
+      this.logger.warn(
+        'SES is not fully configured. Please set AWS_REGION/AWS_S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and SES_FROM_EMAIL.',
+      );
 
-    // ✅ Check if SES is properly configured
-    const sesMissing = !region || !accessKeyId || !secretAccessKey || !this.from;
-    this.isSesConfigured = !sesMissing;
-
-    // ✅ Check if SMTP is configured
-    const smtpHost = this.config.get<string>('SMTP_HOST');
-    const smtpPort = this.config.get<string>('SMTP_PORT');
-    const smtpUser = this.config.get<string>('SMTP_USER');
-    const smtpPass = this.config.get<string>('SMTP_PASS');
-    const smtpMissing = !smtpHost || !smtpPort || !smtpUser || !smtpPass;
-    this.isSmtpConfigured = !smtpMissing;
-
-    if (this.isSesConfigured && region && accessKeyId && secretAccessKey) {
-      this.ses = new SESv2Client({
-        region,
-        credentials: {
-          accessKeyId,
-          secretAccessKey,
-        },
-      });
-      console.log('✅ SES email service initialized');
-    } else {
-      console.warn('⚠️  SES not configured - will fallback to SMTP if available');
+      this.ses = new SESv2Client({});
+      return;
     }
 
-    if (this.isSmtpConfigured && smtpHost && smtpPort && smtpUser && smtpPass) {
-      this.smtpTransporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: parseInt(smtpPort),
-        secure: smtpPort === '465', // true for 465, false for other ports
-        auth: {
-          user: smtpUser,
-          pass: smtpPass,
-        },
-      });
-      console.log('✅ SMTP email service initialized');
-    } else {
-      console.warn('⚠️  SMTP not configured - emails will be skipped');
-    }
+    this.ses = new SESv2Client({
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+
+    this.logger.log('SES email service initialized');
   }
 
-  async sendOtpEmail(to: string, otp: string, expiresInMinutes: number) {
+  async sendOtpEmail(
+    to: string,
+    otp: string,
+    expiresInMinutes: number,
+  ): Promise<void> {
+    if (!this.isSesConfigured) {
+      throw new InternalServerErrorException('SES is not configured properly');
+    }
+
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.5;">
         <h2>Your verification code</h2>
@@ -74,62 +64,45 @@ export class MailService {
       </div>
     `;
 
-    // ✅ Try SES first if configured
-    if (this.isSesConfigured) {
-      try {
-        console.log(`📧 Attempting to send OTP via SES to ${to}...`);
-        await this.ses.send(
-          new SendEmailCommand({
-            FromEmailAddress: this.from,
-            Destination: {
-              ToAddresses: [to],
-            },
-            Content: {
-              Simple: {
-                Subject: {
-                  Data: 'Your verification code',
+    const textContent = `Your OTP is ${otp}. It will expire in ${expiresInMinutes} minutes.`;
+
+    try {
+      this.logger.log(`Sending OTP email via SES to ${to}...`);
+
+      await this.ses.send(
+        new SendEmailCommand({
+          FromEmailAddress: this.from,
+          Destination: {
+            ToAddresses: [to],
+          },
+          Content: {
+            Simple: {
+              Subject: {
+                Data: 'Your verification code',
+              },
+              Body: {
+                Html: {
+                  Data: htmlContent,
                 },
-                Body: {
-                  Html: { Data: htmlContent },
-                  Text: {
-                    Data: `Your OTP is ${otp}. It will expire in ${expiresInMinutes} minutes.`,
-                  },
+                Text: {
+                  Data: textContent,
                 },
               },
             },
-          }),
-        );
-        console.log(`✅ OTP email sent successfully via SES to ${to}`);
-        return;
-      } catch (sesError) {
-        console.warn(`⚠️  SES failed: ${sesError.message} - falling back to SMTP`);
-      }
-    }
+          },
+        }),
+      );
 
-    // ✅ Fallback to SMTP if SES fails or not configured
-    if (this.isSmtpConfigured) {
-      try {
-        console.log(`📧 Sending OTP via SMTP to ${to}...`);
-        await this.smtpTransporter.sendMail({
-          from: this.from,
-          to: to,
-          subject: 'Your verification code',
-          html: htmlContent,
-          text: `Your OTP is ${otp}. It will expire in ${expiresInMinutes} minutes.`,
-        });
-        console.log(`✅ OTP email sent successfully via SMTP to ${to}`);
-        return;
-      } catch (smtpError) {
-        console.error(`❌ SMTP failed: ${smtpError.message}`);
-        throw new InternalServerErrorException(
-          `Failed to send OTP email via both SES and SMTP: ${smtpError.message}`,
-        );
-      }
-    }
+      this.logger.log(`OTP email sent successfully via SES to ${to}`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown SES error';
 
-    // ✅ If neither SES nor SMTP is configured, skip email
-    console.log(
-      `⏭️  Email services not configured. OTP for ${to}: ${otp}`,
-    );
+      this.logger.error(`Failed to send OTP email via SES to ${to}`, message);
+
+      throw new InternalServerErrorException(
+        `Failed to send OTP email via SES: ${message}`,
+      );
+    }
   }
 }
