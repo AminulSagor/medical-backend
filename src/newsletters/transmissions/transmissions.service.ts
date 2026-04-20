@@ -16,6 +16,7 @@ import {
   NewsletterBroadcastStatus,
   NewsletterChannelType,
   NewsletterDeliveryRecipientStatus,
+  NewsletterTransmissionEventType,
 } from 'src/common/enums/newsletter-constants.enum';
 
 import { ListTransmissionsQueryDto } from './dto/list-transmissions-query.dto';
@@ -184,22 +185,14 @@ export class TransmissionsService {
     });
     if (!b) throw new NotFoundException('Transmission not found');
 
-    // 1. CALCULATE ACTUAL RECIPIENT ENGAGEMENT (Safe Query Strategy)
-    // Assuming your recipient table has deliveredAt, firstOpenedAt, firstClickedAt columns
-    // If not, these counts will safely return 0.
-
-    // Fallback safely if properties don't exist on the entity yet to prevent 500 errors
     let total = 0;
     let delivered = 0;
     let opened = 0;
     let clicked = 0;
 
     try {
-      // Check if the entity has these columns. If it throws, we catch and default to 0.
       total = await this.recipientRepo.count({ where: { broadcastId } });
 
-      // Using raw SQL in select can crash if columns aren't exact. Using count with Not(IsNull()) is safer if using TypeORM 0.3+
-      // Alternatively, we use simple query builder counts.
       delivered = await this.recipientRepo
         .createQueryBuilder('r')
         .where('r.broadcastId = :id', { id: broadcastId })
@@ -217,8 +210,7 @@ export class TransmissionsService {
         .where('r.broadcastId = :id', { id: broadcastId })
         .andWhere('r.firstClickedAt IS NOT NULL')
         .getCount();
-    } catch (error) {
-      // If columns don't exist yet, we silently ignore to prevent the 500 error, leaving stats at 0.
+    } catch (error: any) {
       console.warn(
         'Engagement columns not found on recipient repo, defaulting stats to 0.',
         error.message,
@@ -231,7 +223,6 @@ export class TransmissionsService {
     const openRate = total ? Number(((opened / total) * 100).toFixed(1)) : 0;
     const clickRate = total ? Number(((clicked / total) * 100).toFixed(1)) : 0;
 
-    // 2. CALCULATE ACTUAL ATTRITION (UNSUBSCRIBES LINKED TO THIS BROADCAST)
     let attritionCount = 0;
     try {
       attritionCount = await this.unsubRepo.count({
@@ -240,37 +231,32 @@ export class TransmissionsService {
           { source: Like(`%${broadcastId}%`) },
         ],
       });
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Unsub repo query failed, defaulting to 0.', e.message);
     }
 
     const attritionPercent =
       total > 0 ? Number(((attritionCount / total) * 100).toFixed(2)) : 0;
 
-    // 3. CALCULATE OPEN RATE GROWTH VS HISTORICAL AVERAGE
     let avgVal = 0;
     try {
       const historicalAvg = await this.broadcastRepo
         .createQueryBuilder('b')
-        .select(
-          "AVG(CAST(COALESCE(NULLIF(b.openRatePercent, ''), '0') AS NUMERIC))",
-          'avg',
-        ) // Safely cast string to numeric, handling empty strings
+        .select('AVG(COALESCE(b.openRatePercent, 0))', 'avg')
         .where('b.status = :status AND b.id != :id', {
           status: NewsletterBroadcastStatus.SENT,
           id: broadcastId,
         })
-        .getRawOne();
+        .getRawOne<{ avg: string | number | null }>();
 
-      avgVal = Number(historicalAvg?.avg || 0);
-    } catch (e) {
+      avgVal = Number(historicalAvg?.avg ?? 0);
+    } catch (e: any) {
       console.warn('Historical average calculation failed.', e.message);
     }
 
     const openRateGrowth =
       avgVal > 0 ? Number((openRate - avgVal).toFixed(1)) : 0;
 
-    // 4. GENERATE ACTUAL ENGAGEMENT BUCKETS (24 HOUR TIMELINE)
     const buckets = Array(24).fill(0);
     try {
       const openData = await this.recipientRepo
@@ -289,7 +275,7 @@ export class TransmissionsService {
           if (diffHours >= 0 && diffHours < 24) buckets[diffHours]++;
         }
       });
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Bucket calculation failed.', e.message);
     }
 
@@ -301,7 +287,7 @@ export class TransmissionsService {
           growthRatePercent: openRateGrowth,
         },
         clickThroughRatePercent: clickRate,
-        attritionPercent: attritionPercent,
+        attritionPercent,
       },
       engagementOverTime: { unit: 'hour', buckets },
       topPerformingLinks: await this.getTopLinks(broadcastId),
@@ -320,7 +306,10 @@ export class TransmissionsService {
 
     try {
       clickEvents = await this.eventRepo.find({
-        where: { broadcastId, eventType: 'CLICK' as any },
+        where: {
+          broadcastId,
+          eventType: NewsletterTransmissionEventType.CLICKED,
+        },
       });
     } catch (e) {
       console.warn(

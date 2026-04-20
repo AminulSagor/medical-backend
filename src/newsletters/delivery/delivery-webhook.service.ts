@@ -106,13 +106,13 @@ export class DeliveryWebhookService {
 
         case NewsletterTransmissionEventType.OPENED:
           recipient.firstOpenedAt = recipient.firstOpenedAt ?? occurredAt;
-          recipient.openCount += 1;
+          recipient.openCount = (recipient.openCount ?? 0) + 1;
           recipient.deliveryStatus = NewsletterDeliveryRecipientStatus.OPENED;
           break;
 
         case NewsletterTransmissionEventType.CLICKED:
           recipient.firstClickedAt = recipient.firstClickedAt ?? occurredAt;
-          recipient.clickCount += 1;
+          recipient.clickCount = (recipient.clickCount ?? 0) + 1;
           recipient.deliveryStatus = NewsletterDeliveryRecipientStatus.CLICKED;
           break;
 

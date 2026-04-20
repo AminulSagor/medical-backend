@@ -1880,6 +1880,7 @@ export class BroadcastsService {
           subject: detail.subjectLine,
           fromLabel: 'Texas Airway Institute <education@tai.edu>',
           article: {
+            id: detail.articleLink?.sourceRefId ?? null,
             title:
               detail.articleLink?.sourceTitleSnapshot ?? detail.subjectLine,
             excerpt: detail.articleLink?.sourceExcerptSnapshot ?? null,
