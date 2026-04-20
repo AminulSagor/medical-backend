@@ -1123,7 +1123,6 @@ export class WorkshopsService {
       .leftJoinAndSelect('days.segments', 'segments')
       .leftJoinAndSelect('w.groupDiscounts', 'groupDiscounts');
 
-    // filters
     if (query.q?.trim()) {
       qb.andWhere('LOWER(w.title) LIKE :q', {
         q: `%${query.q.toLowerCase().trim()}%`,
@@ -1147,7 +1146,6 @@ export class WorkshopsService {
     }
 
     if (query.offersCmeCredits) {
-      // backward compat: 'true' means cmeCreditsCount > 0
       const wantsCme = query.offersCmeCredits === 'true';
       if (wantsCme) {
         qb.andWhere('w.cmeCreditsCount > 0');
@@ -1165,47 +1163,51 @@ export class WorkshopsService {
     if (query.facultyId) {
       qb.andWhere(
         `EXISTS (
-          SELECT 1 FROM workshop_faculty wf
-          WHERE wf."workshopId" = w.id AND wf."facultyId" = :facultyId
-        )`,
+        SELECT 1 FROM workshop_faculty wf
+        WHERE wf."workshopId" = w.id AND wf."facultyId" = :facultyId
+      )`,
         { facultyId: query.facultyId },
       );
     }
 
-    // filter by upcoming (workshops with at least one date in the future)
     if (query.upcoming === 'true') {
       qb.andWhere(
         'w.id IN (SELECT DISTINCT wd."workshopId" FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
       );
     }
 
-    // filter by past (workshops with all dates in the past)
     if (query.past === 'true') {
       qb.andWhere(
         'w.id NOT IN (SELECT DISTINCT wd."workshopId" FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
       );
     }
 
-    // filter by refund requests (workshops with refund records)
+    // FIX: hasRefundRequests=true should mean pending refund requests only
     if (query.hasRefundRequests === 'true') {
       qb.andWhere(
-        'EXISTS (SELECT 1 FROM workshop_refunds wr WHERE wr."workshopId" = w.id)',
+        `EXISTS (
+        SELECT 1
+        FROM workshop_refunds wr
+        WHERE wr."workshopId" = w.id
+          AND wr.status = :pendingRefundStatus
+      )`,
+        { pendingRefundStatus: 'PENDING' },
       );
     }
 
-    // sorting
     const sortBy = query.sortBy ?? 'createdAt';
     const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
       | 'ASC'
       | 'DESC';
+
     qb.orderBy(`w.${sortBy}`, sortOrder);
 
     qb.skip(skip).take(limit);
 
     const [workshops, total] = await qb.getManyAndCount();
 
-    // ── Reservation counts (for totalEnrolled / available seats) ──────────────
     const workshopIds = workshops.map((w) => w.id);
+
     const reservationCounts =
       workshopIds.length > 0
         ? await this.reservationsRepo
@@ -1227,7 +1229,6 @@ export class WorkshopsService {
       ]),
     );
 
-    // ── Refund stats per workshop ────────────────────────────────────────────
     const refundStats =
       workshopIds.length > 0
         ? await this.refundsRepo
@@ -1268,9 +1269,9 @@ export class WorkshopsService {
       refundStatsMap.set(row.workshopId, existing);
     }
 
-    // ── Resolve full facility details in one batch query ──────────────────────
     const uuidRegex =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
     const allFacilityIds = [
       ...new Set(
         workshops.flatMap((w) =>
@@ -1278,10 +1279,12 @@ export class WorkshopsService {
         ),
       ),
     ];
+
     const allFacilities =
       allFacilityIds.length > 0
         ? await this.facilitiesRepo.find({ where: { id: In(allFacilityIds) } })
         : [];
+
     const facilityMap = new Map(allFacilities.map((f) => [f.id, f]));
 
     const data = workshops.map((w) => {
@@ -1294,7 +1297,6 @@ export class WorkshopsService {
 
       return {
         ...w,
-        // ✅ Full faculty objects
         faculty: (w.faculty ?? []).map((f) => ({
           id: f.id,
           firstName: f.firstName,
@@ -1309,13 +1311,11 @@ export class WorkshopsService {
           phoneNumber: f.phoneNumber,
           email: f.email,
         })),
-        // ✅ Full facility objects
         facilityIds: w.facilityIds,
         facilities: (w.facilityIds ?? [])
           .filter((id) => uuidRegex.test(id))
           .map((id) => facilityMap.get(id))
           .filter(Boolean),
-        // ✅ Enrollment & refund overview
         overview: {
           totalEnrolled: reservedSeats,
           refundRequested: refundInfo.refundRequested,

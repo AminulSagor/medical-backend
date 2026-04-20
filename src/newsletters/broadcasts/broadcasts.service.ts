@@ -965,57 +965,132 @@ export class BroadcastsService {
   //   };
   // }
 
+  private formatRemainingWindow(fromDate: Date, timezone = 'America/Chicago') {
+    const now = DateTime.now().setZone(timezone);
+    const target = DateTime.fromJSDate(fromDate, { zone: 'utc' }).setZone(
+      timezone,
+    );
+
+    const diffMs = target.toMillis() - now.toMillis();
+
+    if (diffMs <= 0) {
+      return {
+        totalHours: 0,
+        label: '0 hours',
+      };
+    }
+
+    const totalMinutes = Math.floor(diffMs / (1000 * 60));
+    const days = Math.floor(totalMinutes / (60 * 24));
+    const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+    const minutes = totalMinutes % 60;
+
+    const parts: string[] = [];
+
+    if (days > 0) {
+      parts.push(`${days} day${days > 1 ? 's' : ''}`);
+    }
+
+    if (hours > 0) {
+      parts.push(`${hours} hour${hours > 1 ? 's' : ''}`);
+    }
+
+    if (days === 0 && hours === 0) {
+      parts.push(`${minutes} minute${minutes > 1 ? 's' : ''}`);
+    }
+
+    return {
+      totalHours: Math.floor(totalMinutes / 60),
+      label: parts.join(' '),
+    };
+  }
+
   async setScheduleSettings(
     adminUserId: string,
     broadcastId: string,
     dto: ScheduleBroadcastDto,
   ): Promise<Record<string, unknown>> {
+    const comparisonTimezone = 'America/Chicago';
+
     const broadcast = await this.broadcastRepo.findOne({
       where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
     });
 
-    if (!broadcast)
+    if (!broadcast) {
       throw new NotFoundException('General newsletter broadcast not found');
+    }
 
-    if (
-      ![
-        NewsletterBroadcastStatus.DRAFT,
-        NewsletterBroadcastStatus.READY,
-        NewsletterBroadcastStatus.REVIEW_PENDING,
-      ].includes(broadcast.status)
-    ) {
+    const nowChicago = DateTime.now().setZone(comparisonTimezone);
+
+    const currentScheduledChicago = broadcast.scheduledAt
+      ? DateTime.fromJSDate(broadcast.scheduledAt, { zone: 'utc' }).setZone(
+          comparisonTimezone,
+        )
+      : null;
+
+    const canEditDraftLikeStatuses = [
+      NewsletterBroadcastStatus.DRAFT,
+      NewsletterBroadcastStatus.READY,
+      NewsletterBroadcastStatus.REVIEW_PENDING,
+    ].includes(broadcast.status);
+
+    const canEditScheduledBroadcast =
+      broadcast.status === NewsletterBroadcastStatus.SCHEDULED &&
+      !!currentScheduledChicago &&
+      currentScheduledChicago.toMillis() > nowChicago.toMillis();
+
+    if (!canEditDraftLikeStatuses && !canEditScheduledBroadcast) {
+      if (
+        broadcast.status === NewsletterBroadcastStatus.SCHEDULED &&
+        currentScheduledChicago
+      ) {
+        throw new UnprocessableEntityException(
+          `Schedule can no longer be changed because the scheduled time has already passed in ${comparisonTimezone} (CDT).`,
+        );
+      }
+
       throw new UnprocessableEntityException(
-        'Can only configure schedule for draft/ready broadcasts',
+        'Can only configure schedule for draft, ready, review-pending, or scheduled broadcasts whose scheduled time is still in the future.',
       );
     }
 
-    const scheduledAt = new Date(dto.scheduledAtUtc);
-    if (Number.isNaN(scheduledAt.getTime()))
+    const scheduledAtLuxon = DateTime.fromISO(dto.scheduledAtUtc, {
+      zone: 'utc',
+    });
+
+    if (!scheduledAtLuxon.isValid) {
       throw new BadRequestException('scheduledAtUtc is invalid');
-    if (scheduledAt <= new Date())
+    }
+
+    if (scheduledAtLuxon.toMillis() <= nowChicago.toMillis()) {
       throw new UnprocessableEntityException(
-        'scheduledAtUtc must be in the future',
+        `scheduledAtUtc must be in the future compared with ${comparisonTimezone} (CDT).`,
       );
+    }
+
+    const scheduledAt = scheduledAtLuxon.toJSDate();
 
     const cadence = await this.cadenceRepo.findOne({
       where: { channelType: NewsletterChannelType.GENERAL },
     });
+
     if (!cadence) {
       throw new NotFoundException(
         'General newsletter cadence settings not found',
       );
     }
 
-    // Strict slot validation against cadence windows
     const validSlots = buildCadenceSlots({
       timezone: dto.timezone.trim(),
       frequencyType: dto.frequencyType,
       fromDate:
-        DateTime.fromJSDate(scheduledAt).minus({ days: 2 }).toISODate() ??
-        undefined,
+        DateTime.fromJSDate(scheduledAt, { zone: 'utc' })
+          .minus({ days: 2 })
+          .toISODate() ?? undefined,
       toDate:
-        DateTime.fromJSDate(scheduledAt).plus({ days: 2 }).toISODate() ??
-        undefined,
+        DateTime.fromJSDate(scheduledAt, { zone: 'utc' })
+          .plus({ days: 2 })
+          .toISODate() ?? undefined,
       count: 20,
       weekly: {
         enabled: cadence.weeklyEnabled,
@@ -1030,15 +1105,26 @@ export class BroadcastsService {
     });
 
     const exactSlotMatch = validSlots.some(
-      (s) => s.scheduledAtUtc === scheduledAt.toISOString(),
+      (slot) => slot.scheduledAtUtc === scheduledAt.toISOString(),
     );
+
     if (!exactSlotMatch) {
+      if (broadcast.scheduledAt) {
+        const remaining = this.formatRemainingWindow(
+          broadcast.scheduledAt,
+          comparisonTimezone,
+        );
+
+        throw new UnprocessableEntityException(
+          `scheduledAtUtc must match an available cadence slot for the selected frequency. You still have ${remaining.label} left to change this schedule.`,
+        );
+      }
+
       throw new UnprocessableEntityException(
-        'scheduledAtUtc must match an available cadence slot for the selected frequency',
+        'scheduledAtUtc must match an available cadence slot for the selected frequency.',
       );
     }
 
-    // Save settings but DO NOT change the status to SCHEDULED
     broadcast.frequencyType = dto.frequencyType;
     broadcast.scheduledAt = scheduledAt;
     broadcast.timezone = dto.timezone.trim();
@@ -1047,9 +1133,17 @@ export class BroadcastsService {
 
     await this.broadcastRepo.save(broadcast);
 
+    const remaining = this.formatRemainingWindow(
+      broadcast.scheduledAt,
+      comparisonTimezone,
+    );
+
     return {
-      message: 'Schedule settings saved successfully',
+      message: `Schedule settings saved successfully. You have ${remaining.label} left to change schedule.`,
       scheduledAtUtc: broadcast.scheduledAt.toISOString(),
+      timeLeftToChange: remaining.label,
+      comparisonTimezone,
+      status: broadcast.status,
     };
   }
 
