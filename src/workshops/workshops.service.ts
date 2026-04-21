@@ -3562,301 +3562,334 @@ export class WorkshopsService {
     adminId: string,
     dto: ConfirmWorkshopRefundDto,
   ) {
-    const workshop = await this.workshopsRepo.findOne({
-      where: { id: workshopId },
-      select: ['id', 'title'],
-    });
+    return await this.refundsRepo.manager.transaction(async (manager) => {
+      const workshopsRepo = manager.getRepository(Workshop);
+      const reservationsRepo = manager.getRepository(WorkshopReservation);
+      const attendeesRepo = manager.getRepository(WorkshopAttendee);
+      const refundsRepo = manager.getRepository(WorkshopRefund);
+      const refundItemsRepo = manager.getRepository(WorkshopRefundItem);
 
-    if (!workshop) {
-      throw new NotFoundException(`Workshop with ID ${workshopId} not found`);
-    }
+      const workshop = await workshopsRepo.findOne({
+        where: { id: workshopId },
+        select: ['id', 'title'],
+      });
 
-    const reservation = await this.reservationsRepo.findOne({
-      where: { id: dto.reservationId, workshopId },
-      relations: ['attendees'],
-    });
+      if (!workshop) {
+        throw new NotFoundException(`Workshop with ID ${workshopId} not found`);
+      }
 
-    if (!reservation) {
-      throw new NotFoundException(
-        `Reservation with ID ${dto.reservationId} not found for this workshop`,
+      const reservation = await reservationsRepo.findOne({
+        where: { id: dto.reservationId, workshopId },
+        relations: ['attendees'],
+      });
+
+      if (!reservation) {
+        throw new NotFoundException(
+          `Reservation with ID ${dto.reservationId} not found for this workshop`,
+        );
+      }
+
+      const normalizedAttendeeIds = [...new Set(dto.attendeeIds)];
+
+      const attendees = await attendeesRepo.find({
+        where: {
+          reservationId: dto.reservationId,
+          id: In(normalizedAttendeeIds),
+        },
+      });
+
+      if (attendees.length !== normalizedAttendeeIds.length) {
+        throw new BadRequestException(
+          'One or more attendeeIds are invalid for this reservation',
+        );
+      }
+
+      const totalRefundAmount = this.toMoney(dto.refundAmount);
+      if (totalRefundAmount <= 0) {
+        throw new BadRequestException('refundAmount must be greater than 0');
+      }
+
+      const processedRefundItems = await refundItemsRepo
+        .createQueryBuilder('item')
+        .leftJoin('item.refund', 'refund')
+        .where('refund.reservationId = :reservationId', {
+          reservationId: dto.reservationId,
+        })
+        .andWhere('refund.status = :processedStatus', {
+          processedStatus: WorkshopRefundStatus.PROCESSED,
+        })
+        .getMany();
+
+      const alreadyRefundedIds = new Set(
+        processedRefundItems.map((item) => item.attendeeId),
       );
-    }
 
-    const normalizedAttendeeIds = [...new Set(dto.attendeeIds)];
-
-    const attendees = await this.attendeesRepo.find({
-      where: {
-        reservationId: dto.reservationId,
-        id: In(normalizedAttendeeIds),
-      },
-    });
-
-    if (attendees.length !== normalizedAttendeeIds.length) {
-      throw new BadRequestException(
-        'One or more attendeeIds are invalid for this reservation',
+      const invalidSelectedIds = normalizedAttendeeIds.filter((id) =>
+        alreadyRefundedIds.has(id),
       );
-    }
 
-    const totalRefundAmount = this.toMoney(dto.refundAmount);
-    if (totalRefundAmount <= 0) {
-      throw new BadRequestException('refundAmount must be greater than 0');
-    }
+      if (invalidSelectedIds.length > 0) {
+        throw new BadRequestException(
+          'One or more selected attendees are already refunded',
+        );
+      }
 
-    const processedRefundItems = await this.refundItemsRepo
-      .createQueryBuilder('item')
-      .leftJoin('item.refund', 'refund')
-      .where('refund.reservationId = :reservationId', {
-        reservationId: dto.reservationId,
-      })
-      .andWhere('refund.status = :processedStatus', {
-        processedStatus: WorkshopRefundStatus.PROCESSED,
-      })
-      .getMany();
+      const originalGroupSize =
+        reservation.attendees?.length ?? reservation.numberOfSeats ?? 1;
 
-    const alreadyRefundedIds = new Set(
-      processedRefundItems.map((item) => item.attendeeId),
-    );
+      const bookingType =
+        reservation.bookingType ??
+        ((originalGroupSize > 1 ? 'group' : 'single') as 'group' | 'single');
 
-    const invalidSelectedIds = normalizedAttendeeIds.filter((id) =>
-      alreadyRefundedIds.has(id),
-    );
+      const pendingRefund = await refundsRepo.findOne({
+        where: {
+          workshopId,
+          reservationId: dto.reservationId,
+          status: WorkshopRefundStatus.PENDING,
+        },
+        relations: ['items'],
+        order: { createdAt: 'DESC' },
+      });
 
-    if (invalidSelectedIds.length > 0) {
-      throw new BadRequestException(
-        'One or more selected attendees are already refunded',
-      );
-    }
+      let pendingRequestedIds: string[] = [];
+      const pendingRequestedAmountMap = new Map<string, string>();
 
-    const originalGroupSize =
-      reservation.attendees?.length ?? reservation.numberOfSeats ?? 1;
-    const bookingType =
-      reservation.bookingType ??
-      ((originalGroupSize > 1 ? 'group' : 'single') as 'group' | 'single');
+      if (pendingRefund) {
+        if (pendingRefund.items?.length) {
+          pendingRequestedIds = pendingRefund.items.map(
+            (item) => item.attendeeId,
+          );
 
-    const pendingRefund = await this.refundsRepo.findOne({
-      where: {
-        workshopId,
-        reservationId: dto.reservationId,
-        status: WorkshopRefundStatus.PENDING,
-      },
-      relations: ['items'],
-      order: { createdAt: 'DESC' },
-    });
+          for (const item of pendingRefund.items) {
+            pendingRequestedAmountMap.set(item.attendeeId, item.refundAmount);
+          }
+        } else {
+          const inferredPendingIds = (reservation.attendees ?? [])
+            .map((attendee) => attendee.id)
+            .filter((attendeeId) => !alreadyRefundedIds.has(attendeeId));
 
-    let pendingRequestedIds: string[] = [];
-    let pendingRequestedAmountMap = new Map<string, string>();
+          pendingRequestedIds = inferredPendingIds;
 
-    if (pendingRefund) {
-      if (pendingRefund.items?.length) {
-        pendingRequestedIds = pendingRefund.items.map(
-          (item) => item.attendeeId,
+          for (const attendeeId of inferredPendingIds) {
+            pendingRequestedAmountMap.set(
+              attendeeId,
+              this.toMoneyString(this.toMoney(reservation.pricePerSeat)),
+            );
+          }
+        }
+
+        const invalidNotRequested = normalizedAttendeeIds.filter(
+          (id) => !pendingRequestedIds.includes(id),
         );
 
-        for (const item of pendingRefund.items) {
-          pendingRequestedAmountMap.set(item.attendeeId, item.refundAmount);
-        }
-      } else {
-        const inferredPendingIds = (reservation.attendees ?? [])
-          .map((attendee) => attendee.id)
-          .filter((attendeeId) => !alreadyRefundedIds.has(attendeeId));
-
-        pendingRequestedIds = inferredPendingIds;
-
-        for (const attendeeId of inferredPendingIds) {
-          pendingRequestedAmountMap.set(
-            attendeeId,
-            this.toMoneyString(this.toMoney(reservation.pricePerSeat)),
+        if (invalidNotRequested.length > 0) {
+          throw new BadRequestException(
+            'Admin can only process attendee(s) that were actually requested for refund.',
           );
         }
       }
 
-      const invalidNotRequested = normalizedAttendeeIds.filter(
-        (id) => !pendingRequestedIds.includes(id),
-      );
+      const processedAt = new Date();
+      const perAttendeeProcessedAmount =
+        totalRefundAmount / normalizedAttendeeIds.length;
 
-      if (invalidNotRequested.length > 0) {
-        throw new BadRequestException(
-          'Admin can only process attendee(s) that were actually requested for refund.',
-        );
-      }
-    }
+      let processedRefundId: string;
+      let responseRequestId: string | null = pendingRefund?.requestId ?? null;
 
-    const processedAt = new Date();
-    const perAttendeeProcessedAmount =
-      totalRefundAmount / normalizedAttendeeIds.length;
-
-    let savedRefund: WorkshopRefund;
-    let remainingPendingRequestedIds: string[] = [];
-
-    if (pendingRefund) {
-      remainingPendingRequestedIds = pendingRequestedIds.filter(
-        (id) => !normalizedAttendeeIds.includes(id),
-      );
-
-      if (remainingPendingRequestedIds.length === 0) {
-        pendingRefund.processedByAdminId = adminId;
-        pendingRefund.refundAmount = dto.refundAmount.toString();
-        pendingRefund.adjustmentNote = dto.adjustmentNote;
-        pendingRefund.paymentGateway = dto.paymentGateway;
-        pendingRefund.transactionId = dto.transactionId;
-        pendingRefund.status = WorkshopRefundStatus.PROCESSED;
-        pendingRefund.processedAt = processedAt;
-
-        savedRefund = await this.refundsRepo.save(pendingRefund);
-
-        await this.refundItemsRepo.delete({ refundId: pendingRefund.id });
-
-        const processedItems = normalizedAttendeeIds.map((attendeeId) =>
-          this.refundItemsRepo.create({
-            refundId: pendingRefund.id,
-            attendeeId,
-            refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
-            status: WorkshopRefundItemStatus.REFUNDED,
-          }),
+      if (pendingRefund) {
+        const remainingPendingRequestedIds = pendingRequestedIds.filter(
+          (id) => !normalizedAttendeeIds.includes(id),
         );
 
-        await this.refundItemsRepo.save(processedItems);
-      } else {
-        const processedRefund = this.refundsRepo.create({
-          workshopId,
-          reservationId: dto.reservationId,
-          userId: pendingRefund.userId,
-          processedByAdminId: adminId,
-          refundAmount: dto.refundAmount.toString(),
-          reason: pendingRefund.reason,
-          adjustmentNote: dto.adjustmentNote,
-          paymentGateway: dto.paymentGateway,
-          transactionId: dto.transactionId,
-          status: WorkshopRefundStatus.PROCESSED,
-          processedAt,
-        });
+        if (remainingPendingRequestedIds.length === 0) {
+          await refundsRepo.update(pendingRefund.id, {
+            processedByAdminId: adminId,
+            refundAmount: dto.refundAmount.toString(),
+            adjustmentNote: dto.adjustmentNote,
+            paymentGateway: dto.paymentGateway,
+            transactionId: dto.transactionId,
+            status: WorkshopRefundStatus.PROCESSED,
+            processedAt,
+          });
 
-        savedRefund = await this.refundsRepo.save(processedRefund);
+          await refundItemsRepo.delete({ refundId: pendingRefund.id });
 
-        const processedItems = normalizedAttendeeIds.map((attendeeId) =>
-          this.refundItemsRepo.create({
-            refundId: savedRefund.id,
-            attendeeId,
-            refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
-            status: WorkshopRefundItemStatus.REFUNDED,
-          }),
-        );
-
-        await this.refundItemsRepo.save(processedItems);
-
-        await this.refundItemsRepo.delete({ refundId: pendingRefund.id });
-
-        const remainingPendingItems = remainingPendingRequestedIds.map(
-          (attendeeId) =>
-            this.refundItemsRepo.create({
+          const processedItems = normalizedAttendeeIds.map((attendeeId) =>
+            refundItemsRepo.create({
               refundId: pendingRefund.id,
               attendeeId,
-              refundAmount:
-                pendingRequestedAmountMap.get(attendeeId) ??
-                this.toMoneyString(this.toMoney(reservation.pricePerSeat)),
-              status: WorkshopRefundItemStatus.PENDING,
+              refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
+              status: WorkshopRefundItemStatus.REFUNDED,
             }),
+          );
+
+          await refundItemsRepo.save(processedItems);
+          processedRefundId = pendingRefund.id;
+        } else {
+          const processedRefund = await refundsRepo.save(
+            refundsRepo.create({
+              workshopId,
+              reservationId: dto.reservationId,
+              userId: pendingRefund.userId,
+              processedByAdminId: adminId,
+              refundAmount: dto.refundAmount.toString(),
+              reason: pendingRefund.reason,
+              adjustmentNote: dto.adjustmentNote,
+              paymentGateway: dto.paymentGateway,
+              transactionId: dto.transactionId,
+              status: WorkshopRefundStatus.PROCESSED,
+              processedAt,
+            }),
+          );
+
+          processedRefundId = processedRefund.id;
+
+          const processedItems = normalizedAttendeeIds.map((attendeeId) =>
+            refundItemsRepo.create({
+              refundId: processedRefund.id,
+              attendeeId,
+              refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
+              status: WorkshopRefundItemStatus.REFUNDED,
+            }),
+          );
+
+          await refundItemsRepo.save(processedItems);
+
+          await refundItemsRepo.delete({ refundId: pendingRefund.id });
+
+          const remainingPendingItems = remainingPendingRequestedIds.map(
+            (attendeeId) =>
+              refundItemsRepo.create({
+                refundId: pendingRefund.id,
+                attendeeId,
+                refundAmount:
+                  pendingRequestedAmountMap.get(attendeeId) ??
+                  this.toMoneyString(this.toMoney(reservation.pricePerSeat)),
+                status: WorkshopRefundItemStatus.PENDING,
+              }),
+          );
+
+          await refundItemsRepo.save(remainingPendingItems);
+
+          const remainingPendingAmount = remainingPendingItems.reduce(
+            (sum, item) => sum + this.toMoney(item.refundAmount),
+            0,
+          );
+
+          await refundsRepo.update(pendingRefund.id, {
+            refundAmount: this.toMoneyString(remainingPendingAmount),
+            status: WorkshopRefundStatus.PENDING,
+          });
+        }
+      } else {
+        const processedRefund = await refundsRepo.save(
+          refundsRepo.create({
+            workshopId,
+            reservationId: dto.reservationId,
+            processedByAdminId: adminId,
+            refundAmount: dto.refundAmount.toString(),
+            adjustmentNote: dto.adjustmentNote,
+            paymentGateway: dto.paymentGateway,
+            transactionId: dto.transactionId,
+            status: WorkshopRefundStatus.PROCESSED,
+            processedAt,
+          }),
         );
 
-        await this.refundItemsRepo.save(remainingPendingItems);
+        processedRefundId = processedRefund.id;
+        responseRequestId = processedRefund.requestId ?? null;
 
-        const remainingPendingAmount = remainingPendingItems.reduce(
-          (sum, item) => sum + this.toMoney(item.refundAmount),
-          0,
+        const processedItems = normalizedAttendeeIds.map((attendeeId) =>
+          refundItemsRepo.create({
+            refundId: processedRefund.id,
+            attendeeId,
+            refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
+            status: WorkshopRefundItemStatus.REFUNDED,
+          }),
         );
 
-        pendingRefund.refundAmount = this.toMoneyString(remainingPendingAmount);
-        pendingRefund.status = WorkshopRefundStatus.PENDING;
-        await this.refundsRepo.save(pendingRefund);
+        await refundItemsRepo.save(processedItems);
       }
-    } else {
-      savedRefund = await this.refundsRepo.save(
-        this.refundsRepo.create({
-          workshopId,
+
+      const allRefundedIds = new Set([
+        ...Array.from(alreadyRefundedIds),
+        ...normalizedAttendeeIds,
+      ]);
+
+      const refundedCount = allRefundedIds.size;
+      const remainingActiveMembers = (reservation.attendees ?? []).filter(
+        (attendee) => !allRefundedIds.has(attendee.id),
+      );
+
+      const pendingCount = await refundsRepo.count({
+        where: {
           reservationId: dto.reservationId,
-          processedByAdminId: adminId,
-          refundAmount: dto.refundAmount.toString(),
-          adjustmentNote: dto.adjustmentNote,
+          status: WorkshopRefundStatus.PENDING,
+        },
+      });
+
+      const hasPendingRequest = pendingCount > 0;
+
+      await reservationsRepo.update(reservation.id, {
+        numberOfSeats: remainingActiveMembers.length,
+        status:
+          remainingActiveMembers.length === 0
+            ? ReservationStatus.CANCELLED
+            : ReservationStatus.CONFIRMED,
+        bookingType,
+        refundRequestStatus: hasPendingRequest,
+      } as any);
+
+      const overallStatus = this.getEnrollmentRefundStatus(
+        originalGroupSize,
+        refundedCount,
+        hasPendingRequest,
+      );
+
+      const finalRefundType =
+        overallStatus === 'REFUNDED'
+          ? WorkshopRefundType.FULL
+          : WorkshopRefundType.PARTIAL;
+
+      await refundsRepo.update(processedRefundId, {
+        refundType: finalRefundType,
+      });
+
+      const finalProcessedRefund = await refundsRepo.findOne({
+        where: { id: processedRefundId },
+        select: ['id', 'requestId', 'processedAt', 'refundType'],
+      });
+
+      return {
+        message: 'Refund status updated successfully',
+        data: {
+          refundId: finalProcessedRefund?.id ?? processedRefundId,
+          requestId: responseRequestId,
+          workshopId,
+          reservationId: reservation.id,
+          bookingType,
+          bookingOwnerName:
+            reservation.bookerFullName ??
+            reservation.attendees?.[0]?.fullName ??
+            'Unknown',
+          originalGroupSize,
+          processedMemberCount: normalizedAttendeeIds.length,
+          remainingEnrolledCount: remainingActiveMembers.length,
+          refundedAmount: dto.refundAmount,
+          refundType: finalProcessedRefund?.refundType ?? finalRefundType,
+          enrollmentStatus: overallStatus,
+          refundRequestStatus: hasPendingRequest,
+          reservationLifecycleStatus:
+            remainingActiveMembers.length === 0
+              ? ReservationStatus.CANCELLED
+              : ReservationStatus.CONFIRMED,
           paymentGateway: dto.paymentGateway,
           transactionId: dto.transactionId,
-          status: WorkshopRefundStatus.PROCESSED,
-          processedAt,
-        }),
-      );
-
-      const processedItems = normalizedAttendeeIds.map((attendeeId) =>
-        this.refundItemsRepo.create({
-          refundId: savedRefund.id,
-          attendeeId,
-          refundAmount: this.toMoneyString(perAttendeeProcessedAmount),
-          status: WorkshopRefundItemStatus.REFUNDED,
-        }),
-      );
-
-      await this.refundItemsRepo.save(processedItems);
-    }
-
-    const allRefundedIds = new Set([
-      ...Array.from(alreadyRefundedIds),
-      ...normalizedAttendeeIds,
-    ]);
-
-    const refundedCount = allRefundedIds.size;
-    const remainingActiveMembers = (reservation.attendees ?? []).filter(
-      (attendee) => !allRefundedIds.has(attendee.id),
-    );
-
-    reservation.numberOfSeats = remainingActiveMembers.length;
-    reservation.status =
-      remainingActiveMembers.length === 0
-        ? ReservationStatus.CANCELLED
-        : ReservationStatus.CONFIRMED;
-    reservation.bookingType = bookingType;
-
-    await this.reservationsRepo.save(reservation);
-
-    const hasPendingRequest = await this.syncReservationRefundRequestStatus(
-      reservation.id,
-    );
-
-    const overallStatus = this.getEnrollmentRefundStatus(
-      originalGroupSize,
-      refundedCount,
-      hasPendingRequest,
-    );
-
-    savedRefund.refundType =
-      overallStatus === 'REFUNDED'
-        ? WorkshopRefundType.FULL
-        : WorkshopRefundType.PARTIAL;
-    await this.refundsRepo.save(savedRefund);
-
-    return {
-      message: 'Refund status updated successfully',
-      data: {
-        refundId: savedRefund.id,
-        requestId: pendingRefund?.requestId ?? savedRefund.requestId ?? null,
-        workshopId,
-        reservationId: reservation.id,
-        bookingType,
-        bookingOwnerName:
-          reservation.bookerFullName ??
-          reservation.attendees?.[0]?.fullName ??
-          'Unknown',
-        originalGroupSize,
-        processedMemberCount: normalizedAttendeeIds.length,
-        remainingEnrolledCount: remainingActiveMembers.length,
-        refundedAmount: dto.refundAmount,
-        refundType: savedRefund.refundType,
-        enrollmentStatus: overallStatus,
-        refundRequestStatus: hasPendingRequest,
-        reservationLifecycleStatus: reservation.status,
-        paymentGateway: dto.paymentGateway,
-        transactionId: dto.transactionId,
-        emailNotificationSent: false,
-        processedAt: savedRefund.processedAt,
-      },
-    };
+          emailNotificationSent: false,
+          processedAt: finalProcessedRefund?.processedAt ?? processedAt,
+        },
+      };
+    });
   }
 
   // ── 1. SUMMARY METRICS API (Dashboard Cards) ──
