@@ -1,19 +1,23 @@
 import {
-  ArrayMinSize,
+  ArrayNotEmpty,
+  ArrayUnique,
   IsArray,
-  IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  MaxLength,
+  Min,
 } from 'class-validator';
 
 export class ConfirmWorkshopRefundDto {
-  @IsUUID()
+  @IsUUID('4')
   reservationId: string;
 
   @IsArray()
-  @ArrayMinSize(1)
+  @ArrayNotEmpty()
+  @ArrayUnique()
   @IsUUID('4', { each: true })
   attendeeIds: string[];
 
@@ -25,13 +29,16 @@ export class ConfirmWorkshopRefundDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   adjustmentNote?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  paymentGateway: string;
+  @MaxLength(120)
+  paymentGateway?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  transactionId: string;
+  @MaxLength(255)
+  transactionId?: string;
 }
