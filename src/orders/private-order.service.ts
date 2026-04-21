@@ -275,7 +275,7 @@ export class PrivateOrderService {
     let currentStepIndex = 0; // Ordered
     let statusLabel = 'Order Received';
 
-    if (statusStr === 'PROCESSING' || statusStr === 'UNFULFILLED') {
+    if (statusStr === 'PROCESSING') {
       currentStepIndex = 1;
       statusLabel = 'Processing Your Order';
     } else if (statusStr === 'SHIPPED') {
@@ -307,9 +307,9 @@ export class PrivateOrderService {
         key: 'processing',
         label: 'Processing',
         date:
-          currentStepIndex >= 1
-            ? formatDt(processingDate || orderedDate)
-            : 'NEXT UP',
+          currentStepIndex >= 1 && processingDate
+            ? formatDt(processingDate)
+            : 'PENDING',
       },
       {
         key: 'shipped',
