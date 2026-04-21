@@ -18,6 +18,7 @@ import { CreateSubscriberNoteDto } from './dto/create-subscriber-note.dto';
 import { UpdateSubscriberProfileDto } from './dto/update-subscriber-profile.dto';
 import { ListSubscribersAdvancedQueryDto } from './dto/list-subscribers-advanced-query.dto';
 import { PublicSubscribeDto } from './dto/public-subscribe.dto';
+import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
 
 @Injectable()
 export class SubscribersService {
@@ -28,6 +29,8 @@ export class SubscribersService {
     private readonly deliveryRecipientRepo: Repository<NewsletterDeliveryRecipient>,
     @InjectRepository(NewsletterSubscriberNote)
     private readonly subscriberNoteRepo: Repository<NewsletterSubscriberNote>,
+    @InjectRepository(NewsletterBroadcast)
+    private readonly broadcastRepo: Repository<NewsletterBroadcast>,
     private readonly auditService: NewsletterAuditService,
   ) {}
 
@@ -530,10 +533,14 @@ export class SubscribersService {
       take: limit,
     });
 
-    const broadcastIds = [...new Set(rows.map((r) => r.broadcastId))];
+    const broadcastIds = [
+      ...new Set(rows.map((r) => r.broadcastId).filter(Boolean)),
+    ];
+
     const broadcasts = broadcastIds.length
-      ? await (this as any).broadcastRepo.findBy({ id: In(broadcastIds) })
+      ? await this.broadcastRepo.findBy({ id: In(broadcastIds) as any })
       : [];
+
     const broadcastMap = new Map(broadcasts.map((b: any) => [b.id, b]));
 
     return {

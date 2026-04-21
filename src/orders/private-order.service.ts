@@ -210,6 +210,7 @@ export class PrivateOrderService {
       if (displayStatus === 'processing') displayStatus = 'processing';
       if (displayStatus === 'shipped') displayStatus = 'shipped';
       if (displayStatus === 'received') displayStatus = 'delivered';
+      if (displayStatus === 'closed') displayStatus = 'cancelled';
 
       return {
         id: order.id,
@@ -284,6 +285,9 @@ export class PrivateOrderService {
     } else if (statusStr === 'RECEIVED') {
       currentStepIndex = 3;
       statusLabel = 'Delivered';
+    } else if (statusStr === 'CLOSED') {
+      currentStepIndex = 0;
+      statusLabel = 'Order Cancelled';
     }
 
     // ✅ FIX: Use the exact TimelineEventType enum values to get the dates

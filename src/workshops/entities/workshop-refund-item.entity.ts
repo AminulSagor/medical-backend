@@ -12,6 +12,7 @@ import { WorkshopRefund } from './workshop-refund.entity';
 import { WorkshopAttendee } from './workshop-attendee.entity';
 
 export enum WorkshopRefundItemStatus {
+  PENDING = 'PENDING',
   REFUNDED = 'REFUNDED',
   PARTIAL_REFUNDED = 'PARTIAL_REFUNDED',
 }
