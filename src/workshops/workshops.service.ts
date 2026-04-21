@@ -1633,7 +1633,16 @@ export class WorkshopsService {
     // ✅ FIXED: Apply filter BEFORE pagination
     let filteredData = transformedData;
     if (query.hasAvailableSeats === 'true') {
-      filteredData = transformedData.filter((w) => w.availableSeats > 0);
+      const now = new Date();
+
+      filteredData = transformedData.filter((w) => {
+        const hasSeats = w.availableSeats > 0;
+        const isUpcomingWorkshop = !!w.date && w.date >= todayStr;
+        const hasValidRegistrationDeadline =
+          !w.registrationDeadline || new Date(w.registrationDeadline) >= now;
+
+        return hasSeats && isUpcomingWorkshop && hasValidRegistrationDeadline;
+      });
     } else if (query.hasAvailableSeats === 'false') {
       filteredData = transformedData.filter((w) => w.availableSeats <= 0);
     }
