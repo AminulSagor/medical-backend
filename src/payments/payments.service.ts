@@ -247,6 +247,70 @@ export class PaymentsService {
     await this.usersRepo.save(user);
   }
 
+  private getProductStockQuantity(product: Product): number {
+    const stock = Number((product as any).stockQuantity ?? 0);
+    return Number.isFinite(stock) && stock > 0 ? stock : 0;
+  }
+
+  private ensureProductHasEnoughStock(
+    product: Product,
+    requestedQuantity: number,
+  ) {
+    if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
+      throw new BadRequestException(
+        `Invalid quantity requested for product ${product.id}`,
+      );
+    }
+
+    const availableStock = this.getProductStockQuantity(product);
+
+    if (availableStock < requestedQuantity) {
+      throw new BadRequestException(
+        `${product.name} does not have enough stock. Available: ${availableStock}, requested: ${requestedQuantity}`,
+      );
+    }
+  }
+
+  private async validateProductStockFromSummary(
+    summary: ProductCalculatedSummary,
+  ): Promise<void> {
+    if (!summary.items || summary.items.length === 0) {
+      throw new BadRequestException('At least one cart item is required');
+    }
+
+    const mergedQtyByProductId = new Map<string, number>();
+
+    for (const item of summary.items) {
+      mergedQtyByProductId.set(
+        item.productId,
+        (mergedQtyByProductId.get(item.productId) ?? 0) +
+          Number(item.quantity ?? 0),
+      );
+    }
+
+    const uniqueProductIds = [...mergedQtyByProductId.keys()];
+    const products = await this.productsRepo.find({
+      where: uniqueProductIds.map((id) => ({ id, isActive: true })),
+    });
+
+    if (products.length !== uniqueProductIds.length) {
+      throw new BadRequestException('Some products are invalid or inactive');
+    }
+
+    const productMap = new Map(
+      products.map((product) => [product.id, product]),
+    );
+
+    for (const [productId, quantity] of mergedQtyByProductId.entries()) {
+      const product = productMap.get(productId);
+      if (!product) {
+        throw new BadRequestException(`Product not found: ${productId}`);
+      }
+
+      this.ensureProductHasEnoughStock(product, quantity);
+    }
+  }
+
   private async buildProductSummary(
     items: CheckoutSessionItemDto[],
   ): Promise<ProductCalculatedSummary> {
@@ -285,6 +349,8 @@ export class PaymentsService {
         }
 
         const quantity = mergedQtyByProductId.get(productId) ?? 0;
+        this.ensureProductHasEnoughStock(product, quantity);
+
         const unitPrice = this.resolveProductUnitPrice(product);
         const lineTotal = unitPrice * quantity;
         subtotal += lineTotal;
@@ -545,6 +611,8 @@ export class PaymentsService {
       );
     }
 
+    await this.validateProductStockFromSummary(summary);
+
     const incomingShipping = dto.shippingAddress
       ? this.normalizeShippingAddress(dto.shippingAddress)
       : null;
@@ -748,7 +816,10 @@ export class PaymentsService {
     const reservedSeats = Number(reservedSeatsResult?.total || 0);
     const availableSeats = workshop.capacity - reservedSeats;
 
-    if (availableSeats < (orderSummary.attendees?.length || orderSummary.numberOfSeats)) {
+    if (
+      availableSeats <
+      (orderSummary.attendees?.length || orderSummary.numberOfSeats)
+    ) {
       throw new BadRequestException(
         'Not enough seats available for this workshop',
       );
@@ -763,7 +834,8 @@ export class PaymentsService {
       throw new BadRequestException('Invalid order summary amount');
     }
 
-    const numberOfAttendees = orderSummary.attendees?.length || orderSummary.numberOfSeats || 1;
+    const numberOfAttendees =
+      orderSummary.attendees?.length || orderSummary.numberOfSeats || 1;
     const pricePerSeat = Number(orderSummary.pricePerSeat);
     const totalPrice = Number(orderSummary.totalPrice);
 
@@ -1065,78 +1137,147 @@ export class PaymentsService {
     }
 
     const orderNumber = await this.generateOrderNumber();
+    const orderSummaryId = metadata.orderSummaryId ?? payment.domainRefId;
 
-    const order = this.ordersRepo.create({
-      orderNumber,
-      type: OrderType.PRODUCT,
-      customerName:
-        shippingAddress.fullName || user.fullLegalName || 'Guest Customer',
-      customerEmail: user.medicalEmail?.trim() || `user-${user.id}@checkout.local`,
-      customerPhone: user.phoneNumber,
-      shippingAddressLine1: shippingAddress.addressLine1,
-      shippingAddressLine2: shippingAddress.addressLine2,
-      shippingCity: shippingAddress.city,
-      shippingState: shippingAddress.state,
-      shippingPostalCode: shippingAddress.zipCode,
-      shippingCountry: shippingAddress.country || 'US',
-      subtotal: String(orderSummary.subtotal),
-      shippingAmount: String(orderSummary.estimatedShipping),
-      taxAmount: String(orderSummary.estimatedTax),
-      grandTotal: String(orderSummary.orderTotal),
-      paymentStatus: PaymentStatus.PAID,
-      fulfillmentStatus: FulfillmentStatus.UNFULFILLED,
-      items: items.map((item: any) => ({
-        productId: item.productId,
-        productName: item.name,
-        sku: item.sku || undefined,
-        images: item.photo ? [item.photo] : [],
-        unitPrice: item.unitPrice,
-        quantity: item.quantity,
-        total: item.lineTotal,
-      })) as any,
-      timeline: [
-        {
-          eventType: TimelineEventType.ORDER_PLACED,
-          title: 'Order Placed',
-        },
-        {
-          eventType: TimelineEventType.PAYMENT_AUTHORIZED,
-          title: 'Payment Authorized',
-          description:
-            typeof session.payment_intent === 'string'
-              ? `Payment intent: ${session.payment_intent}`
-              : undefined,
-        },
-      ] as any,
-    } as any);
+    const savedOrderId = await this.productsRepo.manager.transaction(
+      async (manager) => {
+        const mergedQtyByProductId = new Map<string, number>();
 
-    const savedOrder = await this.ordersRepo.save(order as any);
+        for (const item of items) {
+          if (!item?.productId) {
+            continue;
+          }
+
+          mergedQtyByProductId.set(
+            item.productId,
+            (mergedQtyByProductId.get(item.productId) ?? 0) +
+              Number(item.quantity ?? 0),
+          );
+        }
+
+        const uniqueProductIds = [...mergedQtyByProductId.keys()];
+        if (uniqueProductIds.length === 0) {
+          throw new BadRequestException(
+            'No valid product items found for product finalization',
+          );
+        }
+
+        const lockedProducts = await manager
+          .getRepository(Product)
+          .createQueryBuilder('product')
+          .where('product.id IN (:...productIds)', {
+            productIds: uniqueProductIds,
+          })
+          .andWhere('product.isActive = :isActive', { isActive: true })
+          .setLock('pessimistic_write')
+          .getMany();
+
+        if (lockedProducts.length !== uniqueProductIds.length) {
+          throw new BadRequestException(
+            'Some products are invalid or inactive',
+          );
+        }
+
+        const productMap = new Map(
+          lockedProducts.map((product) => [product.id, product]),
+        );
+
+        for (const [
+          productId,
+          requestedQuantity,
+        ] of mergedQtyByProductId.entries()) {
+          const product = productMap.get(productId);
+          if (!product) {
+            throw new BadRequestException(`Product not found: ${productId}`);
+          }
+
+          this.ensureProductHasEnoughStock(product, requestedQuantity);
+          (product as any).stockQuantity =
+            this.getProductStockQuantity(product) - requestedQuantity;
+        }
+
+        await manager.getRepository(Product).save(lockedProducts);
+
+        const order = manager.getRepository(Order).create({
+          orderNumber,
+          type: OrderType.PRODUCT,
+          customerName:
+            shippingAddress.fullName || user.fullLegalName || 'Guest Customer',
+          customerEmail:
+            user.medicalEmail?.trim() || `user-${user.id}@checkout.local`,
+          customerPhone: user.phoneNumber,
+          shippingAddressLine1: shippingAddress.addressLine1,
+          shippingAddressLine2: shippingAddress.addressLine2,
+          shippingCity: shippingAddress.city,
+          shippingState: shippingAddress.state,
+          shippingPostalCode: shippingAddress.zipCode,
+          shippingCountry: shippingAddress.country || 'US',
+          subtotal: String(orderSummary.subtotal),
+          shippingAmount: String(orderSummary.estimatedShipping),
+          taxAmount: String(orderSummary.estimatedTax),
+          grandTotal: String(orderSummary.orderTotal),
+          paymentStatus: PaymentStatus.PAID,
+          fulfillmentStatus: FulfillmentStatus.UNFULFILLED,
+          items: items.map((item: any) => ({
+            productId: item.productId,
+            productName: item.name,
+            sku: item.sku || undefined,
+            images: item.photo ? [item.photo] : [],
+            unitPrice: item.unitPrice,
+            quantity: item.quantity,
+            total: item.lineTotal,
+          })) as any,
+          timeline: [
+            {
+              eventType: TimelineEventType.ORDER_PLACED,
+              title: 'Order Placed',
+            },
+            {
+              eventType: TimelineEventType.PAYMENT_AUTHORIZED,
+              title: 'Payment Authorized',
+              description:
+                typeof session.payment_intent === 'string'
+                  ? `Payment intent: ${session.payment_intent}`
+                  : undefined,
+            },
+          ] as any,
+        } as any);
+
+        const savedOrder = await manager
+          .getRepository(Order)
+          .save(order as any);
+
+        if (orderSummaryId && orderSummaryId !== 'product_checkout') {
+          const summary = await manager
+            .getRepository(ProductOrderSummary)
+            .findOne({
+              where: { id: orderSummaryId, userId: payment.userId },
+            });
+
+          if (
+            summary &&
+            summary.status !== ProductOrderSummaryStatus.COMPLETED
+          ) {
+            summary.status = ProductOrderSummaryStatus.COMPLETED;
+            summary.completedAt = new Date();
+            await manager.getRepository(ProductOrderSummary).save(summary);
+          }
+        }
+
+        return (savedOrder as any).id;
+      },
+    );
 
     try {
       await this.cartService.clearCart(user.id);
     } catch (cartError) {
-      // We log this but don't throw an error, because the payment and order were successful.
-      // Failing to clear the cart shouldn't crash the webhook.
       console.error(
         `Failed to clear cart for user ${user.id} after order ${orderNumber}:`,
         cartError,
       );
     }
 
-    const orderSummaryId = metadata.orderSummaryId ?? payment.domainRefId;
-    if (orderSummaryId && orderSummaryId !== 'product_checkout') {
-      const summary = await this.productOrderSummariesRepo.findOne({
-        where: { id: orderSummaryId, userId: payment.userId },
-      });
-
-      if (summary && summary.status !== ProductOrderSummaryStatus.COMPLETED) {
-        summary.status = ProductOrderSummaryStatus.COMPLETED;
-        summary.completedAt = new Date();
-        await this.productOrderSummariesRepo.save(summary);
-      }
-    }
-
-    return (savedOrder as any).id;
+    return savedOrderId;
   }
 
   private async finalizeWorkshopPayment(
@@ -1193,13 +1334,10 @@ export class PaymentsService {
         const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
         if (stripeSecretKey) {
           const stripe = Stripe(stripeSecretKey);
-          const stripeSession = await stripe.checkout.sessions.retrieve(
-            sessionId,
-          );
+          const stripeSession =
+            await stripe.checkout.sessions.retrieve(sessionId);
 
-          if (
-            stripeSession.payment_status === 'paid'
-          ) {
+          if (stripeSession.payment_status === 'paid') {
             payment.providerPaymentIntentId =
               typeof stripeSession.payment_intent === 'string'
                 ? stripeSession.payment_intent
@@ -1218,8 +1356,7 @@ export class PaymentsService {
               }
 
               if (payment.domainType === PaymentDomainType.WORKSHOP) {
-                const summaryId =
-                  await this.finalizeWorkshopPayment(payment);
+                const summaryId = await this.finalizeWorkshopPayment(payment);
                 payment.finalizedRefId = summaryId;
               }
 

@@ -315,12 +315,14 @@ export class OrdersService {
       case FulfillmentStatus.SHIPPED:
         return 'shipped';
       case FulfillmentStatus.RECEIVED:
-      case FulfillmentStatus.CLOSED:
         return 'delivered';
+      case FulfillmentStatus.CLOSED:
+        return 'cancelled';
       case FulfillmentStatus.PROCESSING:
+        return 'processing';
       case FulfillmentStatus.UNFULFILLED:
       default:
-        return 'processing';
+        return 'ordered';
     }
   }
 

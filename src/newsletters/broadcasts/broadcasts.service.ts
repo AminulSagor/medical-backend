@@ -1607,13 +1607,12 @@ export class BroadcastsService {
     const qb = this.broadcastRepo
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.articleLink', 'al')
+      .leftJoinAndSelect('b.customContent', 'cc')
       .leftJoinAndSelect('b.attachments', 'att')
-      // Removed .leftJoinAndSelect('b.broadcastSegments', 'bs')
       .where('b.channelType = :channelType', {
         channelType: NewsletterChannelType.GENERAL,
       });
 
-    // 1. Filter by Tab (Queue, Drafts, History)
     if (tab === 'queue') {
       qb.andWhere('b.status IN (:...statuses)', {
         statuses: [
@@ -1638,7 +1637,6 @@ export class BroadcastsService {
       });
     }
 
-    // 2. Filter by Broadcast Type (Content Type)
     if (query.contentTypes) {
       qb.andWhere('b.contentType = :contentType', {
         contentType: query.contentTypes,
@@ -1651,18 +1649,14 @@ export class BroadcastsService {
       });
     }
 
-    // 3. Search by Title, Author, or Keyword
     if (query.search?.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
-      // COALESCE shouldn't be inside LOWER if the result is a boolean/null, but it's fine for text.
-      // Let's use standard TypeORM parameter binding:
       qb.andWhere(
         '(LOWER(b.subjectLine) LIKE :search OR LOWER(b.internalName) LIKE :search OR LOWER(al.sourceTitleSnapshot) LIKE :search OR LOWER(al.sourceAuthorSnapshot) LIKE :search)',
-        { search: s }, // Changed parameter name to match binding
+        { search: s },
       );
     }
 
-    // 4. Sorting
     const sortBy =
       query.sortBy ??
       (tab === 'drafts'
@@ -1670,6 +1664,7 @@ export class BroadcastsService {
         : tab === 'history'
           ? 'sentDate'
           : 'scheduledDate');
+
     const sortOrder = query.sortOrder ?? (tab === 'history' ? 'DESC' : 'ASC');
 
     if (sortBy === 'scheduledDate') qb.orderBy('b.scheduledAt', sortOrder);
@@ -1681,17 +1676,6 @@ export class BroadcastsService {
     qb.skip((page - 1) * limit).take(limit);
 
     const [items, total] = await qb.getManyAndCount();
-
-    // Map rows
-    const broadcastIds = items.map((x) => x.id);
-    const queueOrders = broadcastIds.length
-      ? await this.queueOrderRepo.find({
-          where: { broadcastId: In(broadcastIds) },
-        })
-      : [];
-    const queueOrderMap = new Map(
-      queueOrders.map((q) => [q.broadcastId, q.sequenceIndex]),
-    );
 
     const rows = items.map((b: any) => {
       const typeLabel =
@@ -1720,7 +1704,6 @@ export class BroadcastsService {
 
       return {
         id: b.id,
-        sequence: tab === 'queue' ? (queueOrderMap.get(b.id) ?? null) : null,
         scheduledDate: b.scheduledAt,
         sentDate: b.sentAt,
         lastModified: b.updatedAt,
