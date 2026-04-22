@@ -786,185 +786,6 @@ export class BroadcastsService {
     };
   }
 
-  // async schedule(
-  //   adminUserId: string,
-  //   broadcastId: string,
-  //   dto: ScheduleBroadcastDto,
-  // ): Promise<Record<string, unknown>> {
-  //   const broadcast = await this.broadcastRepo.findOne({
-  //     where: { id: broadcastId, channelType: NewsletterChannelType.GENERAL },
-  //     relations: ['customContent', 'articleLink', 'broadcastSegments'],
-  //   });
-
-  //   if (!broadcast)
-  //     throw new NotFoundException('General newsletter broadcast not found');
-
-  //   if (
-  //     ![
-  //       NewsletterBroadcastStatus.DRAFT,
-  //       NewsletterBroadcastStatus.READY,
-  //       NewsletterBroadcastStatus.REVIEW_PENDING,
-  //     ].includes(broadcast.status)
-  //   ) {
-  //     throw new UnprocessableEntityException(
-  //       'Only draft/ready broadcasts can be scheduled',
-  //     );
-  //   }
-
-  //   if (!broadcast.subjectLine?.trim()) {
-  //     throw new UnprocessableEntityException(
-  //       'subjectLine is required before scheduling',
-  //     );
-  //   }
-
-  //   if (!broadcast.broadcastSegments?.length) {
-  //     throw new UnprocessableEntityException(
-  //       'At least one audience segment is required before scheduling',
-  //     );
-  //   }
-
-  //   if (
-  //     broadcast.contentType === NewsletterContentType.CUSTOM_MESSAGE &&
-  //     !broadcast.customContent?.messageBodyHtml?.trim()
-  //   ) {
-  //     throw new UnprocessableEntityException(
-  //       'Custom message content is required before scheduling',
-  //     );
-  //   }
-
-  //   if (
-  //     broadcast.contentType === NewsletterContentType.ARTICLE_LINK &&
-  //     !broadcast.articleLink?.sourceRefId
-  //   ) {
-  //     throw new UnprocessableEntityException(
-  //       'Article source is required before scheduling',
-  //     );
-  //   }
-
-  //   const scheduledAt = new Date(dto.scheduledAtUtc);
-  //   if (Number.isNaN(scheduledAt.getTime()))
-  //     throw new BadRequestException('scheduledAtUtc is invalid');
-  //   if (scheduledAt <= new Date())
-  //     throw new UnprocessableEntityException(
-  //       'scheduledAtUtc must be in the future',
-  //     );
-
-  //   const cadence = await this.cadenceRepo.findOne({
-  //     where: { channelType: NewsletterChannelType.GENERAL },
-  //   });
-  //   if (!cadence) {
-  //     throw new NotFoundException(
-  //       'General newsletter cadence settings not found',
-  //     );
-  //   }
-
-  //   // strict slot validation against cadence windows
-  //   const validSlots = buildCadenceSlots({
-  //     timezone: dto.timezone.trim(),
-  //     frequencyType: dto.frequencyType,
-  //     fromDate:
-  //       DateTime.fromJSDate(scheduledAt).minus({ days: 2 }).toISODate() ??
-  //       undefined,
-  //     toDate:
-  //       DateTime.fromJSDate(scheduledAt).plus({ days: 2 }).toISODate() ??
-  //       undefined,
-  //     count: 20,
-  //     weekly: {
-  //       enabled: cadence.weeklyEnabled,
-  //       releaseDay: cadence.weeklyReleaseDay,
-  //       releaseTime: cadence.weeklyReleaseTime,
-  //     },
-  //     monthly: {
-  //       enabled: cadence.monthlyEnabled,
-  //       dayOfMonth: cadence.monthlyDayOfMonth,
-  //       releaseTime: cadence.monthlyReleaseTime,
-  //     },
-  //   });
-
-  //   const exactSlotMatch = validSlots.some(
-  //     (s) => s.scheduledAtUtc === scheduledAt.toISOString(),
-  //   );
-  //   if (!exactSlotMatch) {
-  //     throw new UnprocessableEntityException(
-  //       'scheduledAtUtc must match an available cadence slot for the selected frequency',
-  //     );
-  //   }
-
-  //   const collision = await this.broadcastRepo.findOne({
-  //     where: {
-  //       channelType: NewsletterChannelType.GENERAL,
-  //       status: NewsletterBroadcastStatus.SCHEDULED,
-  //       frequencyType: dto.frequencyType,
-  //       scheduledAt,
-  //     },
-  //   });
-
-  //   if (collision && collision.id !== broadcast.id) {
-  //     throw new ConflictException('Selected cadence slot is already booked');
-  //   }
-
-  //   const segmentIds = broadcast.broadcastSegments.map((x) => x.segmentId);
-  //   broadcast.estimatedRecipientsCount =
-  //     await this.audienceResolverService.estimateRecipientsBySegmentIds(
-  //       segmentIds,
-  //     );
-  //   if (broadcast.estimatedRecipientsCount < 1) {
-  //     throw new UnprocessableEntityException(
-  //       'No active recipients available for selected audience',
-  //     );
-  //   }
-
-  //   broadcast.frequencyType = dto.frequencyType;
-  //   broadcast.scheduledAt = scheduledAt;
-  //   broadcast.timezone = dto.timezone.trim();
-  //   broadcast.cadenceAnchorLabel = dto.cadenceAnchorLabel?.trim() || null;
-  //   broadcast.cadenceVersionAtScheduling = cadence.version;
-  //   broadcast.status = NewsletterBroadcastStatus.SCHEDULED;
-  //   broadcast.updatedByAdminId = adminUserId;
-
-  //   const saved = await this.broadcastRepo.save(broadcast);
-
-  //   await this.ensureQueueOrderExists(
-  //     adminUserId,
-  //     saved.id,
-  //     saved.frequencyType!,
-  //   );
-
-  //   await this.auditService.log({
-  //     entityType: 'BROADCAST',
-  //     entityId: saved.id,
-  //     action: 'SCHEDULE',
-  //     performedByAdminId: adminUserId,
-  //     meta: {
-  //       scheduledAtUtc: saved.scheduledAt?.toISOString() ?? null,
-  //       frequencyType: saved.frequencyType ?? null,
-  //     },
-  //   });
-
-  //   return {
-  //     message: 'Broadcast scheduled successfully',
-  //     id: saved.id,
-  //     subjectLine: saved.subjectLine,
-  //     status: saved.status,
-  //     scheduledAtUtc: saved.scheduledAt!.toISOString(),
-  //     estimatedRecipientsCount: saved.estimatedRecipientsCount,
-  //     successModal: {
-  //       title: 'Broadcast Scheduled Successfully',
-  //       summary: {
-  //         title: saved.subjectLine,
-  //         recipientsCount: saved.estimatedRecipientsCount,
-  //         scheduledAtUtc: saved.scheduledAt!.toISOString(),
-  //         scheduledAtDisplay: this.formatDateTimeLabel(
-  //           saved.scheduledAt,
-  //           saved.timezone,
-  //         ),
-  //         frequencyLabel: this.getFrequencyLabel(saved.frequencyType),
-  //       },
-  //       ctaLabel: 'Return to Dashboard',
-  //     },
-  //   };
-  // }
-
   private formatRemainingWindow(fromDate: Date, timezone = 'America/Chicago') {
     const now = DateTime.now().setZone(timezone);
     const target = DateTime.fromJSDate(fromDate, { zone: 'utc' }).setZone(
@@ -1677,6 +1498,43 @@ export class BroadcastsService {
 
     const [items, total] = await qb.getManyAndCount();
 
+    const blogPostIds = [
+      ...new Set(
+        items
+          .filter(
+            (b: any) =>
+              b.contentType === NewsletterContentType.ARTICLE_LINK &&
+              b.articleLink?.sourceRefId,
+          )
+          .map((b: any) => b.articleLink.sourceRefId),
+      ),
+    ];
+
+    const blogPostRows = blogPostIds.length
+      ? await this.dataSource
+          .createQueryBuilder()
+          .select('bp.id', 'id')
+          .addSelect('bp.readTimeMinutes', 'readTimeMinutes')
+          .addSelect('bp.readCount', 'readCount')
+          .from('blog_posts', 'bp')
+          .where('bp.id IN (:...blogPostIds)', { blogPostIds })
+          .getRawMany<{
+            id: string;
+            readTimeMinutes: string | number | null;
+            readCount: string | number | null;
+          }>()
+      : [];
+
+    const blogPostMap = new Map(
+      blogPostRows.map((row) => [
+        row.id,
+        {
+          readTimeMinutes: Number(row.readTimeMinutes ?? 0),
+          readCount: Number(row.readCount ?? 0),
+        },
+      ]),
+    );
+
     const rows = items.map((b: any) => {
       const typeLabel =
         b.contentType === NewsletterContentType.ARTICLE_LINK
@@ -1695,9 +1553,23 @@ export class BroadcastsService {
           ? (b.articleLink?.sourceAuthorSnapshot ?? null)
           : null;
 
+      const blogMeta =
+        b.contentType === NewsletterContentType.ARTICLE_LINK
+          ? blogPostMap.get(b.articleLink?.sourceRefId ?? '')
+          : null;
+
+      const snapshotReadMinutes = Number(
+        (b.articleLink as any)?.estimatedReadMinutesSnapshot ?? 0,
+      );
+      const blogReadMinutes = Number(blogMeta?.readTimeMinutes ?? 0);
+
       const estReadMinutes =
         b.contentType === NewsletterContentType.ARTICLE_LINK
-          ? ((b.articleLink as any)?.estimatedReadMinutesSnapshot ?? null)
+          ? snapshotReadMinutes > 0
+            ? snapshotReadMinutes
+            : blogReadMinutes > 0
+              ? blogReadMinutes
+              : null
           : this.estimateReadMinutesFromCustomHtml(
               (b.customContent as any)?.messageBodyHtml ?? '',
             );
