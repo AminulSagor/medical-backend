@@ -601,10 +601,8 @@ export class SubscribersService {
       .getOne();
 
     // ✅ PRODUCT ORDERS
-    // Explicitly select items because in many projects JSON columns may be hidden or skipped.
     const productOrders = await this.ordersRepo
       .createQueryBuilder('o')
-      .addSelect('o.items')
       .where('LOWER(o.customerEmail) = :email', { email: normalizedEmail })
       .orderBy('o.createdAt', 'DESC')
       .getMany();
