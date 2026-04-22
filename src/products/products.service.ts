@@ -615,24 +615,31 @@ export class ProductsService {
         .leftJoinAndSelect('p.details', 'details')
         .where('p.isActive = :isActive', { isActive: true });
 
+      const effectivePriceExpr = `
+      COALESCE(
+        NULLIF(CAST(p."offerPrice" AS DECIMAL), 0),
+        CAST(p."actualPrice" AS DECIMAL)
+      )
+    `;
+
       // Search filter
       if (query.search && query.search.trim()) {
         const s = `%${query.search.trim().toLowerCase()}%`;
         qb.andWhere(
           `(
-                      LOWER(p.name) LIKE :s
-                      OR LOWER(p.sku) LIKE :s
-                      OR LOWER(p.clinicalDescription) LIKE :s
-                  )`,
+          LOWER(p.name) LIKE :s
+          OR LOWER(p.sku) LIKE :s
+          OR LOWER(p.clinicalDescription) LIKE :s
+        )`,
           { s },
         );
       }
 
       // Category filter by IDs - validate UUIDs first
       if (query.categoryIds && query.categoryIds.length > 0) {
-        // UUID v4 regex pattern
         const uuidRegex =
           /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
         const validCategoryIds = query.categoryIds.filter((id) =>
           uuidRegex.test(id),
         );
@@ -642,7 +649,6 @@ export class ProductsService {
             categoryIds: validCategoryIds,
           });
         }
-        // If no valid UUIDs, the filter is simply ignored (returns all active products)
       }
 
       // Brand filter
@@ -652,31 +658,35 @@ export class ProductsService {
 
       // Price range filter
       if (query.minPrice) {
-        qb.andWhere('CAST(p.offerPrice AS DECIMAL) >= :minPrice', {
-          minPrice: query.minPrice,
+        qb.andWhere(`${effectivePriceExpr} >= :minPrice`, {
+          minPrice: Number(query.minPrice),
         });
       }
 
       if (query.maxPrice) {
-        qb.andWhere('CAST(p.offerPrice AS DECIMAL) <= :maxPrice', {
-          maxPrice: query.maxPrice,
+        qb.andWhere(`${effectivePriceExpr} <= :maxPrice`, {
+          maxPrice: Number(query.maxPrice),
         });
       }
 
       // Sorting
       switch (query.sortBy) {
         case 'price-asc':
-          qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'ASC');
+          qb.orderBy(effectivePriceExpr, 'ASC');
           break;
+
         case 'price-desc':
-          qb.orderBy('CAST(p.offerPrice AS DECIMAL)', 'DESC');
+          qb.orderBy(effectivePriceExpr, 'DESC');
           break;
+
         case 'name-asc':
           qb.orderBy('p.name', 'ASC');
           break;
+
         case 'name-desc':
           qb.orderBy('p.name', 'DESC');
           break;
+
         case 'newest':
         default:
           qb.orderBy('p.createdAt', 'DESC');
@@ -690,6 +700,7 @@ export class ProductsService {
       const categoryIds = [
         ...new Set(products.flatMap((p) => p.categoryId || [])),
       ];
+
       let categoryMap = new Map<string, string>();
 
       if (categoryIds.length > 0) {
@@ -733,7 +744,6 @@ export class ProductsService {
         throw error;
       }
 
-      // Return empty results instead of throwing error for invalid filters
       return {
         items: [],
         meta: {
