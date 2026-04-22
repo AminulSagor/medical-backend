@@ -6,6 +6,10 @@ import { WorkshopEnrollment } from 'src/workshops/entities/workshop-enrollment.e
 import { WorkshopOrderSummary } from 'src/workshops/entities/workshop-order-summary.entity';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
+import { Workshop } from 'src/workshops/entities/workshop.entity';
+import { BlogPost } from 'src/blog/entities/blog-post.entity';
+import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation.entity';
+import { PublicDashboardController } from './public-dashboard.controller';
 
 @Module({
   imports: [
@@ -14,9 +18,12 @@ import { DashboardService } from './dashboard.service';
       Product,
       WorkshopEnrollment,
       WorkshopOrderSummary,
+      Workshop,
+      BlogPost,
+      WorkshopReservation,
     ]),
   ],
-  controllers: [DashboardController],
+  controllers: [DashboardController, PublicDashboardController],
   providers: [DashboardService],
   exports: [DashboardService],
 })
