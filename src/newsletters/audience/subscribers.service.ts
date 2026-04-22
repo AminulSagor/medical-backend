@@ -19,6 +19,18 @@ import { UpdateSubscriberProfileDto } from './dto/update-subscriber-profile.dto'
 import { ListSubscribersAdvancedQueryDto } from './dto/list-subscribers-advanced-query.dto';
 import { PublicSubscribeDto } from './dto/public-subscribe.dto';
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
+import { User } from 'src/users/entities/user.entity';
+import { Order } from 'src/orders/entities/order.entity';
+import {
+  OrderSummaryStatus,
+  WorkshopOrderSummary,
+} from 'src/workshops/entities/workshop-order-summary.entity';
+import {
+  PaymentDomainType,
+  PaymentTransaction,
+  PaymentTransactionStatus,
+} from 'src/payments/entities/payment-transaction.entity';
+import { PaymentStatus } from 'src/common/enums/order.enums';
 
 @Injectable()
 export class SubscribersService {
@@ -31,6 +43,14 @@ export class SubscribersService {
     private readonly subscriberNoteRepo: Repository<NewsletterSubscriberNote>,
     @InjectRepository(NewsletterBroadcast)
     private readonly broadcastRepo: Repository<NewsletterBroadcast>,
+    @InjectRepository(User)
+    private readonly usersRepo: Repository<User>,
+    @InjectRepository(Order)
+    private readonly ordersRepo: Repository<Order>,
+    @InjectRepository(WorkshopOrderSummary)
+    private readonly workshopOrderSummariesRepo: Repository<WorkshopOrderSummary>,
+    @InjectRepository(PaymentTransaction)
+    private readonly paymentsRepo: Repository<PaymentTransaction>,
     private readonly auditService: NewsletterAuditService,
   ) {}
 
@@ -567,12 +587,188 @@ export class SubscribersService {
     const subscriber = await this.subscriberRepo.findOne({
       where: { id: subscriberId } as any,
     });
-    if (!subscriber) throw new NotFoundException('Subscriber not found');
+    if (!subscriber) {
+      throw new NotFoundException('Subscriber not found');
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const normalizedEmail = subscriber.email.trim().toLowerCase();
+
+    const user = await this.usersRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.medicalEmail) = :email', { email: normalizedEmail })
+      .getOne();
+
+    const productOrders = await this.ordersRepo
+      .createQueryBuilder('o')
+      .where('LOWER(o.customerEmail) = :email', { email: normalizedEmail })
+      .orderBy('o.createdAt', 'DESC')
+      .getMany();
+
+    const workshopSummaries = user
+      ? await this.workshopOrderSummariesRepo.find({
+          where: {
+            userId: user.id,
+            status: OrderSummaryStatus.COMPLETED as any,
+          } as any,
+          relations: ['workshop', 'attendees'],
+          order: { updatedAt: 'DESC' } as any,
+        })
+      : [];
+
+    const workshopPayments =
+      user && workshopSummaries.length > 0
+        ? await this.paymentsRepo.find({
+            where: workshopSummaries.map((summary) => ({
+              userId: user.id,
+              domainType: PaymentDomainType.WORKSHOP,
+              domainRefId: summary.id,
+              status: PaymentTransactionStatus.PAID,
+            })) as any,
+            order: { paidAt: 'DESC', createdAt: 'DESC' } as any,
+          })
+        : [];
+
+    const workshopPaymentMap = new Map<string, PaymentTransaction>();
+    for (const payment of workshopPayments) {
+      if (payment.domainRefId && !workshopPaymentMap.has(payment.domainRefId)) {
+        workshopPaymentMap.set(payment.domainRefId, payment);
+      }
+    }
+
+    const productItems = productOrders.map((order: any) => {
+      const orderItems = Array.isArray(order.items) ? order.items : [];
+      const firstItem = orderItems[0];
+      const itemDetails = firstItem?.productName
+        ? orderItems.length > 1
+          ? `${firstItem.productName} +${orderItems.length - 1} more`
+          : firstItem.productName
+        : 'Product Order';
+
+      const orderDate = order.createdAt ?? null;
+      const numericTotal = Number(order.grandTotal ?? 0);
+
+      return {
+        id: order.id,
+        source: 'PRODUCT_ORDER',
+        orderId: order.orderNumber ?? order.id,
+        displayOrderId: order.orderNumber
+          ? `#${order.orderNumber}`
+          : `#${order.id.slice(0, 8).toUpperCase()}`,
+        date: orderDate,
+        itemDetails,
+        type: 'PRODUCT',
+        total: numericTotal.toFixed(2),
+        paymentStatus: order.paymentStatus ?? PaymentStatus.PAID,
+        fulfillmentStatus: order.fulfillmentStatus ?? null,
+        invoice: {
+          view: true,
+          source: 'ORDER',
+          refId: order.id,
+          orderNumber: order.orderNumber ?? null,
+        },
+        customer: {
+          name: order.customerName ?? null,
+          email: order.customerEmail ?? null,
+          phone: order.customerPhone ?? null,
+        },
+        breakdown: {
+          subtotal: Number(order.subtotal ?? 0).toFixed(2),
+          shippingAmount: Number(order.shippingAmount ?? 0).toFixed(2),
+          taxAmount: Number(order.taxAmount ?? 0).toFixed(2),
+          grandTotal: numericTotal.toFixed(2),
+        },
+        items: orderItems.map((item: any) => ({
+          productId: item.productId ?? null,
+          productName: item.productName ?? item.name ?? null,
+          sku: item.sku ?? null,
+          quantity: Number(item.quantity ?? 0),
+          unitPrice: Number(item.unitPrice ?? 0).toFixed(2),
+          total: Number(item.total ?? 0).toFixed(2),
+          images: Array.isArray(item.images) ? item.images : [],
+        })),
+        rawDate: orderDate ? new Date(orderDate).getTime() : 0,
+      };
+    });
+
+    const workshopItems = workshopSummaries.map((summary: any) => {
+      const payment = workshopPaymentMap.get(summary.id);
+      const attendeesCount =
+        summary.attendees?.length || summary.numberOfSeats || 0;
+      const workshopTitle = summary.workshop?.title ?? 'Course';
+      const orderDate =
+        payment?.paidAt ?? summary.updatedAt ?? summary.createdAt ?? null;
+      const numericTotal = Number(summary.totalPrice ?? 0);
+
+      return {
+        id: summary.id,
+        source: 'WORKSHOP_ORDER_SUMMARY',
+        orderId: summary.id,
+        displayOrderId: `#${summary.id.slice(0, 8).toUpperCase()}`,
+        date: orderDate,
+        itemDetails: workshopTitle,
+        type: 'COURSE',
+        total: numericTotal.toFixed(2),
+        paymentStatus: 'PAID',
+        fulfillmentStatus: null,
+        invoice: {
+          view: true,
+          source: 'WORKSHOP_ORDER_SUMMARY',
+          refId: summary.id,
+          paymentId: payment?.id ?? null,
+        },
+        customer: {
+          name: subscriber.fullName ?? user?.fullLegalName ?? null,
+          email: subscriber.email,
+          phone: (user as any)?.phoneNumber ?? null,
+        },
+        breakdown: {
+          subtotal: numericTotal.toFixed(2),
+          shippingAmount: '0.00',
+          taxAmount: '0.00',
+          grandTotal: numericTotal.toFixed(2),
+        },
+        workshop: {
+          workshopId: summary.workshop?.id ?? null,
+          title: summary.workshop?.title ?? null,
+          numberOfAttendees: attendeesCount,
+          pricePerSeat: Number(summary.pricePerSeat ?? 0).toFixed(2),
+        },
+        attendees: (summary.attendees ?? []).map((attendee: any) => ({
+          id: attendee.id,
+          firstName: attendee.firstName ?? null,
+          lastName: attendee.lastName ?? null,
+          email: attendee.email ?? null,
+        })),
+        rawDate: orderDate ? new Date(orderDate).getTime() : 0,
+      };
+    });
+
+    const mergedItems = [...productItems, ...workshopItems].sort(
+      (a, b) => b.rawDate - a.rawDate,
+    );
+
+    const total = mergedItems.length;
+    const paginatedItems = mergedItems
+      .slice((page - 1) * limit, page * limit)
+      .map(({ rawDate, ...item }) => item);
 
     return {
-      items: [],
-      meta: { page: query.page ?? 1, limit: query.limit ?? 10, total: 0 },
-      integrationStatus: 'PENDING_ORDER_MODULE_ADAPTER',
+      message: 'Subscriber order history fetched successfully',
+      subscriber: {
+        id: subscriber.id,
+        fullName: subscriber.fullName ?? null,
+        email: subscriber.email,
+        linkedUserId: user?.id ?? null,
+      },
+      items: paginatedItems,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(Math.ceil(total / limit), 1),
+      },
     };
   }
 }

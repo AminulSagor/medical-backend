@@ -59,6 +59,11 @@ import { CourseAnnouncementsModule } from './course-announcements/course-announc
 import { TransmissionsModule } from './transmissions/transmissions.module';
 import { PublicSubscribersController } from './audience/public-subscribers.controller';
 
+import { User } from 'src/users/entities/user.entity';
+import { Order } from 'src/orders/entities/order.entity';
+import { WorkshopOrderSummary } from 'src/workshops/entities/workshop-order-summary.entity';
+import { PaymentTransaction } from 'src/payments/entities/payment-transaction.entity';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -92,6 +97,10 @@ import { PublicSubscribersController } from './audience/public-subscribers.contr
       NewsletterAuditLog,
 
       BlogPost,
+      User,
+      Order,
+      WorkshopOrderSummary,
+      PaymentTransaction,
     ]),
     CourseAnnouncementsModule,
     TransmissionsModule,
