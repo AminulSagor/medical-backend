@@ -566,14 +566,18 @@ export class SubscribersService {
     return {
       items: rows.map((r) => {
         const b: any = broadcastMap.get(r.broadcastId);
+
         return {
           deliveryRecipientId: r.id,
+          broadcastId: r.broadcastId,
           newsletterTitle: b?.subjectLine ?? 'Newsletter',
           sentDate: r.sentAt ?? b?.sentAt ?? null,
           status: r.deliveryStatus,
           openActivity: !!r.firstOpenedAt,
           clickActivity: !!r.firstClickedAt,
-          actions: { view: true },
+          actions: {
+            view: true,
+          },
         };
       }),
       meta: { page, limit, total },
