@@ -324,6 +324,7 @@ export class ProductsService {
       .select([
         'COUNT(*) AS all',
         `COUNT(*) FILTER (WHERE p.isActive = true) AS active`,
+        `COUNT(*) FILTER (WHERE p.isActive = false) AS draft`,
         `COUNT(*) FILTER (WHERE p.stockQuantity = 0) AS out_of_stock`,
         `COUNT(*) FILTER (WHERE p.stockQuantity > 0 AND p.stockQuantity <= p.lowStockAlert) AS low_stock`,
       ])
@@ -332,6 +333,10 @@ export class ProductsService {
     // --- tab filters ---
     if (query.tab === 'active') {
       qb.andWhere('p.isActive = :isActive', { isActive: true });
+    }
+
+    if (query.tab === 'draft') {
+      qb.andWhere('p.isActive = :isActive', { isActive: false });
     }
 
     if (query.tab === 'out_of_stock') {
@@ -402,6 +407,7 @@ export class ProductsService {
       tabsCount: {
         all: Number(countsRaw?.all ?? 0),
         active: Number(countsRaw?.active ?? 0),
+        draft: Number(countsRaw?.draft ?? 0),
         out_of_stock: Number(countsRaw?.out_of_stock ?? 0),
         low_stock: Number(countsRaw?.low_stock ?? 0),
       },

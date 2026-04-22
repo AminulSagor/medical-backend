@@ -71,14 +71,14 @@ export class WishlistService {
           productId: product.id,
           name: product.name,
           sku: product.sku,
+          productStatus: product.isActive,
           imageUrl: product.details?.images?.[0] || null,
           price: price.toFixed(2),
           actualPrice: Number(product.actualPrice).toFixed(2),
           offerPrice: product.offerPrice
             ? Number(product.offerPrice).toFixed(2)
             : null,
-          inStock:
-            product.stockQuantity > 0 || product.backorder,
+          inStock: product.stockQuantity > 0 || product.backorder,
           stockQuantity: product.stockQuantity,
           addedAt: item.createdAt,
         };
