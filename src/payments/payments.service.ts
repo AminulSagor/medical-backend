@@ -52,6 +52,8 @@ type ProductCalculatedItem = {
   quantity: number;
   unitPrice: number;
   lineTotal: number;
+  availableQuantity: number;
+  inStock: boolean;
 };
 
 type ProductCalculatedSummary = {
@@ -70,6 +72,8 @@ type ProductSummaryPayloadItem = {
   quantity: number;
   unitPrice: string;
   lineTotal: string;
+  availableQuantity: number;
+  inStock: boolean;
 };
 
 type ProductSummaryPayload = {
@@ -349,7 +353,8 @@ export class PaymentsService {
         }
 
         const quantity = mergedQtyByProductId.get(productId) ?? 0;
-        this.ensureProductHasEnoughStock(product, quantity);
+        const availableQuantity = Number(product.stockQuantity ?? 0);
+        const inStock = availableQuantity > 0;
 
         const unitPrice = this.resolveProductUnitPrice(product);
         const lineTotal = unitPrice * quantity;
@@ -363,6 +368,8 @@ export class PaymentsService {
           quantity,
           unitPrice,
           lineTotal,
+          availableQuantity,
+          inStock,
         };
       },
     );
@@ -392,6 +399,8 @@ export class PaymentsService {
         quantity: item.quantity,
         unitPrice: this.formatAmount(item.unitPrice),
         lineTotal: this.formatAmount(item.lineTotal),
+        availableQuantity: item.availableQuantity,
+        inStock: item.inStock,
       })),
       subtotal: this.formatAmount(summary.subtotal),
       estimatedShipping: this.formatAmount(summary.estimatedShipping),
@@ -412,6 +421,8 @@ export class PaymentsService {
         quantity: Number(item.quantity),
         unitPrice: Number(item.unitPrice),
         lineTotal: Number(item.lineTotal),
+        availableQuantity: Number((item as any).availableQuantity ?? 0),
+        inStock: Boolean((item as any).inStock ?? false),
       })),
       subtotal: Number(summary.subtotal),
       estimatedShipping: Number(summary.shippingAmount),
