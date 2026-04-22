@@ -6,7 +6,7 @@ import { PublicNavbarSearchQueryDto } from './dto/public-navbar-search-query.dto
 export class PublicDashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
-  @Get('search')
+  @Get('home/search')
   searchNavbar(@Query() query: PublicNavbarSearchQueryDto) {
     return this.dashboardService.searchNavbar(query);
   }
