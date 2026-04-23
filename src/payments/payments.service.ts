@@ -581,6 +581,8 @@ export class PaymentsService {
       (params.user as any).email?.trim() ||
       null;
 
+    console.log('Workshop email target:', to);
+
     if (!to) {
       console.warn(
         `Workshop invoice email skipped: no recipient email for user ${params.user.id}`,
@@ -645,8 +647,10 @@ export class PaymentsService {
     }
 
     const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
-
     if (alreadySent) {
+      console.log(
+        `Workshop invoice email already sent for payment ${payment.id}`,
+      );
       return;
     }
 
@@ -654,6 +658,8 @@ export class PaymentsService {
       payment.finalizedRefId ||
       payment.domainRefId ||
       payment.metadata?.orderSummaryId;
+
+    console.log('Workshop email summaryId:', summaryId);
 
     if (!summaryId) {
       console.warn(
@@ -1308,12 +1314,15 @@ export class PaymentsService {
       await this.paymentsRepo.save(payment);
     }
 
-    if (payment.domainType === PaymentDomainType.WORKSHOP) {
+    if (
+      payment.domainType === PaymentDomainType.WORKSHOP &&
+      payment.status === PaymentTransactionStatus.PAID
+    ) {
       try {
         await this.ensureWorkshopInvoiceEmailSent(payment);
       } catch (emailError) {
         console.error(
-          `Failed to ensure workshop invoice email for payment ${payment.id}:`,
+          `Failed to ensure workshop invoice email in webhook for payment ${payment.id}:`,
           emailError,
         );
       }
