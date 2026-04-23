@@ -394,6 +394,60 @@ export class InvoiceService {
     return [city, state, zip].filter(Boolean).join(', ').replace(', ,', ',');
   }
 
+  private drawWrappedTextRowCentered(
+    page: PDFPage,
+    text: string,
+    x: number,
+    rowTopY: number,
+    rowHeight: number,
+    maxWidth: number,
+    font: PDFFont,
+    size: number,
+    lineHeight: number,
+    color = COLORS.text,
+    maxLines?: number,
+  ) {
+    const words = String(text ?? '')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const lines: string[] = [];
+    let current = '';
+
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      const width = font.widthOfTextAtSize(test, size);
+
+      if (width <= maxWidth) {
+        current = test;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
+
+    if (current) lines.push(current);
+
+    const finalLines =
+      typeof maxLines === 'number' ? lines.slice(0, maxLines) : lines;
+
+    const centerBaselineY = rowTopY - rowHeight / 2 - 1;
+    const firstLineY =
+      centerBaselineY + ((finalLines.length - 1) * lineHeight) / 2;
+
+    finalLines.forEach((line, index) => {
+      page.drawText(line, {
+        x,
+        y: firstLineY - index * lineHeight,
+        size,
+        font,
+        color,
+      });
+    });
+
+    return finalLines.length;
+  }
+
   async generateProductInvoiceBuffer(params: {
     order: Order & { items?: any[] };
     payment: PaymentTransaction;
@@ -867,11 +921,12 @@ export class InvoiceService {
     for (const item of doc.items) {
       this.drawBox(page, tableX, y, tableW, rowH, COLORS.white, COLORS.border);
 
-      this.drawWrappedText(
+      this.drawWrappedTextRowCentered(
         page,
         item.name,
         colItemX,
-        y - 18,
+        y,
+        rowH,
         260,
         fontBold,
         10.2,
@@ -880,11 +935,12 @@ export class InvoiceService {
         2,
       );
 
-      this.drawWrappedText(
+      this.drawWrappedTextRowCentered(
         page,
         item.sku || '—',
         colSkuX,
-        y - 18,
+        y,
+        rowH,
         70,
         fontRegular,
         9.5,

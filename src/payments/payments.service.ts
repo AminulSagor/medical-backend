@@ -576,8 +576,15 @@ export class PaymentsService {
       );
     }
 
-    const to = params.user.medicalEmail?.trim();
+    const to =
+      params.user.medicalEmail?.trim() ||
+      (params.user as any).email?.trim() ||
+      null;
+
     if (!to) {
+      console.warn(
+        `Workshop invoice email skipped: no recipient email for user ${params.user.id}`,
+      );
       return;
     }
 
@@ -624,6 +631,10 @@ export class PaymentsService {
       invoiceFileName: `invoice-workshop-${orderSummary.id.slice(0, 8)}.pdf`,
       invoiceBuffer,
     });
+
+    console.log(
+      `Workshop invoice email sent successfully to ${to} for summary ${orderSummary.id}`,
+    );
   }
 
   async createProductOrderSummary(
@@ -1483,37 +1494,48 @@ export class PaymentsService {
       throw new NotFoundException('Workshop order summary not found');
     }
 
-    if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
-      return orderSummary.id;
+    if (orderSummary.status !== OrderSummaryStatus.COMPLETED) {
+      if (orderSummary.status !== OrderSummaryStatus.EXPIRED) {
+        orderSummary.status = OrderSummaryStatus.COMPLETED;
+        await this.workshopOrderSummariesRepo.save(orderSummary);
+      }
     }
 
-    if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
-      return orderSummary.id;
-    }
+    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
 
-    orderSummary.status = OrderSummaryStatus.COMPLETED;
-    const saved = await this.workshopOrderSummariesRepo.save(orderSummary);
+    if (!alreadySent) {
+      try {
+        const user = await this.usersRepo.findOne({
+          where: { id: payment.userId },
+        });
 
-    try {
-      const user = await this.usersRepo.findOne({
-        where: { id: payment.userId },
-      });
+        if (!user) {
+          throw new NotFoundException(
+            'User not found for workshop invoice email',
+          );
+        }
 
-      if (user) {
         await this.sendWorkshopInvoiceEmail({
-          summaryId: saved.id,
+          summaryId: orderSummary.id,
           payment,
           user,
         });
+
+        payment.metadata = {
+          ...(payment.metadata ?? {}),
+          workshopInvoiceEmailSentAt: new Date().toISOString(),
+        };
+
+        await this.paymentsRepo.save(payment);
+      } catch (emailError) {
+        console.error(
+          `Failed to send workshop invoice email for summary ${orderSummary.id}:`,
+          emailError,
+        );
       }
-    } catch (emailError) {
-      console.error(
-        `Failed to send workshop invoice email for summary ${saved.id}:`,
-        emailError,
-      );
     }
 
-    return saved.id;
+    return orderSummary.id;
   }
 
   async getProductInvoicePdf(orderId: string, userId: string): Promise<Buffer> {
