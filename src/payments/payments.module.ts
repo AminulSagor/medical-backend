@@ -12,6 +12,8 @@ import { ProductOrderSummary } from './entities/product-order-summary.entity';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { CartModule } from 'src/cart/cart.module';
+import { InvoiceService } from 'src/common/services/invoice.service';
+import { MailService } from 'src/common/services/mail.service';
 
 @Module({
   imports: [
@@ -29,7 +31,7 @@ import { CartModule } from 'src/cart/cart.module';
     CartModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
+  providers: [PaymentsService, InvoiceService, MailService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

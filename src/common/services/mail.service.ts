@@ -105,4 +105,47 @@ export class MailService {
       );
     }
   }
+
+  async sendPaymentSuccessEmailWithInvoice(params: {
+    to: string;
+    customerName?: string | null;
+    subject: string;
+    html: string;
+    text: string;
+    invoiceFileName: string;
+    invoiceBuffer: Buffer;
+  }) {
+    if (!this.isSesConfigured) {
+      throw new InternalServerErrorException('SES is not configured');
+    }
+
+    await this.ses.send(
+      new SendEmailCommand({
+        FromEmailAddress: this.from,
+        Destination: {
+          ToAddresses: [params.to],
+        },
+        Content: {
+          Simple: {
+            Subject: {
+              Data: params.subject,
+            },
+            Body: {
+              Html: { Data: params.html },
+              Text: { Data: params.text },
+            },
+            Attachments: [
+              {
+                FileName: params.invoiceFileName,
+                ContentType: 'application/pdf',
+                ContentDisposition: 'ATTACHMENT',
+                ContentTransferEncoding: 'BASE64',
+                RawContent: params.invoiceBuffer,
+              },
+            ],
+          },
+        },
+      }),
+    );
+  }
 }
