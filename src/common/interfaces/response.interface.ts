@@ -23,7 +23,7 @@ export interface AdminProductViewResponse {
 
     organization: {
       availability: 'IN_STOCK' | 'OUT_OF_STOCK';
-      department: string[]; // from category
+      department: string; // from category
     };
 
     clinicalBenefits: {

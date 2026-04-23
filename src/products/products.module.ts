@@ -7,9 +7,9 @@ import { Product } from './entities/product.entity';
 import { ProductDetails } from './entities/product-details.entity';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { User } from '../users/entities/user.entity';
-import { Category } from '../categories/entities/category.entity';
 import { Review } from '../reviews/entities/review.entity';
 import { OrderItem } from 'src/orders/entities/order-item.entity';
+import { Category } from 'src/categories/entities/category.entity';
 
 @Module({
   imports: [

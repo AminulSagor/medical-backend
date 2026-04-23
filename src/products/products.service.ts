@@ -1,9 +1,8 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DeepPartial } from 'typeorm';
+import { Repository, DeepPartial, In } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { CreateProductDto } from './dto/create-product.dto';
-import { Category } from '../categories/entities/category.entity';
 import { QueryFailedError } from 'typeorm';
 import { GetProductsQueryDto } from './dto/get-products.query.dto';
 import { NotFoundException } from '@nestjs/common';
@@ -13,15 +12,49 @@ import { CartRequestDto } from './dto/cart.dto';
 import { Review, ReviewStatus } from '../reviews/entities/review.entity';
 import { AdminProductViewResponse } from 'src/common/interfaces/response.interface';
 import { OrderItem } from 'src/orders/entities/order-item.entity';
+import { Category } from 'src/categories/entities/category.entity';
 
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectRepository(Product) private productsRepo: Repository<Product>,
-    @InjectRepository(Category) private categoriesRepo: Repository<Category>,
+    @InjectRepository(Category)
+    private readonly categoriesRepo: Repository<Category>,
     @InjectRepository(Review) private reviewsRepo: Repository<Review>,
     @InjectRepository(OrderItem) private orderItemRepo: Repository<OrderItem>,
   ) {}
+
+  private async validateProductCategoryIds(categoryIds: string[] = []) {
+    if (!categoryIds.length) {
+      return;
+    }
+
+    const uniqueIds = [...new Set(categoryIds)];
+    const categories = await this.categoriesRepo.findBy({
+      id: In(uniqueIds),
+    });
+
+    if (categories.length !== uniqueIds.length) {
+      const foundIds = new Set(categories.map((c) => c.id));
+      const invalidIds = uniqueIds.filter((id) => !foundIds.has(id));
+      throw new BadRequestException(
+        `Invalid product categoryId: ${invalidIds.join(', ')}`,
+      );
+    }
+  }
+
+  private async getProductCategoryMapByIds(categoryIds: string[]) {
+    const uniqueIds = [...new Set(categoryIds.filter(Boolean))];
+    if (!uniqueIds.length) {
+      return new Map<string, Category>();
+    }
+
+    const categories = await this.categoriesRepo.findBy({
+      id: In(uniqueIds),
+    });
+
+    return new Map(categories.map((c) => [c.id, c]));
+  }
 
   async create(dto: CreateProductDto) {
     const actual = Number(dto.actualPrice ?? '0');
@@ -48,16 +81,7 @@ export class ProductsService {
     }
 
     // ✅ Validate all category IDs
-    if (dto.categoryId && dto.categoryId.length > 0) {
-      for (const catId of dto.categoryId) {
-        const category = await this.categoriesRepo.findOne({
-          where: { id: catId },
-        });
-        if (!category) {
-          throw new BadRequestException(`Invalid categoryId: ${catId}`);
-        }
-      }
-    }
+    await this.validateProductCategoryIds(dto.categoryId ?? []);
 
     const payload: DeepPartial<Product> = {
       // ✅ products table
@@ -150,10 +174,17 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    // Get category names
-    const categories = await this.categoriesRepo.find({
-      where: product.categoryId.map((catId) => ({ id: catId })),
-    });
+    const categoryMap = await this.getProductCategoryMapByIds(
+      product.categoryId ?? [],
+    );
+
+    const categoryDetails = (product.categoryId ?? [])
+      .map((catId) => categoryMap.get(catId))
+      .filter(Boolean)
+      .map((c) => ({
+        id: c!.id,
+        name: c!.name,
+      }));
 
     return {
       id: product.id,
@@ -162,8 +193,9 @@ export class ProductsService {
       brand: product.brand,
       sku: product.sku,
       barcode: product.barcode,
-      categoryId: product.categoryId,
-      categories: categories.map((c) => ({ id: c.id, name: c.name })),
+      categoryIds: product.categoryId,
+      categories: categoryDetails.map((c) => c.name),
+      categoryDetails,
       tags: product.tags,
       actualPrice: product.actualPrice,
       offerPrice: product.offerPrice,
@@ -193,7 +225,6 @@ export class ProductsService {
 
     if (!product) throw new NotFoundException('Product not found');
 
-    // ===== CURRENT PERIOD (last 30 days) =====
     const now = new Date();
     const last30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const prev30 = new Date(last30.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -203,8 +234,8 @@ export class ProductsService {
       .leftJoin('item.order', 'order')
       .where('item.productId = :productId', { productId });
 
-    // current
     const current = await qb
+      .clone()
       .andWhere('order.createdAt >= :last30', { last30 })
       .select([
         'SUM(item.quantity) as units',
@@ -213,8 +244,8 @@ export class ProductsService {
       ])
       .getRawOne();
 
-    // previous
     const previous = await qb
+      .clone()
       .andWhere('order.createdAt BETWEEN :prev30 AND :last30', {
         prev30,
         last30,
@@ -224,7 +255,6 @@ export class ProductsService {
 
     const currentUnits = Number(current?.units || 0);
     const currentRevenue = Number(current?.revenue || 0);
-
     const prevUnits = Number(previous?.units || 0);
     const prevRevenue = Number(previous?.revenue || 0);
 
@@ -236,18 +266,29 @@ export class ProductsService {
         ? 100
         : ((currentRevenue - prevRevenue) / prevRevenue) * 100;
 
-    // ===== CROSS SELL FULL DETAILS =====
     const crossIds = [
       ...(product.details?.frequentlyBoughtTogether || []),
       ...(product.details?.bundleUpsells || []),
     ];
 
-    const crossProducts = await this.productsRepo.findByIds(crossIds);
+    const crossProducts = crossIds.length
+      ? await this.productsRepo.findBy({ id: In(crossIds) })
+      : [];
+
+    const categoryMap = await this.getProductCategoryMapByIds(
+      product.categoryId ?? [],
+    );
+
+    const categoryNames = (product.categoryId ?? [])
+      .map((catId) => categoryMap.get(catId)?.name)
+      .filter((name): name is string => Boolean(name));
+
+    const primaryCategory = categoryNames[0] ?? '';
 
     const mapMini = (p: Product) => ({
       id: p.id,
       name: p.name,
-      image: p.details?.images?.[0],
+      image: p.details?.images?.[0] ?? null,
       price: p.offerPrice,
     });
 
@@ -255,7 +296,7 @@ export class ProductsService {
       summary: {
         totalUnitsSold: currentUnits,
         totalRevenue: currentRevenue,
-        lastSaleDate: current?.lastsale || null,
+        lastSaleDate: current?.lastsale || current?.lastSale || null,
         comparison: {
           unitsSoldChangePct: Number(unitsChange.toFixed(2)),
           revenueChangePct: Number(revenueChange.toFixed(2)),
@@ -274,7 +315,7 @@ export class ProductsService {
 
         organization: {
           availability: product.stockQuantity > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK',
-          department: product.categoryId,
+          department: primaryCategory,
         },
 
         clinicalBenefits: product.details?.clinicalBenefits || [],
@@ -299,12 +340,14 @@ export class ProductsService {
         crossSell: {
           frequentlyBoughtTogether: crossProducts
             .filter((p) =>
-              product.details.frequentlyBoughtTogether.includes(p.id),
+              (product.details?.frequentlyBoughtTogether || []).includes(p.id),
             )
             .map(mapMini),
 
           bundleUpsells: crossProducts
-            .filter((p) => product.details.bundleUpsells.includes(p.id))
+            .filter((p) =>
+              (product.details?.bundleUpsells || []).includes(p.id),
+            )
             .map(mapMini),
         },
       },
@@ -316,9 +359,10 @@ export class ProductsService {
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.productsRepo.createQueryBuilder('p');
+    const qb = this.productsRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.details', 'details');
 
-    // --- tabs counts (independent query) ---
     const countsRaw = await this.productsRepo
       .createQueryBuilder('p')
       .select([
@@ -330,7 +374,6 @@ export class ProductsService {
       ])
       .getRawOne();
 
-    // --- tab filters ---
     if (query.tab === 'active') {
       qb.andWhere('p.isActive = :isActive', { isActive: true });
     }
@@ -348,27 +391,42 @@ export class ProductsService {
       qb.andWhere('p.stockQuantity <= p.lowStockAlert');
     }
 
-    // --- category filter by names ---
-    if (query.categoryNames && query.categoryNames.length > 0) {
-      const categories = await this.categoriesRepo.find({
-        where: query.categoryNames.map((name) => ({ name })),
-      });
-      const categoryIds = categories.map((c) => c.id);
-      if (categoryIds.length > 0) {
-        qb.andWhere('p.categoryId && :categoryIds', {
-          categoryIds,
+    const requestedCategoryNames = [
+      ...(query.categoryNames ?? []),
+      ...(query.category &&
+      query.category.trim() &&
+      query.category.trim().toLowerCase() !== 'all'
+        ? [query.category]
+        : []),
+    ]
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    if (requestedCategoryNames.length > 0) {
+      const categoryQb = this.categoriesRepo.createQueryBuilder('c');
+
+      requestedCategoryNames.forEach((name, index) => {
+        categoryQb.orWhere(`LOWER(c.name) LIKE :name${index}`, {
+          [`name${index}`]: `%${name.toLowerCase()}%`,
         });
+      });
+
+      const categories = await categoryQb.getMany();
+      const categoryIds = categories.map((c) => c.id);
+
+      if (categoryIds.length > 0) {
+        qb.andWhere('p.categoryId && :categoryIds', { categoryIds });
+      } else {
+        qb.andWhere('1 = 0');
       }
     }
 
-    // --- tags filter by names ---
     if (query.tagNames && query.tagNames.length > 0) {
       qb.andWhere('p.tags && :tagNames', {
         tagNames: query.tagNames,
       });
     }
 
-    // --- search (name, sku, tags) ---
     if (query.search && query.search.trim()) {
       const s = `%${query.search.trim().toLowerCase()}%`;
 
@@ -392,9 +450,48 @@ export class ProductsService {
     const total = await qb.getCount();
     const entities = await qb.getMany();
 
-    const items = entities.map((p) => ({
-      ...p,
-    }));
+    const allCategoryIds = [
+      ...new Set(entities.flatMap((p) => p.categoryId || [])),
+    ];
+
+    const categoryMap = await this.getProductCategoryMapByIds(allCategoryIds);
+
+    const items = entities.map((p) => {
+      const categoryDetails = (p.categoryId || [])
+        .map((id) => categoryMap.get(id))
+        .filter(Boolean)
+        .map((c) => ({
+          id: c!.id,
+          name: c!.name,
+        }));
+
+      const categoryNames = categoryDetails.map((c) => c.name);
+
+      return {
+        id: p.id,
+        name: p.name,
+        clinicalDescription: p.clinicalDescription,
+        brand: p.brand,
+        sku: p.sku,
+        barcode: p.barcode,
+        categoryIds: p.categoryId || [],
+        categories: categoryNames,
+        // categoryDetails,
+        categoryLabel: categoryNames.join(', '),
+        tags: p.tags,
+        actualPrice: p.actualPrice,
+        offerPrice: p.offerPrice,
+        bulkPriceTiers: p.bulkPriceTiers,
+        stockQuantity: p.stockQuantity,
+        lowStockAlert: p.lowStockAlert,
+        backorder: p.backorder,
+        isActive: p.isActive,
+        photo: p.details?.images?.[0] ?? null,
+        frontendBadges: p.details?.frontendBadges || [],
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      };
+    });
 
     return {
       items,
@@ -448,16 +545,8 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    // ✅ Validate all category IDs if provided
-    if (dto.categoryId && dto.categoryId.length > 0) {
-      for (const catId of dto.categoryId) {
-        const category = await this.categoriesRepo.findOne({
-          where: { id: catId },
-        });
-        if (!category) {
-          throw new BadRequestException(`Invalid categoryId: ${catId}`);
-        }
-      }
+    if (dto.categoryId !== undefined) {
+      await this.validateProductCategoryIds(dto.categoryId);
     }
 
     // ✅ compute effective prices (old + new) for business rules
@@ -561,9 +650,10 @@ export class ProductsService {
 
   // ✅ PUBLIC: Get all categories with product count and brands
   async getCategoriesWithProductCount() {
-    const categories = await this.categoriesRepo.find();
+    const categories = await this.categoriesRepo.find({
+      order: { name: 'ASC' },
+    });
 
-    // Get all active products
     const products = await this.productsRepo.find({
       where: { isActive: true },
       select: [
@@ -578,25 +668,24 @@ export class ProductsService {
       relations: ['details'],
     });
 
-    // Get unique brands
     const brands = [...new Set(products.map((p) => p.brand).filter(Boolean))];
 
-    // Calculate price range
     const prices = products.map(
       (p) => Number(p.offerPrice) || Number(p.actualPrice) || 0,
     );
+
     const priceRange = {
       min: prices.length > 0 ? Math.min(...prices) : 0,
       max: prices.length > 0 ? Math.max(...prices) : 0,
     };
 
-    // Calculate product count per category
     const categoriesWithCount = categories.map((category) => {
       const productCount = products.filter((p) =>
-        p.categoryId.includes(category.id),
+        (p.categoryId || []).includes(category.id),
       ).length;
 
       return {
+        id: category.id,
         name: category.name,
         productCount,
       };
@@ -609,7 +698,6 @@ export class ProductsService {
     };
   }
 
-  // ✅ PUBLIC: Get products with filters
   async findAllPublic(query: ListProductsPublicQueryDto) {
     try {
       const page = query.page ?? 1;
@@ -621,27 +709,18 @@ export class ProductsService {
         .leftJoinAndSelect('p.details', 'details')
         .where('p.isActive = :isActive', { isActive: true });
 
-      const effectivePriceExpr = `
-      COALESCE(
-        NULLIF(CAST(p."offerPrice" AS DECIMAL), 0),
-        CAST(p."actualPrice" AS DECIMAL)
-      )
-    `;
-
-      // Search filter
       if (query.search && query.search.trim()) {
         const s = `%${query.search.trim().toLowerCase()}%`;
         qb.andWhere(
           `(
           LOWER(p.name) LIKE :s
           OR LOWER(p.sku) LIKE :s
-          OR LOWER(p.clinicalDescription) LIKE :s
+          OR LOWER(COALESCE(p.clinicalDescription, '')) LIKE :s
         )`,
           { s },
         );
       }
 
-      // Category filter by IDs - validate UUIDs first
       if (query.categoryIds && query.categoryIds.length > 0) {
         const uuidRegex =
           /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -657,82 +736,112 @@ export class ProductsService {
         }
       }
 
-      // Brand filter
       if (query.brands && query.brands.length > 0) {
         qb.andWhere('p.brand IN (:...brands)', { brands: query.brands });
       }
 
-      // Price range filter
+      const effectivePrice = (p: Product) => {
+        const offer = Number(p.offerPrice ?? 0);
+        const actual = Number(p.actualPrice ?? 0);
+        return offer > 0 ? offer : actual;
+      };
+
       if (query.minPrice) {
-        qb.andWhere(`${effectivePriceExpr} >= :minPrice`, {
-          minPrice: Number(query.minPrice),
-        });
+        const minPrice = Number(query.minPrice);
+        qb.andWhere(
+          `
+        COALESCE(
+          NULLIF(CAST(p."offerPrice" AS NUMERIC), 0),
+          CAST(p."actualPrice" AS NUMERIC)
+        ) >= :minPrice
+        `,
+          { minPrice },
+        );
       }
 
       if (query.maxPrice) {
-        qb.andWhere(`${effectivePriceExpr} <= :maxPrice`, {
-          maxPrice: Number(query.maxPrice),
-        });
+        const maxPrice = Number(query.maxPrice);
+        qb.andWhere(
+          `
+        COALESCE(
+          NULLIF(CAST(p."offerPrice" AS NUMERIC), 0),
+          CAST(p."actualPrice" AS NUMERIC)
+        ) <= :maxPrice
+        `,
+          { maxPrice },
+        );
       }
 
-      // Sorting
+      // Fetch all matched rows first, then sort safely in JS
+      const products = await qb.getMany();
+
       switch (query.sortBy) {
         case 'price-asc':
-          qb.orderBy(effectivePriceExpr, 'ASC');
+          products.sort((a, b) => effectivePrice(a) - effectivePrice(b));
           break;
 
         case 'price-desc':
-          qb.orderBy(effectivePriceExpr, 'DESC');
+          products.sort((a, b) => effectivePrice(b) - effectivePrice(a));
           break;
 
         case 'name-asc':
-          qb.orderBy('p.name', 'ASC');
+          products.sort((a, b) => a.name.localeCompare(b.name));
           break;
 
         case 'name-desc':
-          qb.orderBy('p.name', 'DESC');
+          products.sort((a, b) => b.name.localeCompare(a.name));
           break;
 
         case 'newest':
         default:
-          qb.orderBy('p.createdAt', 'DESC');
+          products.sort(
+            (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+          );
           break;
       }
 
-      const total = await qb.getCount();
-      const products = await qb.skip(skip).take(limit).getMany();
+      const total = products.length;
+      const paginatedProducts = products.slice(skip, skip + limit);
 
-      // Get category names for products
       const categoryIds = [
-        ...new Set(products.flatMap((p) => p.categoryId || [])),
+        ...new Set(paginatedProducts.flatMap((p) => p.categoryId || [])),
       ];
 
       let categoryMap = new Map<string, string>();
 
       if (categoryIds.length > 0) {
-        const categories = await this.categoriesRepo.find({
-          where: categoryIds.map((id) => ({ id })),
+        const categories = await this.categoriesRepo.findBy({
+          id: In(categoryIds),
         });
         categoryMap = new Map(categories.map((c) => [c.id, c.name]));
       }
 
-      const items = products.map((p) => ({
-        id: p.id,
-        photo: p.details?.images?.[0] || null,
-        category: (p.categoryId || [])
-          .map((id) => categoryMap.get(id))
-          .filter(Boolean)
-          .join(', '),
-        title: p.name,
-        description: p.clinicalDescription,
-        price: p.actualPrice,
-        discountedPrice: p.offerPrice,
-        brand: p.brand,
-        inStock: p.stockQuantity > 0,
-        badge:
-          p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') ||
-          null,
-      }));
+      const items = paginatedProducts.map((p) => {
+        const categoryDetails = (p.categoryId || [])
+          .map((id) => ({
+            id,
+            name: categoryMap.get(id) ?? '',
+          }))
+          .filter((c) => c.name);
+
+        return {
+          id: p.id,
+          photo: p.details?.images?.[0] || null,
+          category: categoryDetails.map((c) => c.name).join(', '),
+          categoryIds: p.categoryId || [],
+          categories: categoryDetails.map((c) => c.name),
+          categoryDetails,
+          title: p.name,
+          description: p.clinicalDescription,
+          price: p.actualPrice,
+          discountedPrice: p.offerPrice,
+          brand: p.brand,
+          inStock: p.stockQuantity > 0,
+          badge:
+            p.details?.frontendBadges?.[0]?.toUpperCase().replace(/-/g, ' ') ||
+            null,
+        };
+      });
 
       return {
         items,
@@ -745,20 +854,7 @@ export class ProductsService {
       };
     } catch (error) {
       console.error('Error fetching products:', error);
-
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-
-      return {
-        items: [],
-        meta: {
-          page: query.page ?? 1,
-          limit: query.limit ?? 12,
-          total: 0,
-          totalPages: 0,
-        },
-      };
+      throw error;
     }
   }
 
@@ -773,15 +869,18 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    // Get category names
-    let categories: { id: string; name: string }[] = [];
-    if (product.categoryId && product.categoryId.length > 0) {
-      categories = await this.categoriesRepo.find({
-        where: product.categoryId.map((id) => ({ id })),
-      });
-    }
+    const categoryMap = await this.getProductCategoryMapByIds(
+      product.categoryId ?? [],
+    );
 
-    // Get rating summary
+    const categories = (product.categoryId ?? [])
+      .map((catId) => categoryMap.get(catId))
+      .filter(Boolean)
+      .map((c) => ({
+        id: c!.id,
+        name: c!.name,
+      }));
+
     const ratingResult = await this.reviewsRepo
       .createQueryBuilder('r')
       .select('AVG(r.rating)', 'averageRating')
@@ -803,7 +902,7 @@ export class ProductsService {
       brand: product.brand,
       sku: product.sku,
       clinicalDescription: product.clinicalDescription,
-      categories: categories.map((c) => ({ id: c.id, name: c.name })),
+      categories,
       tags: product.tags,
       actualPrice: product.actualPrice,
       offerPrice: product.offerPrice,
