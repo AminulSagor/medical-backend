@@ -43,6 +43,8 @@ import {
   ProductOrderSummaryStatus,
 } from './entities/product-order-summary.entity';
 import { CartService } from 'src/cart/cart.service';
+import { MailService } from 'src/common/services/mail.service';
+import { InvoiceService } from 'src/common/services/invoice.service';
 
 type ProductCalculatedItem = {
   productId: string;
@@ -108,6 +110,8 @@ export class PaymentsService {
     @InjectRepository(WorkshopReservation)
     private readonly workshopReservationsRepo: Repository<WorkshopReservation>,
     private readonly cartService: CartService,
+    private readonly mailService: MailService,
+    private readonly invoiceService: InvoiceService,
   ) {}
 
   private formatAmount(value: number): string {
@@ -495,6 +499,131 @@ export class PaymentsService {
     }
 
     return summary;
+  }
+
+  private async sendProductInvoiceEmail(params: {
+    orderId: string;
+    payment: PaymentTransaction;
+    user: User;
+  }) {
+    const order = await this.ordersRepo.findOne({
+      where: { id: params.orderId } as any,
+      relations: ['items'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found for invoice email');
+    }
+
+    const to = order.customerEmail?.trim() || params.user.medicalEmail?.trim();
+    if (!to) {
+      return;
+    }
+
+    const invoiceBuffer =
+      await this.invoiceService.generateProductInvoiceBuffer({
+        order: order as any,
+        payment: params.payment,
+        user: params.user,
+      });
+
+    const subject = `Payment received - ${order.orderNumber}`;
+    const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+      <h2>Payment Successful</h2>
+      <p>Hello ${order.customerName || params.user.fullLegalName || 'Customer'},</p>
+      <p>Your payment for order <b>${order.orderNumber}</b> was received successfully.</p>
+      <p>Please find your invoice attached as a PDF for your records.</p>
+      <p><b>Paid Amount:</b> $${Number(order.grandTotal || 0).toFixed(2)}</p>
+      <p>Thank you for your purchase.</p>
+    </div>
+  `;
+
+    const text = [
+      'Payment Successful',
+      '',
+      `Hello ${order.customerName || params.user.fullLegalName || 'Customer'},`,
+      `Your payment for order ${order.orderNumber} was received successfully.`,
+      `Paid Amount: $${Number(order.grandTotal || 0).toFixed(2)}`,
+      'Your invoice is attached as a PDF.',
+      'Thank you for your purchase.',
+    ].join('\n');
+
+    await this.mailService.sendPaymentSuccessEmailWithInvoice({
+      to,
+      customerName: order.customerName,
+      subject,
+      html,
+      text,
+      invoiceFileName: `invoice-${order.orderNumber}.pdf`,
+      invoiceBuffer,
+    });
+  }
+
+  private async sendWorkshopInvoiceEmail(params: {
+    summaryId: string;
+    payment: PaymentTransaction;
+    user: User;
+  }) {
+    const orderSummary = await this.workshopOrderSummariesRepo.findOne({
+      where: { id: params.summaryId, userId: params.user.id } as any,
+      relations: ['workshop', 'attendees'],
+    });
+
+    if (!orderSummary) {
+      throw new NotFoundException(
+        'Workshop order summary not found for invoice email',
+      );
+    }
+
+    const to = params.user.medicalEmail?.trim();
+    if (!to) {
+      return;
+    }
+
+    const invoiceBuffer =
+      await this.invoiceService.generateWorkshopInvoiceBuffer({
+        orderSummary,
+        payment: params.payment,
+        user: params.user,
+      });
+
+    const workshopTitle =
+      (orderSummary as any).workshop?.title || 'Workshop Enrollment';
+    const totalPrice = Number((orderSummary as any).totalPrice || 0);
+
+    const subject = `Payment received - ${workshopTitle}`;
+    const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+      <h2>Workshop Payment Successful</h2>
+      <p>Hello ${params.user.fullLegalName || 'Customer'},</p>
+      <p>Your workshop payment was received successfully.</p>
+      <p><b>Workshop:</b> ${workshopTitle}</p>
+      <p><b>Paid Amount:</b> $${totalPrice.toFixed(2)}</p>
+      <p>Your invoice is attached as a PDF for your records.</p>
+      <p>Thank you.</p>
+    </div>
+  `;
+
+    const text = [
+      'Workshop Payment Successful',
+      '',
+      `Hello ${params.user.fullLegalName || 'Customer'},`,
+      `Workshop: ${workshopTitle}`,
+      `Paid Amount: $${totalPrice.toFixed(2)}`,
+      'Your invoice is attached as a PDF.',
+      'Thank you.',
+    ].join('\n');
+
+    await this.mailService.sendPaymentSuccessEmailWithInvoice({
+      to,
+      customerName: params.user.fullLegalName,
+      subject,
+      html,
+      text,
+      invoiceFileName: `invoice-workshop-${orderSummary.id.slice(0, 8)}.pdf`,
+      invoiceBuffer,
+    });
   }
 
   async createProductOrderSummary(
@@ -1288,8 +1417,52 @@ export class PaymentsService {
       );
     }
 
+    try {
+      await this.sendProductInvoiceEmail({
+        orderId: savedOrderId,
+        payment,
+        user,
+      });
+    } catch (emailError) {
+      console.error(
+        `Failed to send product invoice email for order ${orderNumber}:`,
+        emailError,
+      );
+    }
+
     return savedOrderId;
   }
+
+  // private async finalizeWorkshopPayment(
+  //   payment: PaymentTransaction,
+  // ): Promise<string> {
+  //   const summaryId = payment.domainRefId || payment.metadata?.orderSummaryId;
+  //   if (!summaryId) {
+  //     throw new BadRequestException(
+  //       'Invalid payment metadata for workshop finalization',
+  //     );
+  //   }
+
+  //   const orderSummary = await this.workshopOrderSummariesRepo.findOne({
+  //     where: { id: summaryId, userId: payment.userId },
+  //   });
+
+  //   if (!orderSummary) {
+  //     throw new NotFoundException('Workshop order summary not found');
+  //   }
+
+  //   if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
+  //     return orderSummary.id;
+  //   }
+
+  //   if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
+  //     return orderSummary.id;
+  //   }
+
+  //   orderSummary.status = OrderSummaryStatus.COMPLETED;
+  //   const saved = await this.workshopOrderSummariesRepo.save(orderSummary);
+  //   return saved.id;
+  // }
 
   private async finalizeWorkshopPayment(
     payment: PaymentTransaction,
@@ -1303,6 +1476,7 @@ export class PaymentsService {
 
     const orderSummary = await this.workshopOrderSummariesRepo.findOne({
       where: { id: summaryId, userId: payment.userId },
+      relations: ['workshop', 'attendees'],
     });
 
     if (!orderSummary) {
@@ -1319,7 +1493,112 @@ export class PaymentsService {
 
     orderSummary.status = OrderSummaryStatus.COMPLETED;
     const saved = await this.workshopOrderSummariesRepo.save(orderSummary);
+
+    try {
+      const user = await this.usersRepo.findOne({
+        where: { id: payment.userId },
+      });
+
+      if (user) {
+        await this.sendWorkshopInvoiceEmail({
+          summaryId: saved.id,
+          payment,
+          user,
+        });
+      }
+    } catch (emailError) {
+      console.error(
+        `Failed to send workshop invoice email for summary ${saved.id}:`,
+        emailError,
+      );
+    }
+
     return saved.id;
+  }
+
+  async getProductInvoicePdf(orderId: string, userId: string): Promise<Buffer> {
+    const order = await this.ordersRepo.findOne({
+      where: { id: orderId } as any,
+      relations: ['items'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if ((order.customerEmail || '').trim().toLowerCase() === '') {
+      throw new BadRequestException('Order email not found');
+    }
+
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const payment = await this.paymentsRepo.findOne({
+      where: {
+        userId,
+        domainType: PaymentDomainType.PRODUCT,
+        finalizedRefId: orderId,
+        status: PaymentTransactionStatus.PAID,
+      } as any,
+      order: { createdAt: 'DESC' } as any,
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Paid product payment not found');
+    }
+
+    return this.invoiceService.generateProductInvoiceBuffer({
+      order: order as any,
+      payment,
+      user,
+    });
+  }
+
+  async getWorkshopInvoicePdf(
+    summaryId: string,
+    userId: string,
+  ): Promise<Buffer> {
+    const orderSummary = await this.workshopOrderSummariesRepo.findOne({
+      where: { id: summaryId, userId } as any,
+      relations: ['workshop', 'attendees'],
+    });
+
+    if (!orderSummary) {
+      throw new NotFoundException('Workshop order summary not found');
+    }
+
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const payment = await this.paymentsRepo.findOne({
+      where: {
+        userId,
+        domainType: PaymentDomainType.WORKSHOP,
+        finalizedRefId: summaryId,
+        status: PaymentTransactionStatus.PAID,
+      } as any,
+      order: { createdAt: 'DESC' } as any,
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Paid workshop payment not found');
+    }
+
+    return this.invoiceService.generateWorkshopInvoiceBuffer({
+      orderSummary,
+      payment,
+      user,
+    });
   }
 
   async getSessionStatus(userId: string, sessionId: string) {
