@@ -637,6 +637,60 @@ export class PaymentsService {
     );
   }
 
+  private async ensureWorkshopInvoiceEmailSent(
+    payment: PaymentTransaction,
+  ): Promise<void> {
+    if (payment.domainType !== PaymentDomainType.WORKSHOP) {
+      return;
+    }
+
+    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
+
+    if (alreadySent) {
+      return;
+    }
+
+    const summaryId =
+      payment.finalizedRefId ||
+      payment.domainRefId ||
+      payment.metadata?.orderSummaryId;
+
+    if (!summaryId) {
+      console.warn(
+        `Workshop invoice email skipped: missing summary id for payment ${payment.id}`,
+      );
+      return;
+    }
+
+    const user = await this.usersRepo.findOne({
+      where: { id: payment.userId },
+    });
+
+    if (!user) {
+      console.warn(
+        `Workshop invoice email skipped: user not found for payment ${payment.id}`,
+      );
+      return;
+    }
+
+    await this.sendWorkshopInvoiceEmail({
+      summaryId,
+      payment,
+      user,
+    });
+
+    payment.metadata = {
+      ...(payment.metadata ?? {}),
+      workshopInvoiceEmailSentAt: new Date().toISOString(),
+    };
+
+    await this.paymentsRepo.save(payment);
+
+    console.log(
+      `Workshop invoice email marked as sent for payment ${payment.id}`,
+    );
+  }
+
   async createProductOrderSummary(
     userId: string,
     dto: CreateProductOrderSummaryDto,
@@ -1159,6 +1213,57 @@ export class PaymentsService {
     };
   }
 
+  // private async handleCheckoutSessionCompleted(session: any) {
+  //   const paymentId = session.metadata?.paymentId;
+  //   if (!paymentId) {
+  //     return;
+  //   }
+
+  //   const payment = await this.paymentsRepo.findOne({
+  //     where: { id: paymentId },
+  //   });
+  //   if (!payment) {
+  //     return;
+  //   }
+
+  //   if (
+  //     payment.status === PaymentTransactionStatus.PAID &&
+  //     payment.finalizedRefId
+  //   ) {
+  //     return;
+  //   }
+
+  //   if (payment.providerSessionId && payment.providerSessionId !== session.id) {
+  //     throw new BadRequestException(
+  //       `Webhook session mismatch. Expected ${payment.providerSessionId}, got ${session.id}`,
+  //     );
+  //   }
+
+  //   payment.providerSessionId = session.id;
+  //   payment.providerPaymentIntentId =
+  //     typeof session.payment_intent === 'string'
+  //       ? session.payment_intent
+  //       : payment.providerPaymentIntentId;
+  //   payment.status = PaymentTransactionStatus.PAID;
+  //   payment.paidAt = new Date();
+
+  //   await this.paymentsRepo.save(payment);
+
+  //   if (!payment.finalizedRefId) {
+  //     if (payment.domainType === PaymentDomainType.PRODUCT) {
+  //       const orderId = await this.finalizeProductPayment(payment, session);
+  //       payment.finalizedRefId = orderId;
+  //     }
+
+  //     if (payment.domainType === PaymentDomainType.WORKSHOP) {
+  //       const summaryId = await this.finalizeWorkshopPayment(payment);
+  //       payment.finalizedRefId = summaryId;
+  //     }
+
+  //     await this.paymentsRepo.save(payment);
+  //   }
+  // }
+
   private async handleCheckoutSessionCompleted(session: any) {
     const paymentId = session.metadata?.paymentId;
     if (!paymentId) {
@@ -1168,14 +1273,8 @@ export class PaymentsService {
     const payment = await this.paymentsRepo.findOne({
       where: { id: paymentId },
     });
-    if (!payment) {
-      return;
-    }
 
-    if (
-      payment.status === PaymentTransactionStatus.PAID &&
-      payment.finalizedRefId
-    ) {
+    if (!payment) {
       return;
     }
 
@@ -1191,7 +1290,7 @@ export class PaymentsService {
         ? session.payment_intent
         : payment.providerPaymentIntentId;
     payment.status = PaymentTransactionStatus.PAID;
-    payment.paidAt = new Date();
+    payment.paidAt = payment.paidAt ?? new Date();
 
     await this.paymentsRepo.save(payment);
 
@@ -1207,6 +1306,17 @@ export class PaymentsService {
       }
 
       await this.paymentsRepo.save(payment);
+    }
+
+    if (payment.domainType === PaymentDomainType.WORKSHOP) {
+      try {
+        await this.ensureWorkshopInvoiceEmailSent(payment);
+      } catch (emailError) {
+        console.error(
+          `Failed to ensure workshop invoice email for payment ${payment.id}:`,
+          emailError,
+        );
+      }
     }
   }
 
@@ -1444,41 +1554,11 @@ export class PaymentsService {
     return savedOrderId;
   }
 
-  // private async finalizeWorkshopPayment(
-  //   payment: PaymentTransaction,
-  // ): Promise<string> {
-  //   const summaryId = payment.domainRefId || payment.metadata?.orderSummaryId;
-  //   if (!summaryId) {
-  //     throw new BadRequestException(
-  //       'Invalid payment metadata for workshop finalization',
-  //     );
-  //   }
-
-  //   const orderSummary = await this.workshopOrderSummariesRepo.findOne({
-  //     where: { id: summaryId, userId: payment.userId },
-  //   });
-
-  //   if (!orderSummary) {
-  //     throw new NotFoundException('Workshop order summary not found');
-  //   }
-
-  //   if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
-  //     return orderSummary.id;
-  //   }
-
-  //   if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
-  //     return orderSummary.id;
-  //   }
-
-  //   orderSummary.status = OrderSummaryStatus.COMPLETED;
-  //   const saved = await this.workshopOrderSummariesRepo.save(orderSummary);
-  //   return saved.id;
-  // }
-
   private async finalizeWorkshopPayment(
     payment: PaymentTransaction,
   ): Promise<string> {
     const summaryId = payment.domainRefId || payment.metadata?.orderSummaryId;
+
     if (!summaryId) {
       throw new BadRequestException(
         'Invalid payment metadata for workshop finalization',
@@ -1494,45 +1574,12 @@ export class PaymentsService {
       throw new NotFoundException('Workshop order summary not found');
     }
 
-    if (orderSummary.status !== OrderSummaryStatus.COMPLETED) {
-      if (orderSummary.status !== OrderSummaryStatus.EXPIRED) {
-        orderSummary.status = OrderSummaryStatus.COMPLETED;
-        await this.workshopOrderSummariesRepo.save(orderSummary);
-      }
-    }
-
-    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
-
-    if (!alreadySent) {
-      try {
-        const user = await this.usersRepo.findOne({
-          where: { id: payment.userId },
-        });
-
-        if (!user) {
-          throw new NotFoundException(
-            'User not found for workshop invoice email',
-          );
-        }
-
-        await this.sendWorkshopInvoiceEmail({
-          summaryId: orderSummary.id,
-          payment,
-          user,
-        });
-
-        payment.metadata = {
-          ...(payment.metadata ?? {}),
-          workshopInvoiceEmailSentAt: new Date().toISOString(),
-        };
-
-        await this.paymentsRepo.save(payment);
-      } catch (emailError) {
-        console.error(
-          `Failed to send workshop invoice email for summary ${orderSummary.id}:`,
-          emailError,
-        );
-      }
+    if (
+      orderSummary.status !== OrderSummaryStatus.COMPLETED &&
+      orderSummary.status !== OrderSummaryStatus.EXPIRED
+    ) {
+      orderSummary.status = OrderSummaryStatus.COMPLETED;
+      await this.workshopOrderSummariesRepo.save(orderSummary);
     }
 
     return orderSummary.id;
@@ -1655,7 +1702,7 @@ export class PaymentsService {
                 ? stripeSession.payment_intent
                 : payment.providerPaymentIntentId;
             payment.status = PaymentTransactionStatus.PAID;
-            payment.paidAt = new Date();
+            payment.paidAt = payment.paidAt ?? new Date();
             await this.paymentsRepo.save(payment);
 
             if (!payment.finalizedRefId) {
@@ -1674,6 +1721,16 @@ export class PaymentsService {
 
               await this.paymentsRepo.save(payment);
             }
+            if (payment.domainType === PaymentDomainType.WORKSHOP) {
+              try {
+                await this.ensureWorkshopInvoiceEmailSent(payment);
+              } catch (emailError) {
+                console.error(
+                  `Failed to ensure workshop invoice email during session status check for payment ${payment.id}:`,
+                  emailError,
+                );
+              }
+            }
           }
         }
       } catch (err) {
@@ -1683,7 +1740,19 @@ export class PaymentsService {
         );
       }
     }
-
+    if (
+      payment.domainType === PaymentDomainType.WORKSHOP &&
+      payment.status === PaymentTransactionStatus.PAID
+    ) {
+      try {
+        await this.ensureWorkshopInvoiceEmailSent(payment);
+      } catch (emailError) {
+        console.error(
+          `Failed final workshop invoice email safeguard for payment ${payment.id}:`,
+          emailError,
+        );
+      }
+    }
     return {
       message: 'Payment session status fetched successfully',
       data: {
