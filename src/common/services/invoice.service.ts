@@ -647,12 +647,22 @@ export class InvoiceService {
       18,
       COLORS.text,
     );
+    this.drawRightText(
+      page,
+      doc.invoiceDate,
+      right,
+      y - 24,
+      fontBold,
+      11.5,
+      COLORS.text,
+    );
 
     y -= 72;
 
     const cardGap = 14;
     const invoiceBoxW = 215;
-    const smallBoxW = 146;
+    const paymentBoxX = left + invoiceBoxW + cardGap;
+    const paymentBoxW = right - paymentBoxX;
     const infoBoxH = 84;
 
     this.drawBox(
@@ -666,18 +676,9 @@ export class InvoiceService {
     );
     this.drawBox(
       page,
-      left + invoiceBoxW + cardGap,
+      paymentBoxX,
       y,
-      smallBoxW,
-      infoBoxH,
-      COLORS.white,
-      COLORS.border,
-    );
-    this.drawBox(
-      page,
-      left + invoiceBoxW + cardGap + smallBoxW + cardGap,
-      y,
-      smallBoxW,
+      paymentBoxW,
       infoBoxH,
       COLORS.white,
       COLORS.border,
@@ -711,40 +712,10 @@ export class InvoiceService {
       COLORS.muted,
     );
 
-    const orderDateX = left + invoiceBoxW + cardGap;
-    this.drawText(
-      page,
-      'INVOICE DATE',
-      orderDateX + 14,
-      y - 16,
-      fontBold,
-      9,
-      COLORS.muted,
-    );
-    this.drawText(
-      page,
-      doc.invoiceDate,
-      orderDateX + 14,
-      y - 38,
-      fontBold,
-      12,
-      COLORS.text,
-    );
-    this.drawText(
-      page,
-      doc.currency,
-      orderDateX + 14,
-      y - 56,
-      fontRegular,
-      9.2,
-      COLORS.muted,
-    );
-
-    const paymentCardX = orderDateX + smallBoxW + cardGap;
     this.drawText(
       page,
       'PAYMENT',
-      paymentCardX + 14,
+      paymentBoxX + 14,
       y - 16,
       fontBold,
       9,
@@ -753,7 +724,7 @@ export class InvoiceService {
     this.drawText(
       page,
       doc.paymentStatus,
-      paymentCardX + 14,
+      paymentBoxX + 14,
       y - 36,
       fontBold,
       11.5,
@@ -761,8 +732,8 @@ export class InvoiceService {
     );
     this.drawText(
       page,
-      `Method: ${doc.paymentMethod || '—'}`,
-      paymentCardX + 14,
+      `Method: ${String(doc.paymentMethod || '—').toLowerCase()}`,
+      paymentBoxX + 14,
       y - 52,
       fontRegular,
       9,
@@ -771,9 +742,9 @@ export class InvoiceService {
     this.drawWrappedText(
       page,
       `Ref: ${doc.paymentReference || '—'}`,
-      paymentCardX + 14,
+      paymentBoxX + 14,
       y - 68,
-      120,
+      paymentBoxW - 28,
       fontRegular,
       8.5,
       10,
@@ -783,7 +754,7 @@ export class InvoiceService {
 
     y -= infoBoxH + 30;
 
-    const detailsBoxH = 118;
+    const detailsBoxH = 132;
     const detailsBoxW = 260;
 
     this.drawBox(
