@@ -58,6 +58,14 @@ import { SubmitRefundRequestDto } from './dto/submit-refund-request.dto';
 import { User } from 'src/users/entities/user.entity';
 import * as path from 'path';
 import { WorkshopGroupDiscount } from './entities/workshop-group-discount.entity';
+import {
+  PaymentDomainType,
+  PaymentTransaction,
+  PaymentTransactionStatus,
+} from 'src/payments/entities/payment-transaction.entity';
+import { MailService } from 'src/common/services/mail.service';
+import { InvoiceService } from 'src/common/services/invoice.service';
+import { SubscribersService } from 'src/newsletters/audience/subscribers.service';
 
 function parse12hToTime(v: string): string {
   // expects: "08:00 AM"
@@ -115,7 +123,12 @@ export class WorkshopsService {
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(WorkshopGroupDiscount)
     private groupDiscountsRepo: Repository<WorkshopGroupDiscount>,
+    @InjectRepository(PaymentTransaction)
+    private readonly paymentsRepo: Repository<PaymentTransaction>,
     private readonly configService: ConfigService,
+    private readonly mailService: MailService,
+    private readonly invoiceService: InvoiceService,
+    private readonly subscribersService: SubscribersService,
   ) {
     // Initialize SES Client
     const region =
@@ -1840,6 +1853,7 @@ export class WorkshopsService {
 
           // CME
           offersCmeCredits: workshop.offersCmeCredits,
+          cmeCreditsCount: workshop.cmeCreditsCount,
 
           // Capacity
           totalCapacity: workshop.capacity,
@@ -2892,6 +2906,169 @@ export class WorkshopsService {
     };
   }
 
+  // async verifyPayment(userId: string, dto: VerifyWorkshopPaymentDto) {
+  //   const orderSummary = await this.orderSummariesRepo.findOne({
+  //     where: { id: dto.orderSummaryId, userId },
+  //     relations: ['workshop', 'attendees'],
+  //   });
+
+  //   if (!orderSummary) {
+  //     throw new NotFoundException('Order summary not found');
+  //   }
+
+  //   if (orderSummary.status === OrderSummaryStatus.EXPIRED) {
+  //     throw new BadRequestException(
+  //       'Order summary already used for reservation',
+  //     );
+  //   }
+
+  //   if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
+  //     return {
+  //       message: 'Workshop payment already verified',
+  //       data: {
+  //         orderSummaryId: orderSummary.id,
+  //         status: orderSummary.status,
+  //         paymentStatus: 'paid',
+  //       },
+  //     };
+  //   }
+
+  //   const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  //   if (!stripeSecretKey) {
+  //     throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+  //   }
+
+  //   const stripe = Stripe(stripeSecretKey);
+  //   const session = await stripe.checkout.sessions.retrieve(dto.sessionId);
+
+  //   if (!session) {
+  //     throw new BadRequestException('Invalid Stripe checkout session');
+  //   }
+
+  //   if (session.metadata?.orderSummaryId !== orderSummary.id) {
+  //     throw new BadRequestException(
+  //       'Checkout session does not match order summary',
+  //     );
+  //   }
+
+  //   if (session.metadata?.userId !== userId) {
+  //     throw new BadRequestException('Checkout session does not belong to user');
+  //   }
+
+  //   if (session.payment_status !== 'paid') {
+  //     throw new BadRequestException(
+  //       `Payment not completed. Current payment_status: ${session.payment_status}`,
+  //     );
+  //   }
+
+  //   orderSummary.status = OrderSummaryStatus.COMPLETED;
+  //   const saved = await this.orderSummariesRepo.save(orderSummary);
+
+  //   return {
+  //     message: 'Workshop payment verified successfully',
+  //     data: {
+  //       orderSummaryId: saved.id,
+  //       workshop: {
+  //         id: saved.workshop.id,
+  //         title: saved.workshop.title,
+  //         registrationDeadline: saved.workshop.registrationDeadline ?? null,
+  //       },
+  //       numberOfAttendees: saved.numberOfSeats,
+  //       totalPrice: saved.totalPrice,
+  //       status: saved.status,
+  //       paymentStatus: session.payment_status,
+  //     },
+  //   };
+  // }
+
+  private async sendWorkshopInvoiceEmail(params: {
+    summaryId: string;
+    payment: PaymentTransaction;
+    user: User;
+  }) {
+    const orderSummary = await this.orderSummariesRepo.findOne({
+      where: { id: params.summaryId, userId: params.user.id } as any,
+      relations: ['workshop', 'attendees'],
+    });
+
+    if (!orderSummary) {
+      throw new NotFoundException(
+        'Workshop order summary not found for invoice email',
+      );
+    }
+
+    const to =
+      params.user.medicalEmail?.trim() ||
+      (params.user as any).email?.trim() ||
+      null;
+
+    console.log('Workshop email target:', to);
+
+    if (!to) {
+      console.warn(
+        `Workshop invoice email skipped: no recipient email for user ${params.user.id}`,
+      );
+      return;
+    }
+
+    await this.subscribersService.ensureSubscribedFromTrustedSource({
+      email: to,
+      source: 'WEBINAR',
+      fullName: params.user.fullLegalName || null,
+      clinicalRole: (params.user as any).clinicalRole || null,
+      phone: params.user.phoneNumber || null,
+      institution: (params.user as any).institution || null,
+    });
+
+    const invoiceBuffer =
+      await this.invoiceService.generateWorkshopInvoiceBuffer({
+        orderSummary,
+        payment: params.payment,
+        user: params.user,
+      });
+
+    const workshopTitle =
+      (orderSummary as any).workshop?.title || 'Workshop Enrollment';
+    const totalPrice = Number((orderSummary as any).totalPrice || 0);
+
+    const subject = `Payment received - ${workshopTitle}`;
+    const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+      <h2>Workshop Payment Successful</h2>
+      <p>Hello ${params.user.fullLegalName || 'Customer'},</p>
+      <p>Your workshop payment was received successfully.</p>
+      <p><b>Workshop:</b> ${workshopTitle}</p>
+      <p><b>Paid Amount:</b> $${totalPrice.toFixed(2)}</p>
+      <p>Your invoice is attached as a PDF for your records.</p>
+      <p>Thank you.</p>
+    </div>
+  `;
+
+    const text = [
+      'Workshop Payment Successful',
+      '',
+      `Hello ${params.user.fullLegalName || 'Customer'},`,
+      `Workshop: ${workshopTitle}`,
+      `Paid Amount: $${totalPrice.toFixed(2)}`,
+      'Your invoice is attached as a PDF.',
+      'Thank you.',
+    ].join('\n');
+
+    await this.mailService.sendPaymentSuccessEmailWithInvoice({
+      to,
+      customerName: params.user.fullLegalName,
+      subject,
+      html,
+      text,
+      invoiceFileName: `invoice-workshop-${orderSummary.id.slice(0, 8)}.pdf`,
+      invoiceBuffer,
+    });
+
+    console.log(
+      `Workshop invoice email sent successfully to ${to} for summary ${orderSummary.id}`,
+    );
+  }
+
   async verifyPayment(userId: string, dto: VerifyWorkshopPaymentDto) {
     const orderSummary = await this.orderSummariesRepo.findOne({
       where: { id: dto.orderSummaryId, userId },
@@ -2906,17 +3083,6 @@ export class WorkshopsService {
       throw new BadRequestException(
         'Order summary already used for reservation',
       );
-    }
-
-    if (orderSummary.status === OrderSummaryStatus.COMPLETED) {
-      return {
-        message: 'Workshop payment already verified',
-        data: {
-          orderSummaryId: orderSummary.id,
-          status: orderSummary.status,
-          paymentStatus: 'paid',
-        },
-      };
     }
 
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -2947,21 +3113,110 @@ export class WorkshopsService {
       );
     }
 
-    orderSummary.status = OrderSummaryStatus.COMPLETED;
-    const saved = await this.orderSummariesRepo.save(orderSummary);
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    let payment: PaymentTransaction | null = null;
+
+    if (session.metadata?.paymentId) {
+      payment = await this.paymentsRepo.findOne({
+        where: {
+          id: session.metadata.paymentId,
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+        } as any,
+      });
+    }
+
+    if (!payment) {
+      payment = await this.paymentsRepo.findOne({
+        where: {
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+          providerSessionId: dto.sessionId,
+        } as any,
+        order: { createdAt: 'DESC' } as any,
+      });
+    }
+
+    if (!payment) {
+      payment = await this.paymentsRepo.findOne({
+        where: {
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+          domainRefId: orderSummary.id,
+        } as any,
+        order: { createdAt: 'DESC' } as any,
+      });
+    }
+
+    if (!payment) {
+      throw new NotFoundException('Workshop payment transaction not found');
+    }
+
+    payment.providerSessionId = session.id;
+    payment.providerPaymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : payment.providerPaymentIntentId;
+    payment.status = PaymentTransactionStatus.PAID;
+    payment.paidAt = payment.paidAt ?? new Date();
+    payment.finalizedRefId = orderSummary.id;
+    payment.metadata = {
+      ...(payment.metadata ?? {}),
+      orderSummaryId: orderSummary.id,
+    };
+
+    await this.paymentsRepo.save(payment);
+
+    if (orderSummary.status !== OrderSummaryStatus.COMPLETED) {
+      orderSummary.status = OrderSummaryStatus.COMPLETED;
+      await this.orderSummariesRepo.save(orderSummary);
+    }
+
+    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
+
+    if (!alreadySent) {
+      try {
+        await this.sendWorkshopInvoiceEmail({
+          summaryId: orderSummary.id,
+          payment,
+          user,
+        });
+
+        payment.metadata = {
+          ...(payment.metadata ?? {}),
+          orderSummaryId: orderSummary.id,
+          workshopInvoiceEmailSentAt: new Date().toISOString(),
+        };
+
+        await this.paymentsRepo.save(payment);
+      } catch (emailError) {
+        console.error(
+          `Failed to send workshop invoice email for summary ${orderSummary.id}:`,
+          emailError,
+        );
+      }
+    }
 
     return {
       message: 'Workshop payment verified successfully',
       data: {
-        orderSummaryId: saved.id,
+        orderSummaryId: orderSummary.id,
         workshop: {
-          id: saved.workshop.id,
-          title: saved.workshop.title,
-          registrationDeadline: saved.workshop.registrationDeadline ?? null,
+          id: orderSummary.workshop.id,
+          title: orderSummary.workshop.title,
+          registrationDeadline:
+            orderSummary.workshop.registrationDeadline ?? null,
         },
-        numberOfAttendees: saved.numberOfSeats,
-        totalPrice: saved.totalPrice,
-        status: saved.status,
+        numberOfAttendees: orderSummary.numberOfSeats,
+        totalPrice: orderSummary.totalPrice,
+        status: orderSummary.status,
         paymentStatus: session.payment_status,
       },
     };

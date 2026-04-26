@@ -14,6 +14,8 @@ import { PaymentsService } from './payments.service';
 import { CartModule } from 'src/cart/cart.module';
 import { InvoiceService } from 'src/common/services/invoice.service';
 import { MailService } from 'src/common/services/mail.service';
+import { SubscribersService } from 'src/newsletters/audience/subscribers.service';
+import { NewslettersModule } from 'src/newsletters/newsletters.module';
 
 @Module({
   imports: [
@@ -29,6 +31,7 @@ import { MailService } from 'src/common/services/mail.service';
       WorkshopReservation,
     ]),
     CartModule,
+    NewslettersModule,
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService, InvoiceService, MailService],

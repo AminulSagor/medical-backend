@@ -95,4 +95,11 @@ export class SubscribersController {
   ): Promise<Record<string, unknown>> {
     return this.subscribersService.getOrderHistory(id, query);
   }
+
+  @Get('subscription-status/me')
+  getMySubscriptionStatus(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<Record<string, unknown>> {
+    return this.subscribersService.getLoggedInSubscriptionStatus(req.user.id);
+  }
 }

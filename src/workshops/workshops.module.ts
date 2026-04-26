@@ -20,6 +20,11 @@ import { WorkshopRefund } from './entities/workshop-refund.entity';
 import { WorkshopRefundItem } from './entities/workshop-refund-item.entity';
 import { PrivateWorkshopsController } from './private-workshops.controller';
 import { User } from 'src/users/entities/user.entity';
+import { InvoiceService } from 'src/common/services/invoice.service';
+import { MailService } from 'src/common/services/mail.service';
+import { PaymentTransaction } from 'src/payments/entities/payment-transaction.entity';
+import { SubscribersService } from 'src/newsletters/audience/subscribers.service';
+import { NewslettersModule } from 'src/newsletters/newsletters.module';
 
 @Module({
   imports: [
@@ -40,13 +45,15 @@ import { User } from 'src/users/entities/user.entity';
       Facility,
       Faculty,
       User,
+      PaymentTransaction,
     ]),
+    NewslettersModule,
   ],
   controllers: [
     WorkshopsController,
     PublicWorkshopsController,
     PrivateWorkshopsController,
   ],
-  providers: [WorkshopsService],
+  providers: [WorkshopsService, InvoiceService, MailService],
 })
 export class WorkshopsModule {}

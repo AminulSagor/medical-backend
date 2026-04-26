@@ -149,6 +149,7 @@ import { PaymentTransaction } from 'src/payments/entities/payment-transaction.en
     AudienceResolverService,
     DeliveryService,
     NewsletterAuditService,
+    SubscribersService,
   ],
 })
 export class NewslettersModule {}
