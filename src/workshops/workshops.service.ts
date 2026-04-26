@@ -60,6 +60,7 @@ import * as path from 'path';
 import { WorkshopGroupDiscount } from './entities/workshop-group-discount.entity';
 import {
   PaymentDomainType,
+  PaymentProvider,
   PaymentTransaction,
   PaymentTransactionStatus,
 } from 'src/payments/entities/payment-transaction.entity';
@@ -3097,13 +3098,16 @@ export class WorkshopsService {
       throw new BadRequestException('Invalid Stripe checkout session');
     }
 
-    if (session.metadata?.orderSummaryId !== orderSummary.id) {
+    if (
+      session.metadata?.orderSummaryId &&
+      session.metadata.orderSummaryId !== orderSummary.id
+    ) {
       throw new BadRequestException(
         'Checkout session does not match order summary',
       );
     }
 
-    if (session.metadata?.userId !== userId) {
+    if (session.metadata?.userId && session.metadata.userId !== userId) {
       throw new BadRequestException('Checkout session does not belong to user');
     }
 
@@ -3129,7 +3133,7 @@ export class WorkshopsService {
           id: session.metadata.paymentId,
           userId,
           domainType: PaymentDomainType.WORKSHOP,
-        } as any,
+        },
       });
     }
 
@@ -3138,9 +3142,20 @@ export class WorkshopsService {
         where: {
           userId,
           domainType: PaymentDomainType.WORKSHOP,
-          providerSessionId: dto.sessionId,
-        } as any,
-        order: { createdAt: 'DESC' } as any,
+          providerSessionId: session.id,
+        },
+        order: { createdAt: 'DESC' },
+      });
+    }
+
+    if (!payment && typeof session.payment_intent === 'string') {
+      payment = await this.paymentsRepo.findOne({
+        where: {
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+          providerPaymentIntentId: session.payment_intent,
+        },
+        order: { createdAt: 'DESC' },
       });
     }
 
@@ -3150,52 +3165,83 @@ export class WorkshopsService {
           userId,
           domainType: PaymentDomainType.WORKSHOP,
           domainRefId: orderSummary.id,
-        } as any,
-        order: { createdAt: 'DESC' } as any,
+        },
+        order: { createdAt: 'DESC' },
       });
     }
 
     if (!payment) {
-      throw new NotFoundException('Workshop payment transaction not found');
+      payment = this.paymentsRepo.create({
+        userId,
+        domainType: PaymentDomainType.WORKSHOP,
+        domainRefId: orderSummary.id,
+        provider: PaymentProvider.STRIPE,
+        amount: String(orderSummary.totalPrice),
+        currency: 'usd',
+        status: PaymentTransactionStatus.PAID,
+        providerSessionId: session.id,
+        providerPaymentIntentId:
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : undefined,
+        paidAt: new Date(),
+        finalizedRefId: orderSummary.id,
+        idempotencyKey: `${userId}:workshop:${orderSummary.id}:verified`,
+        metadata: {
+          orderSummaryId: orderSummary.id,
+          workshopId: orderSummary.workshop?.id ?? null,
+          workshopTitle: orderSummary.workshop?.title ?? null,
+          numberOfAttendees: orderSummary.numberOfSeats,
+          totalPrice: orderSummary.totalPrice,
+          verifiedFrom: 'workshops.verifyPayment',
+        },
+      });
+    } else {
+      payment.providerSessionId = session.id;
+      payment.providerPaymentIntentId =
+        typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : payment.providerPaymentIntentId;
+      payment.status = PaymentTransactionStatus.PAID;
+      payment.paidAt = payment.paidAt ?? new Date();
+      payment.finalizedRefId = orderSummary.id;
+      payment.metadata = {
+        ...(payment.metadata ?? {}),
+        orderSummaryId: orderSummary.id,
+        workshopId: orderSummary.workshop?.id ?? null,
+        workshopTitle: orderSummary.workshop?.title ?? null,
+        numberOfAttendees: orderSummary.numberOfSeats,
+        totalPrice: orderSummary.totalPrice,
+        verifiedFrom: 'workshops.verifyPayment',
+      };
     }
 
-    payment.providerSessionId = session.id;
-    payment.providerPaymentIntentId =
-      typeof session.payment_intent === 'string'
-        ? session.payment_intent
-        : payment.providerPaymentIntentId;
-    payment.status = PaymentTransactionStatus.PAID;
-    payment.paidAt = payment.paidAt ?? new Date();
-    payment.finalizedRefId = orderSummary.id;
-    payment.metadata = {
-      ...(payment.metadata ?? {}),
-      orderSummaryId: orderSummary.id,
-    };
-
-    await this.paymentsRepo.save(payment);
+    const savedPayment = await this.paymentsRepo.save(payment);
 
     if (orderSummary.status !== OrderSummaryStatus.COMPLETED) {
       orderSummary.status = OrderSummaryStatus.COMPLETED;
       await this.orderSummariesRepo.save(orderSummary);
     }
 
-    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
+    const alreadySent = Boolean(
+      savedPayment.metadata?.workshopInvoiceEmailSentAt,
+    );
 
     if (!alreadySent) {
       try {
         await this.sendWorkshopInvoiceEmail({
           summaryId: orderSummary.id,
-          payment,
+          payment: savedPayment,
           user,
         });
 
-        payment.metadata = {
-          ...(payment.metadata ?? {}),
+        savedPayment.metadata = {
+          ...(savedPayment.metadata ?? {}),
           orderSummaryId: orderSummary.id,
           workshopInvoiceEmailSentAt: new Date().toISOString(),
         };
 
-        await this.paymentsRepo.save(payment);
+        await this.paymentsRepo.save(savedPayment);
       } catch (emailError) {
         console.error(
           `Failed to send workshop invoice email for summary ${orderSummary.id}:`,
