@@ -32,6 +32,25 @@ type InvoiceItem = {
   total: string | number;
 };
 
+type WorkshopInvoiceInfo = {
+  title: string;
+  workshopType: string;
+  locationLabel: string;
+  dateRangeLabel: string;
+  instituteName: string;
+  instituteAddress: string;
+  instituteEmail?: string | null;
+  institutePhone?: string | null;
+};
+
+type WorkshopAttendeeInvoiceRow = {
+  fullName: string;
+  professionalRole?: string | null;
+  email?: string | null;
+  unitPrice: string | number;
+  total: string | number;
+};
+
 type InvoiceDocument = {
   invoiceNumber: string;
   orderNumber: string;
@@ -43,6 +62,7 @@ type InvoiceDocument = {
   shipTo: InvoiceParty;
   items: InvoiceItem[];
   subtotal: string | number;
+  discountAmount?: string | number | null;
   shippingAmount: string | number;
   taxAmount: string | number;
   grandTotal: string | number;
@@ -52,6 +72,8 @@ type InvoiceDocument = {
   paymentTerms?: string | null;
   bankInfo?: string | null;
   notes?: string | null;
+  workshopInfo?: WorkshopInvoiceInfo | null;
+  attendees?: WorkshopAttendeeInvoiceRow[];
 };
 
 const COLORS = {
@@ -360,6 +382,64 @@ export class InvoiceService {
     }
   }
 
+  private drawWorkshopInfoBlock(
+    page: PDFPage,
+    x: number,
+    topY: number,
+    width: number,
+    fontRegular: PDFFont,
+    fontBold: PDFFont,
+    info: WorkshopInvoiceInfo,
+  ) {
+    const contentWidth = width - 28;
+
+    this.drawText(page, 'WORKSHOP INFO', x, topY, fontBold, 9, COLORS.muted);
+
+    let cursorY = topY - 18;
+
+    const titleLines = this.drawWrappedText(
+      page,
+      info.title || 'Workshop',
+      x,
+      cursorY,
+      contentWidth,
+      fontBold,
+      11.5,
+      13,
+      COLORS.text,
+      2,
+    );
+
+    cursorY -= titleLines * 13 + 8;
+
+    const rows = [
+      `Type: ${info.workshopType || '—'}`,
+      `Location: ${info.locationLabel || '—'}`,
+      `Dates: ${info.dateRangeLabel || 'TBA'}`,
+      `Institute: ${info.instituteName || '—'}`,
+      `Address: ${info.instituteAddress || '—'}`,
+      info.instituteEmail ? `Email: ${info.instituteEmail}` : null,
+      info.institutePhone ? `Phone: ${info.institutePhone}` : null,
+    ].filter(Boolean) as string[];
+
+    for (const row of rows) {
+      const usedLines = this.drawWrappedText(
+        page,
+        row,
+        x,
+        cursorY,
+        contentWidth,
+        fontRegular,
+        9.2,
+        11,
+        COLORS.muted,
+        2,
+      );
+
+      cursorY -= usedLines * 11 + 5;
+    }
+  }
+
   private getSupplier(): InvoiceParty {
     const addressLine1 =
       this.config.get<string>('INVOICE_SUPPLIER_ADDRESS_LINE1') ||
@@ -392,6 +472,100 @@ export class InvoiceService {
     zip?: string | null,
   ) {
     return [city, state, zip].filter(Boolean).join(', ').replace(', ,', ',');
+  }
+
+  private toSingleLineAddress(party: InvoiceParty): string {
+    return [party.addressLine1, party.addressLine2, party.cityStateZip]
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  private toTitleLabel(value?: string | null): string {
+    if (!value) return 'Workshop';
+
+    return String(value)
+      .replace(/[_-]+/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  private formatDateValue(value?: string | Date | null): string | null {
+    if (!value) return null;
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+
+    return date.toLocaleDateString('en-US');
+  }
+
+  private resolveWorkshopType(workshop: any): string {
+    return this.toTitleLabel(
+      workshop?.type ||
+        workshop?.workshopType ||
+        workshop?.deliveryMode ||
+        workshop?.format ||
+        'Workshop',
+    );
+  }
+
+  private resolveWorkshopLocation(workshop: any): string {
+    const mode = String(
+      workshop?.deliveryMode || workshop?.type || workshop?.format || '',
+    ).toLowerCase();
+
+    if (
+      mode.includes('online') ||
+      mode.includes('virtual') ||
+      mode.includes('webinar')
+    ) {
+      return 'Online Platform';
+    }
+
+    const locationParts = [
+      workshop?.location,
+      workshop?.venue,
+      workshop?.addressLine1,
+      workshop?.addressLine2,
+      workshop?.city,
+      workshop?.state,
+      workshop?.zipCode,
+    ].filter(Boolean);
+
+    return locationParts.length > 0 ? locationParts.join(', ') : 'TBA';
+  }
+
+  private resolveWorkshopDateRange(workshop: any): string {
+    const explicitLabel =
+      workshop?.tentativeDateLabel ||
+      workshop?.dateRangeLabel ||
+      workshop?.dateRange ||
+      null;
+
+    if (explicitLabel) {
+      return String(explicitLabel);
+    }
+
+    const start =
+      this.formatDateValue(
+        workshop?.tentativeStartDate ||
+          workshop?.startDate ||
+          workshop?.courseStartDate ||
+          workshop?.sessionStartDate,
+      ) || null;
+
+    const end =
+      this.formatDateValue(
+        workshop?.tentativeEndDate ||
+          workshop?.endDate ||
+          workshop?.courseEndDate ||
+          workshop?.sessionEndDate,
+      ) || null;
+
+    if (start && end) {
+      return start === end ? start : `${start} - ${end}`;
+    }
+
+    return start || end || 'TBA';
   }
 
   private drawWrappedTextRowCentered(
@@ -498,6 +672,7 @@ export class InvoiceService {
         total: item.total || 0,
       })),
       subtotal: order.subtotal,
+      discountAmount: 0,
       shippingAmount: order.shippingAmount,
       taxAmount: order.taxAmount,
       grandTotal: order.grandTotal,
@@ -529,10 +704,21 @@ export class InvoiceService {
       ? (orderSummary as any).attendees
       : [];
 
+    let discountInfo: any = null;
+    try {
+      discountInfo = orderSummary.discountInfo
+        ? JSON.parse(orderSummary.discountInfo)
+        : null;
+    } catch {
+      discountInfo = null;
+    }
+
     const attendeeCount =
       attendees.length || Number((orderSummary as any).numberOfSeats || 1);
-    const unitPrice = Number((orderSummary as any).pricePerSeat || 0);
+    const appliedPricePerSeat = Number((orderSummary as any).pricePerSeat || 0);
     const totalPrice = Number((orderSummary as any).totalPrice || 0);
+    const discountAmount = Number(discountInfo?.totalSavings || 0);
+    const subtotalBeforeDiscount = totalPrice + discountAmount;
 
     const buyerName =
       user.fullLegalName ||
@@ -546,9 +732,27 @@ export class InvoiceService {
       user.shippingPostalCode,
     );
 
-    const workshopDate = workshop?.registrationDeadline
-      ? new Date(workshop.registrationDeadline).toLocaleDateString('en-US')
-      : new Date(orderSummary.createdAt).toLocaleDateString('en-US');
+    const supplier = this.getSupplier();
+
+    const attendeeRows: WorkshopAttendeeInvoiceRow[] =
+      attendees.length > 0
+        ? attendees.map((attendee: any) => ({
+            fullName: attendee.fullName || attendee.name || 'Attendee',
+            professionalRole:
+              attendee.professionalRole || attendee.clinicalRole || null,
+            email: attendee.email || null,
+            unitPrice: appliedPricePerSeat,
+            total: appliedPricePerSeat,
+          }))
+        : [
+            {
+              fullName: buyerName,
+              professionalRole: null,
+              email: user.medicalEmail || null,
+              unitPrice: appliedPricePerSeat,
+              total: totalPrice,
+            },
+          ];
 
     const doc: InvoiceDocument = {
       invoiceNumber: `INV-WS-${orderSummary.id.slice(0, 8).toUpperCase()}`,
@@ -556,7 +760,7 @@ export class InvoiceService {
       invoiceDate: new Date(orderSummary.createdAt).toLocaleDateString('en-US'),
       currency: 'USD',
       purchaseType: 'WORKSHOP',
-      supplier: this.getSupplier(),
+      supplier,
       buyer: {
         name: buyerName,
         addressLine1: user.shippingAddressLine1 || '—',
@@ -573,18 +777,20 @@ export class InvoiceService {
         email: user.medicalEmail || null,
         phone: user.phoneNumber || null,
       },
-      items: [
-        {
-          name: workshop?.title
-            ? `Workshop: ${workshop.title} (${workshopDate})`
-            : 'Workshop Enrollment',
-          sku: workshop?.id || orderSummary.id,
-          quantity: attendeeCount,
-          unitPrice,
-          total: totalPrice,
-        },
-      ],
-      subtotal: totalPrice,
+      items: [],
+      attendees: attendeeRows,
+      workshopInfo: {
+        title: workshop?.title || 'Workshop Enrollment',
+        workshopType: this.resolveWorkshopType(workshop),
+        locationLabel: this.resolveWorkshopLocation(workshop),
+        dateRangeLabel: this.resolveWorkshopDateRange(workshop),
+        instituteName: supplier.name,
+        instituteAddress: this.toSingleLineAddress(supplier),
+        instituteEmail: supplier.email || null,
+        institutePhone: supplier.phone || null,
+      },
+      subtotal: subtotalBeforeDiscount,
+      discountAmount,
       shippingAmount: 0,
       taxAmount: 0,
       grandTotal: totalPrice,
@@ -598,11 +804,7 @@ export class InvoiceService {
         this.config.get<string>('INVOICE_PAYMENT_TERMS') || 'Due on receipt',
       bankInfo: this.config.get<string>('INVOICE_BANK_INFO') || null,
       notes:
-        attendees.length > 0
-          ? `Registered attendees: ${attendees
-              .map((a: any) => a.fullName || a.name || a.email || 'Attendee')
-              .join(', ')}`
-          : 'This invoice confirms payment for your workshop registration.',
+        'This invoice confirms payment for your workshop registration. Please retain this document for your records.',
     };
 
     return this.renderInvoice(doc);
@@ -808,303 +1010,669 @@ export class InvoiceService {
 
     y -= infoBoxH + 30;
 
-    const detailsBoxH = 132;
-    const detailsBoxW = 260;
+    if (doc.purchaseType === 'WORKSHOP') {
+      const detailsBoxH = 170;
+      const detailsBoxW = 260;
 
-    this.drawBox(
-      page,
-      left,
-      y,
-      detailsBoxW,
-      detailsBoxH,
-      COLORS.white,
-      COLORS.border,
-    );
-    this.drawBox(
-      page,
-      left + detailsBoxW + cardGap,
-      y,
-      detailsBoxW,
-      detailsBoxH,
-      COLORS.white,
-      COLORS.border,
-    );
-
-    this.drawAddressBlock(page, left + 14, y - 16, fontRegular, fontBold, {
-      title: 'SUPPLIER',
-      name: doc.supplier.name,
-      addressLine1: doc.supplier.addressLine1,
-      addressLine2: doc.supplier.addressLine2,
-      cityStateZip: doc.supplier.cityStateZip,
-      taxId: doc.supplier.taxId,
-      email: doc.supplier.email,
-      phone: doc.supplier.phone,
-    });
-
-    this.drawAddressBlock(
-      page,
-      left + detailsBoxW + cardGap + 14,
-      y - 16,
-      fontRegular,
-      fontBold,
-      {
-        title: 'BILL TO',
-        name: doc.buyer.name,
-        addressLine1: doc.buyer.addressLine1,
-        addressLine2: doc.buyer.addressLine2,
-        cityStateZip: doc.buyer.cityStateZip,
-        taxId: doc.buyer.taxId,
-        email: doc.buyer.email,
-        phone: doc.buyer.phone,
-      },
-    );
-
-    y -= detailsBoxH + 24;
-
-    this.drawText(page, 'ITEMS', left, y, fontBold, 14, COLORS.text);
-
-    y -= 18;
-
-    const tableX = left;
-    const tableW = right - left;
-    const headerH = 30;
-    const rowH = 42;
-
-    this.drawBox(
-      page,
-      tableX,
-      y,
-      tableW,
-      headerH,
-      COLORS.primarySoft,
-      COLORS.border,
-    );
-
-    const colItemX = tableX + 12;
-    const colSkuX = tableX + 290;
-    const colQtyX = tableX + 376;
-    const colPriceRight = tableX + 458;
-    const colTotalRight = tableX + tableW - 20;
-
-    this.drawText(page, 'ITEM', colItemX, y - 20, fontBold, 8.5, COLORS.muted);
-    this.drawText(
-      page,
-      'SKU / REF',
-      colSkuX,
-      y - 20,
-      fontBold,
-      8.5,
-      COLORS.muted,
-    );
-    this.drawText(page, 'QTY', colQtyX, y - 20, fontBold, 8.5, COLORS.muted);
-    this.drawRightText(
-      page,
-      'UNIT PRICE',
-      colPriceRight,
-      y - 20,
-      fontBold,
-      8.5,
-      COLORS.muted,
-    );
-    this.drawRightText(
-      page,
-      'TOTAL',
-      colTotalRight,
-      y - 20,
-      fontBold,
-      8.5,
-      COLORS.muted,
-    );
-
-    y -= headerH;
-
-    for (const item of doc.items) {
-      this.drawBox(page, tableX, y, tableW, rowH, COLORS.white, COLORS.border);
-
-      this.drawWrappedTextRowCentered(
+      this.drawBox(
         page,
-        item.name,
-        colItemX,
+        left,
         y,
-        rowH,
-        260,
-        fontBold,
-        10.2,
-        12,
-        COLORS.text,
-        2,
+        detailsBoxW,
+        detailsBoxH,
+        COLORS.white,
+        COLORS.border,
+      );
+      this.drawBox(
+        page,
+        left + detailsBoxW + cardGap,
+        y,
+        detailsBoxW,
+        detailsBoxH,
+        COLORS.white,
+        COLORS.border,
       );
 
-      this.drawWrappedTextRowCentered(
+      this.drawWorkshopInfoBlock(
         page,
-        item.sku || '—',
-        colSkuX,
-        y,
-        rowH,
-        70,
+        left + 14,
+        y - 16,
+        detailsBoxW - 28,
         fontRegular,
-        9.5,
-        10,
+        fontBold,
+        doc.workshopInfo || {
+          title: 'Workshop',
+          workshopType: 'Workshop',
+          locationLabel: 'TBA',
+          dateRangeLabel: 'TBA',
+          instituteName: doc.supplier.name,
+          instituteAddress: this.toSingleLineAddress(doc.supplier),
+          instituteEmail: doc.supplier.email || null,
+          institutePhone: doc.supplier.phone || null,
+        },
+      );
+
+      this.drawAddressBlock(
+        page,
+        left + detailsBoxW + cardGap + 14,
+        y - 16,
+        fontRegular,
+        fontBold,
+        {
+          title: 'BILL TO',
+          name: doc.buyer.name,
+          addressLine1: doc.buyer.addressLine1,
+          addressLine2: doc.buyer.addressLine2,
+          cityStateZip: doc.buyer.cityStateZip,
+          taxId: doc.buyer.taxId,
+          email: doc.buyer.email,
+          phone: doc.buyer.phone,
+        },
+      );
+
+      y -= detailsBoxH + 24;
+
+      this.drawText(page, 'ATTENDEES', left, y, fontBold, 14, COLORS.text);
+
+      y -= 18;
+
+      const tableX = left;
+      const tableW = right - left;
+      const headerH = 30;
+      const rowH = 56;
+
+      this.drawBox(
+        page,
+        tableX,
+        y,
+        tableW,
+        headerH,
+        COLORS.primarySoft,
+        COLORS.border,
+      );
+
+      const colAttendeeX = tableX + 12;
+      const colEmailX = tableX + 235;
+      const colPriceRight = tableX + 455;
+      const colTotalRight = tableX + tableW - 20;
+
+      this.drawText(
+        page,
+        'ATTENDEE',
+        colAttendeeX,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawText(
+        page,
+        'EMAIL',
+        colEmailX,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawRightText(
+        page,
+        'PRICE',
+        colPriceRight,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawRightText(
+        page,
+        'TOTAL',
+        colTotalRight,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+
+      y -= headerH;
+
+      for (const attendee of doc.attendees ?? []) {
+        this.drawBox(
+          page,
+          tableX,
+          y,
+          tableW,
+          rowH,
+          COLORS.white,
+          COLORS.border,
+        );
+
+        this.drawWrappedText(
+          page,
+          attendee.fullName || 'Attendee',
+          colAttendeeX,
+          y - 18,
+          180,
+          fontBold,
+          10.2,
+          12,
+          COLORS.text,
+          2,
+        );
+
+        if (attendee.professionalRole) {
+          this.drawWrappedText(
+            page,
+            attendee.professionalRole,
+            colAttendeeX,
+            y - 36,
+            180,
+            fontRegular,
+            9.4,
+            11,
+            COLORS.muted,
+            2,
+          );
+        }
+
+        this.drawWrappedTextRowCentered(
+          page,
+          attendee.email || '—',
+          colEmailX,
+          y,
+          rowH,
+          160,
+          fontRegular,
+          9.6,
+          11,
+          COLORS.text,
+          2,
+        );
+
+        const amountY = y - rowH / 2 - 4;
+
+        this.drawRightText(
+          page,
+          this.money(attendee.unitPrice, doc.currency),
+          colPriceRight,
+          amountY,
+          fontRegular,
+          10,
+          COLORS.text,
+        );
+
+        this.drawRightText(
+          page,
+          this.money(attendee.total, doc.currency),
+          colTotalRight,
+          amountY,
+          fontBold,
+          10,
+          COLORS.text,
+        );
+
+        y -= rowH;
+      }
+
+      y -= 18;
+
+      const summaryW = 235;
+      const summaryH = 180;
+      const summaryX = right - summaryW;
+
+      this.drawBox(
+        page,
+        summaryX,
+        y,
+        summaryW,
+        summaryH,
+        COLORS.primarySoft,
+        COLORS.border,
+      );
+
+      const summaryLabelX = summaryX + 16;
+      const summaryValueRight = summaryX + summaryW - 16;
+      const discountAmount = Number(doc.discountAmount || 0);
+
+      this.drawText(
+        page,
+        'Subtotal',
+        summaryLabelX,
+        y - 22,
+        fontRegular,
+        10.5,
         COLORS.text,
-        2,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.subtotal, doc.currency),
+        summaryValueRight,
+        y - 22,
+        fontBold,
+        10.5,
+        COLORS.text,
       );
 
       this.drawText(
         page,
-        String(item.quantity || 0),
-        colQtyX,
-        y - 22,
+        'Discount',
+        summaryLabelX,
+        y - 44,
         fontRegular,
-        10,
+        10.5,
         COLORS.text,
       );
       this.drawRightText(
         page,
-        this.money(item.unitPrice, doc.currency),
+        `-${this.money(discountAmount, doc.currency)}`,
+        summaryValueRight,
+        y - 44,
+        fontBold,
+        10.5,
+        COLORS.success,
+      );
+
+      this.drawText(
+        page,
+        'Shipping',
+        summaryLabelX,
+        y - 66,
+        fontRegular,
+        10.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.shippingAmount, doc.currency),
+        summaryValueRight,
+        y - 66,
+        fontBold,
+        10.5,
+        COLORS.text,
+      );
+
+      this.drawText(
+        page,
+        'Tax',
+        summaryLabelX,
+        y - 88,
+        fontRegular,
+        10.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.taxAmount, doc.currency),
+        summaryValueRight,
+        y - 88,
+        fontBold,
+        10.5,
+        COLORS.text,
+      );
+
+      this.drawLine(
+        page,
+        summaryX + 16,
+        y - 102,
+        summaryX + summaryW - 16,
+        y - 102,
+      );
+
+      this.drawText(
+        page,
+        'Grand Total',
+        summaryLabelX,
+        y - 126,
+        fontBold,
+        11.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.grandTotal, doc.currency),
+        summaryValueRight,
+        y - 126,
+        fontBold,
+        15,
+        COLORS.primary,
+      );
+
+      this.drawText(
+        page,
+        `Payment Terms: ${doc.paymentTerms || 'Due on receipt'}`,
+        summaryLabelX,
+        y - 148,
+        fontRegular,
+        8.8,
+        COLORS.muted,
+      );
+
+      this.drawWrappedText(
+        page,
+        `Bank / Remittance: ${doc.bankInfo || 'Available upon request'}`,
+        summaryLabelX,
+        y - 164,
+        200,
+        fontRegular,
+        8.5,
+        10,
+        COLORS.muted,
+        2,
+      );
+    } else {
+      const detailsBoxH = 132;
+      const detailsBoxW = 260;
+
+      this.drawBox(
+        page,
+        left,
+        y,
+        detailsBoxW,
+        detailsBoxH,
+        COLORS.white,
+        COLORS.border,
+      );
+      this.drawBox(
+        page,
+        left + detailsBoxW + cardGap,
+        y,
+        detailsBoxW,
+        detailsBoxH,
+        COLORS.white,
+        COLORS.border,
+      );
+
+      this.drawAddressBlock(page, left + 14, y - 16, fontRegular, fontBold, {
+        title: 'SUPPLIER',
+        name: doc.supplier.name,
+        addressLine1: doc.supplier.addressLine1,
+        addressLine2: doc.supplier.addressLine2,
+        cityStateZip: doc.supplier.cityStateZip,
+        taxId: doc.supplier.taxId,
+        email: doc.supplier.email,
+        phone: doc.supplier.phone,
+      });
+
+      this.drawAddressBlock(
+        page,
+        left + detailsBoxW + cardGap + 14,
+        y - 16,
+        fontRegular,
+        fontBold,
+        {
+          title: 'BILL TO',
+          name: doc.buyer.name,
+          addressLine1: doc.buyer.addressLine1,
+          addressLine2: doc.buyer.addressLine2,
+          cityStateZip: doc.buyer.cityStateZip,
+          taxId: doc.buyer.taxId,
+          email: doc.buyer.email,
+          phone: doc.buyer.phone,
+        },
+      );
+
+      y -= detailsBoxH + 24;
+
+      this.drawText(page, 'ITEMS', left, y, fontBold, 14, COLORS.text);
+
+      y -= 18;
+
+      const tableX = left;
+      const tableW = right - left;
+      const headerH = 30;
+      const rowH = 42;
+
+      this.drawBox(
+        page,
+        tableX,
+        y,
+        tableW,
+        headerH,
+        COLORS.primarySoft,
+        COLORS.border,
+      );
+
+      const colItemX = tableX + 12;
+      const colSkuX = tableX + 290;
+      const colQtyX = tableX + 376;
+      const colPriceRight = tableX + 458;
+      const colTotalRight = tableX + tableW - 20;
+
+      this.drawText(
+        page,
+        'ITEM',
+        colItemX,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawText(
+        page,
+        'SKU / REF',
+        colSkuX,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawText(page, 'QTY', colQtyX, y - 20, fontBold, 8.5, COLORS.muted);
+      this.drawRightText(
+        page,
+        'UNIT PRICE',
         colPriceRight,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+      this.drawRightText(
+        page,
+        'TOTAL',
+        colTotalRight,
+        y - 20,
+        fontBold,
+        8.5,
+        COLORS.muted,
+      );
+
+      y -= headerH;
+
+      for (const item of doc.items) {
+        this.drawBox(
+          page,
+          tableX,
+          y,
+          tableW,
+          rowH,
+          COLORS.white,
+          COLORS.border,
+        );
+
+        this.drawWrappedTextRowCentered(
+          page,
+          item.name,
+          colItemX,
+          y,
+          rowH,
+          260,
+          fontBold,
+          10.2,
+          12,
+          COLORS.text,
+          2,
+        );
+
+        this.drawWrappedTextRowCentered(
+          page,
+          item.sku || '—',
+          colSkuX,
+          y,
+          rowH,
+          70,
+          fontRegular,
+          9.5,
+          10,
+          COLORS.text,
+          2,
+        );
+
+        this.drawText(
+          page,
+          String(item.quantity || 0),
+          colQtyX,
+          y - 22,
+          fontRegular,
+          10,
+          COLORS.text,
+        );
+        this.drawRightText(
+          page,
+          this.money(item.unitPrice, doc.currency),
+          colPriceRight,
+          y - 22,
+          fontRegular,
+          10,
+          COLORS.text,
+        );
+        this.drawRightText(
+          page,
+          this.money(item.total, doc.currency),
+          colTotalRight,
+          y - 22,
+          fontBold,
+          10,
+          COLORS.text,
+        );
+
+        y -= rowH;
+      }
+
+      y -= 18;
+
+      const summaryW = 235;
+      const summaryH = 158;
+      const summaryX = right - summaryW;
+
+      this.drawBox(
+        page,
+        summaryX,
+        y,
+        summaryW,
+        summaryH,
+        COLORS.primarySoft,
+        COLORS.border,
+      );
+
+      const summaryLabelX = summaryX + 16;
+      const summaryValueRight = summaryX + summaryW - 16;
+
+      this.drawText(
+        page,
+        'Subtotal',
+        summaryLabelX,
         y - 22,
         fontRegular,
-        10,
+        10.5,
         COLORS.text,
       );
       this.drawRightText(
         page,
-        this.money(item.total, doc.currency),
-        colTotalRight,
+        this.money(doc.subtotal, doc.currency),
+        summaryValueRight,
         y - 22,
         fontBold,
-        10,
+        10.5,
         COLORS.text,
       );
 
-      y -= rowH;
+      this.drawText(
+        page,
+        'Shipping',
+        summaryLabelX,
+        y - 44,
+        fontRegular,
+        10.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.shippingAmount, doc.currency),
+        summaryValueRight,
+        y - 44,
+        fontBold,
+        10.5,
+        COLORS.text,
+      );
+
+      this.drawText(
+        page,
+        'Tax',
+        summaryLabelX,
+        y - 66,
+        fontRegular,
+        10.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.taxAmount, doc.currency),
+        summaryValueRight,
+        y - 66,
+        fontBold,
+        10.5,
+        COLORS.text,
+      );
+
+      this.drawLine(
+        page,
+        summaryX + 16,
+        y - 80,
+        summaryX + summaryW - 16,
+        y - 80,
+      );
+
+      this.drawText(
+        page,
+        'Grand Total',
+        summaryLabelX,
+        y - 104,
+        fontBold,
+        11.5,
+        COLORS.text,
+      );
+      this.drawRightText(
+        page,
+        this.money(doc.grandTotal, doc.currency),
+        summaryValueRight,
+        y - 104,
+        fontBold,
+        15,
+        COLORS.primary,
+      );
+
+      this.drawText(
+        page,
+        `Payment Terms: ${doc.paymentTerms || 'Due on receipt'}`,
+        summaryLabelX,
+        y - 126,
+        fontRegular,
+        8.8,
+        COLORS.muted,
+      );
+
+      this.drawWrappedText(
+        page,
+        `Bank / Remittance: ${doc.bankInfo || 'Available upon request'}`,
+        summaryLabelX,
+        y - 142,
+        200,
+        fontRegular,
+        8.5,
+        10,
+        COLORS.muted,
+        2,
+      );
     }
-
-    y -= 18;
-
-    const summaryW = 235;
-    const summaryH = 158;
-    const summaryX = right - summaryW;
-
-    this.drawBox(
-      page,
-      summaryX,
-      y,
-      summaryW,
-      summaryH,
-      COLORS.primarySoft,
-      COLORS.border,
-    );
-
-    const summaryLabelX = summaryX + 16;
-    const summaryValueRight = summaryX + summaryW - 16;
-
-    this.drawText(
-      page,
-      'Subtotal',
-      summaryLabelX,
-      y - 22,
-      fontRegular,
-      10.5,
-      COLORS.text,
-    );
-    this.drawRightText(
-      page,
-      this.money(doc.subtotal, doc.currency),
-      summaryValueRight,
-      y - 22,
-      fontBold,
-      10.5,
-      COLORS.text,
-    );
-
-    this.drawText(
-      page,
-      'Shipping',
-      summaryLabelX,
-      y - 44,
-      fontRegular,
-      10.5,
-      COLORS.text,
-    );
-    this.drawRightText(
-      page,
-      this.money(doc.shippingAmount, doc.currency),
-      summaryValueRight,
-      y - 44,
-      fontBold,
-      10.5,
-      COLORS.text,
-    );
-
-    this.drawText(
-      page,
-      'Tax',
-      summaryLabelX,
-      y - 66,
-      fontRegular,
-      10.5,
-      COLORS.text,
-    );
-    this.drawRightText(
-      page,
-      this.money(doc.taxAmount, doc.currency),
-      summaryValueRight,
-      y - 66,
-      fontBold,
-      10.5,
-      COLORS.text,
-    );
-
-    this.drawLine(
-      page,
-      summaryX + 16,
-      y - 80,
-      summaryX + summaryW - 16,
-      y - 80,
-    );
-
-    this.drawText(
-      page,
-      'Grand Total',
-      summaryLabelX,
-      y - 104,
-      fontBold,
-      11.5,
-      COLORS.text,
-    );
-    this.drawRightText(
-      page,
-      this.money(doc.grandTotal, doc.currency),
-      summaryValueRight,
-      y - 104,
-      fontBold,
-      15,
-      COLORS.primary,
-    );
-
-    this.drawText(
-      page,
-      `Payment Terms: ${doc.paymentTerms || 'Due on receipt'}`,
-      summaryLabelX,
-      y - 126,
-      fontRegular,
-      8.8,
-      COLORS.muted,
-    );
-
-    this.drawWrappedText(
-      page,
-      `Bank / Remittance: ${doc.bankInfo || 'Available upon request'}`,
-      summaryLabelX,
-      y - 142,
-      200,
-      fontRegular,
-      8.5,
-      10,
-      COLORS.muted,
-      2,
-    );
 
     const footerY = 38;
     this.drawLine(
