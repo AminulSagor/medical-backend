@@ -128,7 +128,6 @@ export class AnalyticsService {
   }
 
   // ────────────────── TOP SELLING PRODUCTS ──────────────────
-  // ────────────────── TOP SELLING PRODUCTS ──────────────────
   async getTopProductsMetrics(
     query: TopProductsQueryDto,
   ): Promise<Record<string, unknown>> {
@@ -198,33 +197,45 @@ export class AnalyticsService {
     query: TopProductsQueryDto,
   ): Promise<Record<string, unknown>> {
     const { start, end, isAllTime } = this.getDateRanges(query);
-    const page = query.page || 1;
-    const limit = query.limit || 10;
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.orderItemRepo
+    const baseQb = this.orderItemRepo
       .createQueryBuilder('item')
       .innerJoin('item.order', 'ord')
-      .select('item.productId', 'id')
-      .addSelect('MAX(item.productName)', 'name') // Fetching directly from OrderItem
-      .addSelect('MAX(item.sku)', 'sku') // Fetching directly from OrderItem
-      .addSelect('MAX(item.image)', 'image') // Fetching directly from OrderItem
-      .addSelect('SUM(item.quantity)', 'unitsSold')
-      .addSelect('SUM(item.total)', 'revenue')
       .where('ord.paymentStatus = :status', { status: PaymentStatus.PAID })
       .andWhere('ord.type = :type', { type: OrderType.PRODUCT })
       .andWhere('item.productId IS NOT NULL');
 
     if (!isAllTime) {
-      qb.andWhere('ord.createdAt BETWEEN :s AND :e', { s: start, e: end });
+      baseQb.andWhere('ord.createdAt BETWEEN :s AND :e', {
+        s: start,
+        e: end,
+      });
     }
 
-    qb.groupBy('item.productId')
-      .orderBy('revenue', 'DESC')
-      .limit(limit)
-      .offset(skip);
+    const totalRow = await baseQb
+      .clone()
+      .select('COUNT(DISTINCT item.productId)', 'total')
+      .getRawOne<{ total: string }>();
 
-    const rawData = await qb.getRawMany();
+    const rawData = await baseQb
+      .clone()
+      .select('item.productId', 'id')
+      .addSelect('MAX(item.productName)', 'name')
+      .addSelect('MAX(item.sku)', 'sku')
+      .addSelect('MAX((item.images)[1])', 'image')
+      .addSelect('SUM(item.quantity)', 'unitsSold')
+      .addSelect('SUM(item.total)', 'revenue')
+      .groupBy('item.productId')
+      .orderBy('SUM(item.quantity)', 'DESC')
+      .addOrderBy('SUM(item.total)', 'DESC')
+      .offset(skip)
+      .limit(limit)
+      .getRawMany();
+
+    const total = Number(totalRow?.total ?? 0);
 
     return {
       items: rawData.map((row, index) => ({
@@ -235,40 +246,64 @@ export class AnalyticsService {
           image: row.image || null,
         },
         sku: row.sku || 'N/A',
-        category: 'PRODUCT', // Fallback to prevent crash
+        category: 'PRODUCT',
         totalSales: Number(row.unitsSold || 0),
         revenue: Number(row.revenue || 0),
-        trend: '+0%', // Default fallback
-        stockStatus: 'In Stock', // Default fallback
+        trend: '+0%',
+        stockStatus: 'In Stock',
       })),
-      meta: { page, limit },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 
   async getPopularCoursesMetrics(
     query: PopularCoursesQueryDto,
   ): Promise<PopularCoursesMetricsResponse> {
-    const totalEnrollmentsRaw = await this.workshopReservationRepo
+    const { start, end, isAllTime } = this.getDateRanges(query);
+
+    const totalEnrollmentsQb = this.workshopReservationRepo
       .createQueryBuilder('reservation')
       .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
       .where('reservation.status = :status', {
-        status: ReservationStatus.CONFIRMED, // Or 'confirmed'
-      })
-      .getRawOne();
+        status: ReservationStatus.CONFIRMED,
+      });
 
+    if (!isAllTime) {
+      totalEnrollmentsQb.andWhere('reservation.createdAt BETWEEN :s AND :e', {
+        s: start,
+        e: end,
+      });
+    }
+
+    const totalEnrollmentsRaw = await totalEnrollmentsQb.getRawOne();
     const totalEnrollments = Number(totalEnrollmentsRaw?.total || 0);
 
-    const completedEnrollmentsRaw = await this.workshopReservationRepo
+    const completedEnrollmentsQb = this.workshopReservationRepo
       .createQueryBuilder('reservation')
       .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
       .where('reservation.status = :status', {
         status: ReservationStatus.CONFIRMED,
       })
       .andWhere('reservation.courseProgressStatus = :progressStatus', {
-        progressStatus: CourseProgressStatus.COMPLETED, // Or 'completed'
-      })
-      .getRawOne();
+        progressStatus: CourseProgressStatus.COMPLETED,
+      });
 
+    if (!isAllTime) {
+      completedEnrollmentsQb.andWhere(
+        'reservation.createdAt BETWEEN :s AND :e',
+        {
+          s: start,
+          e: end,
+        },
+      );
+    }
+
+    const completedEnrollmentsRaw = await completedEnrollmentsQb.getRawOne();
     const completedEnrollments = Number(completedEnrollmentsRaw?.total || 0);
 
     const completionRate =
@@ -276,8 +311,6 @@ export class AnalyticsService {
         ? Number(((completedEnrollments / totalEnrollments) * 100).toFixed(1))
         : 0;
 
-    // ✅ FIX: Removed LOWER() entirely.
-    // TypeORM and Postgres handle exact enum string matches perfectly without SQL functions.
     const activeInstructors = await this.usersRepo
       .createQueryBuilder('user')
       .where('user.role = :role', { role: 'instructor' })
@@ -296,49 +329,65 @@ export class AnalyticsService {
     query: PopularCoursesQueryDto,
   ): Promise<Record<string, unknown>> {
     const { start, end, isAllTime } = this.getDateRanges(query);
-    const page = query.page || 1;
-    const limit = query.limit || 10;
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.workshopOrderSummaryRepo
+    const baseQb = this.workshopOrderSummaryRepo
       .createQueryBuilder('wos')
       .leftJoin('wos.workshop', 'w')
+      .where('wos.workshopId IS NOT NULL')
+      .andWhere('w.status != :draftStatus', { draftStatus: 'draft' });
+
+    if (!isAllTime) {
+      baseQb.andWhere('wos.createdAt BETWEEN :s AND :e', {
+        s: start,
+        e: end,
+      });
+    }
+
+    const totalRow = await baseQb
+      .clone()
+      .select('COUNT(DISTINCT wos.workshopId)', 'total')
+      .getRawOne<{ total: string }>();
+
+    const rawData = await baseQb
+      .clone()
       .select('wos.workshopId', 'id')
       .addSelect('MAX(w.title)', 'name')
       .addSelect('SUM(wos.numberOfSeats)', 'enrolled')
       .addSelect('SUM(wos.totalPrice)', 'revenue')
-      .where('wos.status = :status', { status: OrderSummaryStatus.COMPLETED });
-
-    if (!isAllTime) {
-      qb.andWhere('wos.createdAt BETWEEN :s AND :e', { s: start, e: end });
-    }
-
-    // safely removing problematic columns like instructorId, category, and type
-    // to ensure the raw query doesn't crash.
-
-    qb.groupBy('wos.workshopId')
-      .orderBy('revenue', 'DESC')
+      .groupBy('wos.workshopId')
+      .orderBy('SUM(wos.numberOfSeats)', 'DESC')
+      .addOrderBy('SUM(wos.totalPrice)', 'DESC')
+      .offset(skip)
       .limit(limit)
-      .offset(skip);
+      .getRawMany();
 
-    const rawData = await qb.getRawMany();
+    const total = Number(totalRow?.total ?? 0);
 
     return {
       items: rawData.map((row) => ({
+        courseId: row.id,
         courseName: row.name || 'Unknown Course',
-        category: 'COURSE', // Fallback for UI
-        nextSession: 'TBA', // Fallback for UI
+        category: 'COURSE',
+        nextSession: 'TBA',
         instructorDetails: {
           id: null,
-          name: 'TBA', // Fallback
+          name: 'TBA',
           image: null,
         },
         enrolled: Number(row.enrolled || 0),
-        completion: '85%', // Mocked for UI
+        completion: '85%',
         revenue: Number(row.revenue || 0),
         status: 'Active',
       })),
-      meta: { page, limit },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 
