@@ -10,6 +10,7 @@ import { WorkshopOrderSummary } from 'src/workshops/entities/workshop-order-summ
 import { Product } from 'src/products/entities/product.entity';
 import { Workshop } from 'src/workshops/entities/workshop.entity';
 import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation.entity';
+import { Category } from 'src/categories/entities/category.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation
       Workshop,
       User,
       WorkshopReservation,
+      Category,
     ]),
   ],
   providers: [AnalyticsService],

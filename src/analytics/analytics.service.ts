@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 // Replace these with your actual entity imports
 import { Order } from 'src/orders/entities/order.entity';
@@ -27,6 +27,7 @@ import {
   ReservationStatus,
   WorkshopReservation,
 } from 'src/workshops/entities/workshop-reservation.entity';
+import { Category } from 'src/categories/entities/category.entity';
 
 @Injectable()
 export class AnalyticsService {
@@ -46,6 +47,8 @@ export class AnalyticsService {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(WorkshopReservation)
     private readonly workshopReservationRepo: Repository<WorkshopReservation>,
+    @InjectRepository(Category)
+    private readonly categoriesRepo: Repository<Category>,
   ) {}
 
   private getDateRanges(query: AnalyticsQueryDto) {
@@ -192,6 +195,44 @@ export class AnalyticsService {
     };
   }
 
+  private formatTrend(currentValue: number, previousValue: number): string {
+    if (previousValue <= 0) {
+      return currentValue > 0 ? '+100.0%' : '0.0%';
+    }
+
+    const diff = ((currentValue - previousValue) / previousValue) * 100;
+    const sign = diff > 0 ? '+' : '';
+    return `${sign}${diff.toFixed(1)}%`;
+  }
+
+  private getProductStockStatus(product?: Product | null): string {
+    if (!product) {
+      return 'Unknown';
+    }
+
+    if (product.stockQuantity <= 0) {
+      return product.backorder ? 'Backorder' : 'Out of Stock';
+    }
+
+    if (product.stockQuantity <= product.lowStockAlert) {
+      return 'Low Stock';
+    }
+
+    return 'In Stock';
+  }
+
+  private formatLabel(value?: string | null): string {
+    if (!value) {
+      return 'Unknown';
+    }
+
+    return value
+      .split('_')
+      .join(' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
   // ────────────────── TOP SELLING PRODUCTS ──────────────────
   async getTopProducts(
     query: TopProductsQueryDto,
@@ -236,22 +277,86 @@ export class AnalyticsService {
       .getRawMany();
 
     const total = Number(totalRow?.total ?? 0);
+    const productIds = rawData.map((row) => row.id).filter(Boolean);
+
+    const products = productIds.length
+      ? await this.productRepo.find({
+          where: { id: In(productIds) },
+        })
+      : [];
+
+    const productMap = new Map(
+      products.map((product) => [product.id, product]),
+    );
+
+    const allCategoryIds = [
+      ...new Set(
+        products.flatMap((product) => product.categoryId ?? []).filter(Boolean),
+      ),
+    ];
+
+    const categories = allCategoryIds.length
+      ? await this.categoriesRepo.find({
+          where: { id: In(allCategoryIds) },
+        })
+      : [];
+
+    const categoryMap = new Map(
+      categories.map((category) => [category.id, category.name]),
+    );
+
+    let previousUnitsMap = new Map<string, number>();
+
+    if (!isAllTime && start && end) {
+      const rangeMs = end.getTime() - start.getTime();
+      const previousEnd = new Date(start.getTime() - 1);
+      const previousStart = new Date(previousEnd.getTime() - rangeMs);
+
+      const previousRows = await this.orderItemRepo
+        .createQueryBuilder('item')
+        .innerJoin('item.order', 'ord')
+        .select('item.productId', 'id')
+        .addSelect('SUM(item.quantity)', 'unitsSold')
+        .where('ord.paymentStatus = :status', { status: PaymentStatus.PAID })
+        .andWhere('ord.type = :type', { type: OrderType.PRODUCT })
+        .andWhere('item.productId IS NOT NULL')
+        .andWhere('ord.createdAt BETWEEN :s AND :e', {
+          s: previousStart,
+          e: previousEnd,
+        })
+        .groupBy('item.productId')
+        .getRawMany();
+
+      previousUnitsMap = new Map(
+        previousRows.map((row) => [row.id, Number(row.unitsSold || 0)]),
+      );
+    }
 
     return {
-      items: rawData.map((row, index) => ({
-        rank: skip + index + 1,
-        productDetails: {
-          id: row.id,
-          name: row.name || 'Unknown Product',
-          image: row.image || null,
-        },
-        sku: row.sku || 'N/A',
-        category: 'PRODUCT',
-        totalSales: Number(row.unitsSold || 0),
-        revenue: Number(row.revenue || 0),
-        trend: '+0%',
-        stockStatus: 'In Stock',
-      })),
+      items: rawData.map((row, index) => {
+        const product = productMap.get(row.id);
+        const categoryNames = (product?.categoryId ?? [])
+          .map((categoryId) => categoryMap.get(categoryId))
+          .filter(Boolean);
+
+        const currentUnits = Number(row.unitsSold || 0);
+        const previousUnits = previousUnitsMap.get(row.id) ?? 0;
+
+        return {
+          rank: skip + index + 1,
+          productDetails: {
+            id: row.id,
+            name: row.name || product?.name || 'Unknown Product',
+            image: row.image || product?.details?.images?.[0] || null,
+          },
+          sku: row.sku || product?.sku || 'N/A',
+          category: categoryNames.join(', ') || null,
+          totalSales: currentUnits,
+          revenue: Number(row.revenue || 0),
+          trend: this.formatTrend(currentUnits, previousUnits),
+          stockStatus: this.getProductStockStatus(product),
+        };
+      }),
       meta: {
         page,
         limit,
@@ -365,23 +470,111 @@ export class AnalyticsService {
       .getRawMany();
 
     const total = Number(totalRow?.total ?? 0);
+    const workshopIds = rawData.map((row) => row.id).filter(Boolean);
+
+    const workshops = workshopIds.length
+      ? await this.workshopRepo.find({
+          where: { id: In(workshopIds) } as any,
+          relations: ['days', 'faculty'],
+        })
+      : [];
+
+    const workshopMap = new Map(
+      workshops.map((workshop) => [workshop.id, workshop]),
+    );
+
+    const reservationQb = this.workshopReservationRepo
+      .createQueryBuilder('reservation')
+      .select('reservation.workshopId', 'workshopId')
+      .addSelect('COALESCE(SUM(reservation.numberOfSeats), 0)', 'totalSeats')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN reservation.courseProgressStatus = :completedStatus THEN reservation.numberOfSeats ELSE 0 END), 0)`,
+        'completedSeats',
+      )
+      .where('reservation.workshopId IN (:...workshopIds)', { workshopIds })
+      .andWhere('reservation.status = :confirmedStatus', {
+        confirmedStatus: ReservationStatus.CONFIRMED,
+      })
+      .setParameter('completedStatus', CourseProgressStatus.COMPLETED)
+      .groupBy('reservation.workshopId');
+
+    if (!isAllTime && start && end) {
+      reservationQb.andWhere('reservation.createdAt BETWEEN :s AND :e', {
+        s: start,
+        e: end,
+      });
+    }
+
+    const reservationRows = workshopIds.length
+      ? await reservationQb.getRawMany()
+      : [];
+
+    const reservationMap = new Map(
+      reservationRows.map((row) => [
+        row.workshopId,
+        {
+          totalSeats: Number(row.totalSeats || 0),
+          completedSeats: Number(row.completedSeats || 0),
+        },
+      ]),
+    );
 
     return {
-      items: rawData.map((row) => ({
-        courseId: row.id,
-        courseName: row.name || 'Unknown Course',
-        category: 'COURSE',
-        nextSession: 'TBA',
-        instructorDetails: {
-          id: null,
-          name: 'TBA',
-          image: null,
-        },
-        enrolled: Number(row.enrolled || 0),
-        completion: '85%',
-        revenue: Number(row.revenue || 0),
-        status: 'Active',
-      })),
+      items: rawData.map((row) => {
+        const workshop: any = workshopMap.get(row.id);
+        const reservationStats = reservationMap.get(row.id) ?? {
+          totalSeats: 0,
+          completedSeats: 0,
+        };
+
+        const completion =
+          reservationStats.totalSeats > 0
+            ? `${(
+                (reservationStats.completedSeats /
+                  reservationStats.totalSeats) *
+                100
+              ).toFixed(1)}%`
+            : '0.0%';
+
+        const sortedDays = [...(workshop?.days ?? [])]
+          .map((day: any) => day?.date)
+          .filter(Boolean)
+          .sort((a: string, b: string) => a.localeCompare(b));
+
+        const today = new Date().toISOString().slice(0, 10);
+        const nextSession =
+          sortedDays.find((date: string) => date >= today) ??
+          sortedDays[0] ??
+          workshop?.registrationDeadline ??
+          null;
+
+        const instructor = workshop?.faculty?.[0];
+
+        return {
+          courseId: row.id,
+          courseName: row.name || workshop?.title || 'Unknown Course',
+          category: workshop?.deliveryMode
+            ? this.formatLabel(workshop.deliveryMode)
+            : null,
+          nextSession,
+          instructorDetails: instructor
+            ? {
+                id: instructor.id,
+                name:
+                  [instructor.firstName, instructor.lastName]
+                    .filter(Boolean)
+                    .join(' ') ||
+                  instructor.fullName ||
+                  'Unknown Instructor',
+                image: instructor.imageUrl || null,
+              }
+            : null,
+          enrolled: Number(row.enrolled || 0),
+          completion,
+          revenue: Number(row.revenue || 0),
+          status: this.formatLabel(workshop?.status),
+        };
+      }),
       meta: {
         page,
         limit,
