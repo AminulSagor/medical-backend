@@ -1669,21 +1669,46 @@ export class PaymentsService {
       throw new NotFoundException('User not found');
     }
 
-    const paidPayments = await this.paymentsRepo.find({
+    let payment = await this.paymentsRepo.findOne({
       where: {
         userId,
         domainType: PaymentDomainType.WORKSHOP,
+        finalizedRefId: summaryId,
         status: PaymentTransactionStatus.PAID,
       } as any,
       order: { createdAt: 'DESC' } as any,
     });
 
-    const payment = paidPayments.find(
-      (p) =>
-        p.finalizedRefId === summaryId ||
-        p.domainRefId === summaryId ||
-        p.metadata?.orderSummaryId === summaryId,
-    );
+    if (!payment) {
+      payment = await this.paymentsRepo.findOne({
+        where: {
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+          domainRefId: summaryId,
+          status: PaymentTransactionStatus.PAID,
+        } as any,
+        order: { createdAt: 'DESC' } as any,
+      });
+    }
+
+    if (!payment) {
+      const candidates = await this.paymentsRepo.find({
+        where: {
+          userId,
+          domainType: PaymentDomainType.WORKSHOP,
+          status: PaymentTransactionStatus.PAID,
+        } as any,
+        order: { createdAt: 'DESC' } as any,
+      });
+
+      payment =
+        candidates.find(
+          (p) =>
+            p.finalizedRefId === summaryId ||
+            p.domainRefId === summaryId ||
+            p.metadata?.orderSummaryId === summaryId,
+        ) ?? null;
+    }
 
     if (!payment) {
       throw new NotFoundException('Paid workshop payment not found');
