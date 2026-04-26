@@ -1179,74 +1179,79 @@ export class WorkshopsService {
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const qb = this.workshopsRepo
-      .createQueryBuilder('w')
-      .leftJoinAndSelect('w.faculty', 'faculty')
-      .leftJoinAndSelect('w.days', 'days')
-      .leftJoinAndSelect('days.segments', 'segments')
-      .leftJoinAndSelect('w.groupDiscounts', 'groupDiscounts');
+    const baseQb = this.workshopsRepo.createQueryBuilder('w');
 
     if (query.q?.trim()) {
-      qb.andWhere('LOWER(w.title) LIKE :q', {
+      baseQb.andWhere('LOWER(w.title) LIKE :q', {
         q: `%${query.q.toLowerCase().trim()}%`,
       });
     }
 
     if (query.facilityId) {
-      qb.andWhere('w.facilityIds LIKE :facilityId', {
+      baseQb.andWhere('w.facilityIds LIKE :facilityId', {
         facilityId: `%${query.facilityId}%`,
       });
     }
 
     if (query.deliveryMode) {
-      qb.andWhere('w.deliveryMode = :deliveryMode', {
+      baseQb.andWhere('w.deliveryMode = :deliveryMode', {
         deliveryMode: query.deliveryMode,
       });
     }
 
     if (query.status) {
-      qb.andWhere('w.status = :status', { status: query.status });
+      baseQb.andWhere('w.status = :status', { status: query.status });
     }
 
     if (query.offersCmeCredits) {
       const wantsCme = query.offersCmeCredits === 'true';
       if (wantsCme) {
-        qb.andWhere('w.cmeCreditsCount > 0');
+        baseQb.andWhere('w.cmeCreditsCount > 0');
       } else {
-        qb.andWhere('w.cmeCreditsCount = 0');
+        baseQb.andWhere('w.cmeCreditsCount = 0');
       }
     }
 
     if (query.groupDiscountEnabled) {
-      qb.andWhere('w.groupDiscountEnabled = :groupDiscountEnabled', {
+      baseQb.andWhere('w.groupDiscountEnabled = :groupDiscountEnabled', {
         groupDiscountEnabled: query.groupDiscountEnabled === 'true',
       });
     }
 
     if (query.facultyId) {
-      qb.andWhere(
+      baseQb.andWhere(
         `EXISTS (
-        SELECT 1 FROM workshop_faculty wf
-        WHERE wf."workshopId" = w.id AND wf."facultyId" = :facultyId
+        SELECT 1
+        FROM workshop_faculty wf
+        WHERE wf."workshopId" = w.id
+          AND wf."facultyId" = :facultyId
       )`,
         { facultyId: query.facultyId },
       );
     }
 
     if (query.upcoming === 'true') {
-      qb.andWhere(
-        'w.id IN (SELECT DISTINCT wd."workshopId" FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
+      baseQb.andWhere(
+        `w.id IN (
+        SELECT DISTINCT wd."workshopId"
+        FROM workshop_days wd
+        WHERE wd.date >= CURRENT_DATE
+      )`,
       );
     }
 
     if (query.past === 'true') {
-      qb.andWhere(
-        'w.id NOT IN (SELECT DISTINCT wd."workshopId" FROM workshop_days wd WHERE wd.date >= CURRENT_DATE)',
+      baseQb.andWhere(
+        `w.id NOT IN (
+        SELECT DISTINCT wd."workshopId"
+        FROM workshop_days wd
+        WHERE wd.date >= CURRENT_DATE
+      )`,
       );
     }
 
     if (query.hasRefundRequests === 'true') {
-      qb.andWhere(
+      baseQb.andWhere(
         `EXISTS (
         SELECT 1
         FROM workshop_refunds wr
@@ -1261,23 +1266,59 @@ export class WorkshopsService {
     const sortOrder =
       (query.sortOrder ?? 'desc').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
+    const total = await baseQb.clone().getCount();
+
+    const idsQb = baseQb.clone().select('w.id', 'id');
+
     if (sortBy === 'date') {
-      qb.orderBy(
+      idsQb.addSelect(
         `(SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id)`,
-        sortOrder,
+        'first_workshop_date',
       );
-      qb.addOrderBy('w.createdAt', 'DESC');
+
+      idsQb.orderBy('"first_workshop_date"', sortOrder, 'NULLS LAST');
+      idsQb.addOrderBy('w.createdAt', 'DESC');
     } else if (sortBy === 'title') {
-      qb.orderBy('w.title', sortOrder);
+      idsQb.orderBy('w.title', sortOrder);
+      idsQb.addOrderBy('w.createdAt', 'DESC');
     } else {
-      qb.orderBy('w.createdAt', sortOrder);
+      idsQb.orderBy('w.createdAt', sortOrder);
     }
 
-    qb.skip(skip).take(limit);
+    idsQb.addOrderBy('w.id', 'ASC');
+    idsQb.offset(skip).limit(limit);
 
-    const [workshops, total] = await qb.getManyAndCount();
+    const idRows = await idsQb.getRawMany<{ id: string }>();
+    const workshopIds = idRows.map((row) => row.id);
 
-    const workshopIds = workshops.map((w) => w.id);
+    if (workshopIds.length === 0) {
+      return {
+        message: 'Workshops fetched successfully',
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(Math.ceil(total / limit), 1),
+        },
+        data: [],
+      };
+    }
+
+    const workshops = await this.workshopsRepo
+      .createQueryBuilder('w')
+      .leftJoinAndSelect('w.faculty', 'faculty')
+      .leftJoinAndSelect('w.days', 'days')
+      .leftJoinAndSelect('days.segments', 'segments')
+      .leftJoinAndSelect('w.groupDiscounts', 'groupDiscounts')
+      .where('w.id IN (:...workshopIds)', { workshopIds })
+      .getMany();
+
+    const orderMap = new Map(workshopIds.map((id, index) => [id, index]));
+    workshops.sort((a, b) => {
+      const aIndex = orderMap.get(a.id) ?? 0;
+      const bIndex = orderMap.get(b.id) ?? 0;
+      return aIndex - bIndex;
+    });
 
     const reservationCounts =
       workshopIds.length > 0
