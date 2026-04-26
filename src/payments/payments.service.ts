@@ -45,6 +45,7 @@ import {
 import { CartService } from 'src/cart/cart.service';
 import { MailService } from 'src/common/services/mail.service';
 import { InvoiceService } from 'src/common/services/invoice.service';
+import { SubscribersService } from 'src/newsletters/audience/subscribers.service';
 
 type ProductCalculatedItem = {
   productId: string;
@@ -112,6 +113,7 @@ export class PaymentsService {
     private readonly cartService: CartService,
     private readonly mailService: MailService,
     private readonly invoiceService: InvoiceService,
+    private readonly subscribersService: SubscribersService,
   ) {}
 
   private formatAmount(value: number): string {
@@ -520,6 +522,15 @@ export class PaymentsService {
       return;
     }
 
+    await this.subscribersService.ensureSubscribedFromTrustedSource({
+      email: to,
+      source: 'CHECKOUT',
+      fullName: order.customerName || params.user.fullLegalName || null,
+      clinicalRole: (params.user as any).clinicalRole || null,
+      phone: order.customerPhone || params.user.phoneNumber || null,
+      institution: (params.user as any).institution || null,
+    });
+
     const invoiceBuffer =
       await this.invoiceService.generateProductInvoiceBuffer({
         order: order as any,
@@ -560,142 +571,142 @@ export class PaymentsService {
     });
   }
 
-  private async sendWorkshopInvoiceEmail(params: {
-    summaryId: string;
-    payment: PaymentTransaction;
-    user: User;
-  }) {
-    const orderSummary = await this.workshopOrderSummariesRepo.findOne({
-      where: { id: params.summaryId, userId: params.user.id } as any,
-      relations: ['workshop', 'attendees'],
-    });
+  // private async sendWorkshopInvoiceEmail(params: {
+  //   summaryId: string;
+  //   payment: PaymentTransaction;
+  //   user: User;
+  // }) {
+  //   const orderSummary = await this.workshopOrderSummariesRepo.findOne({
+  //     where: { id: params.summaryId, userId: params.user.id } as any,
+  //     relations: ['workshop', 'attendees'],
+  //   });
 
-    if (!orderSummary) {
-      throw new NotFoundException(
-        'Workshop order summary not found for invoice email',
-      );
-    }
+  //   if (!orderSummary) {
+  //     throw new NotFoundException(
+  //       'Workshop order summary not found for invoice email',
+  //     );
+  //   }
 
-    const to =
-      params.user.medicalEmail?.trim() ||
-      (params.user as any).email?.trim() ||
-      null;
+  //   const to =
+  //     params.user.medicalEmail?.trim() ||
+  //     (params.user as any).email?.trim() ||
+  //     null;
 
-    console.log('Workshop email target:', to);
+  //   console.log('Workshop email target:', to);
 
-    if (!to) {
-      console.warn(
-        `Workshop invoice email skipped: no recipient email for user ${params.user.id}`,
-      );
-      return;
-    }
+  //   if (!to) {
+  //     console.warn(
+  //       `Workshop invoice email skipped: no recipient email for user ${params.user.id}`,
+  //     );
+  //     return;
+  //   }
 
-    const invoiceBuffer =
-      await this.invoiceService.generateWorkshopInvoiceBuffer({
-        orderSummary,
-        payment: params.payment,
-        user: params.user,
-      });
+  //   const invoiceBuffer =
+  //     await this.invoiceService.generateWorkshopInvoiceBuffer({
+  //       orderSummary,
+  //       payment: params.payment,
+  //       user: params.user,
+  //     });
 
-    const workshopTitle =
-      (orderSummary as any).workshop?.title || 'Workshop Enrollment';
-    const totalPrice = Number((orderSummary as any).totalPrice || 0);
+  //   const workshopTitle =
+  //     (orderSummary as any).workshop?.title || 'Workshop Enrollment';
+  //   const totalPrice = Number((orderSummary as any).totalPrice || 0);
 
-    const subject = `Payment received - ${workshopTitle}`;
-    const html = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-      <h2>Workshop Payment Successful</h2>
-      <p>Hello ${params.user.fullLegalName || 'Customer'},</p>
-      <p>Your workshop payment was received successfully.</p>
-      <p><b>Workshop:</b> ${workshopTitle}</p>
-      <p><b>Paid Amount:</b> $${totalPrice.toFixed(2)}</p>
-      <p>Your invoice is attached as a PDF for your records.</p>
-      <p>Thank you.</p>
-    </div>
-  `;
+  //   const subject = `Payment received - ${workshopTitle}`;
+  //   const html = `
+  //   <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+  //     <h2>Workshop Payment Successful</h2>
+  //     <p>Hello ${params.user.fullLegalName || 'Customer'},</p>
+  //     <p>Your workshop payment was received successfully.</p>
+  //     <p><b>Workshop:</b> ${workshopTitle}</p>
+  //     <p><b>Paid Amount:</b> $${totalPrice.toFixed(2)}</p>
+  //     <p>Your invoice is attached as a PDF for your records.</p>
+  //     <p>Thank you.</p>
+  //   </div>
+  // `;
 
-    const text = [
-      'Workshop Payment Successful',
-      '',
-      `Hello ${params.user.fullLegalName || 'Customer'},`,
-      `Workshop: ${workshopTitle}`,
-      `Paid Amount: $${totalPrice.toFixed(2)}`,
-      'Your invoice is attached as a PDF.',
-      'Thank you.',
-    ].join('\n');
+  //   const text = [
+  //     'Workshop Payment Successful',
+  //     '',
+  //     `Hello ${params.user.fullLegalName || 'Customer'},`,
+  //     `Workshop: ${workshopTitle}`,
+  //     `Paid Amount: $${totalPrice.toFixed(2)}`,
+  //     'Your invoice is attached as a PDF.',
+  //     'Thank you.',
+  //   ].join('\n');
 
-    await this.mailService.sendPaymentSuccessEmailWithInvoice({
-      to,
-      customerName: params.user.fullLegalName,
-      subject,
-      html,
-      text,
-      invoiceFileName: `invoice-workshop-${orderSummary.id.slice(0, 8)}.pdf`,
-      invoiceBuffer,
-    });
+  //   await this.mailService.sendPaymentSuccessEmailWithInvoice({
+  //     to,
+  //     customerName: params.user.fullLegalName,
+  //     subject,
+  //     html,
+  //     text,
+  //     invoiceFileName: `invoice-workshop-${orderSummary.id.slice(0, 8)}.pdf`,
+  //     invoiceBuffer,
+  //   });
 
-    console.log(
-      `Workshop invoice email sent successfully to ${to} for summary ${orderSummary.id}`,
-    );
-  }
+  //   console.log(
+  //     `Workshop invoice email sent successfully to ${to} for summary ${orderSummary.id}`,
+  //   );
+  // }
 
-  private async ensureWorkshopInvoiceEmailSent(
-    payment: PaymentTransaction,
-  ): Promise<void> {
-    if (payment.domainType !== PaymentDomainType.WORKSHOP) {
-      return;
-    }
+  // private async ensureWorkshopInvoiceEmailSent(
+  //   payment: PaymentTransaction,
+  // ): Promise<void> {
+  //   if (payment.domainType !== PaymentDomainType.WORKSHOP) {
+  //     return;
+  //   }
 
-    const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
-    if (alreadySent) {
-      console.log(
-        `Workshop invoice email already sent for payment ${payment.id}`,
-      );
-      return;
-    }
+  //   const alreadySent = Boolean(payment.metadata?.workshopInvoiceEmailSentAt);
+  //   if (alreadySent) {
+  //     console.log(
+  //       `Workshop invoice email already sent for payment ${payment.id}`,
+  //     );
+  //     return;
+  //   }
 
-    const summaryId =
-      payment.finalizedRefId ||
-      payment.domainRefId ||
-      payment.metadata?.orderSummaryId;
+  //   const summaryId =
+  //     payment.finalizedRefId ||
+  //     payment.domainRefId ||
+  //     payment.metadata?.orderSummaryId;
 
-    console.log('Workshop email summaryId:', summaryId);
+  //   console.log('Workshop email summaryId:', summaryId);
 
-    if (!summaryId) {
-      console.warn(
-        `Workshop invoice email skipped: missing summary id for payment ${payment.id}`,
-      );
-      return;
-    }
+  //   if (!summaryId) {
+  //     console.warn(
+  //       `Workshop invoice email skipped: missing summary id for payment ${payment.id}`,
+  //     );
+  //     return;
+  //   }
 
-    const user = await this.usersRepo.findOne({
-      where: { id: payment.userId },
-    });
+  //   const user = await this.usersRepo.findOne({
+  //     where: { id: payment.userId },
+  //   });
 
-    if (!user) {
-      console.warn(
-        `Workshop invoice email skipped: user not found for payment ${payment.id}`,
-      );
-      return;
-    }
+  //   if (!user) {
+  //     console.warn(
+  //       `Workshop invoice email skipped: user not found for payment ${payment.id}`,
+  //     );
+  //     return;
+  //   }
 
-    await this.sendWorkshopInvoiceEmail({
-      summaryId,
-      payment,
-      user,
-    });
+  //   await this.sendWorkshopInvoiceEmail({
+  //     summaryId,
+  //     payment,
+  //     user,
+  //   });
 
-    payment.metadata = {
-      ...(payment.metadata ?? {}),
-      workshopInvoiceEmailSentAt: new Date().toISOString(),
-    };
+  //   payment.metadata = {
+  //     ...(payment.metadata ?? {}),
+  //     workshopInvoiceEmailSentAt: new Date().toISOString(),
+  //   };
 
-    await this.paymentsRepo.save(payment);
+  //   await this.paymentsRepo.save(payment);
 
-    console.log(
-      `Workshop invoice email marked as sent for payment ${payment.id}`,
-    );
-  }
+  //   console.log(
+  //     `Workshop invoice email marked as sent for payment ${payment.id}`,
+  //   );
+  // }
 
   async createProductOrderSummary(
     userId: string,
@@ -1314,19 +1325,19 @@ export class PaymentsService {
       await this.paymentsRepo.save(payment);
     }
 
-    if (
-      payment.domainType === PaymentDomainType.WORKSHOP &&
-      payment.status === PaymentTransactionStatus.PAID
-    ) {
-      try {
-        await this.ensureWorkshopInvoiceEmailSent(payment);
-      } catch (emailError) {
-        console.error(
-          `Failed to ensure workshop invoice email in webhook for payment ${payment.id}:`,
-          emailError,
-        );
-      }
-    }
+    // if (
+    //   payment.domainType === PaymentDomainType.WORKSHOP &&
+    //   payment.status === PaymentTransactionStatus.PAID
+    // ) {
+    //   try {
+    //     await this.ensureWorkshopInvoiceEmailSent(payment);
+    //   } catch (emailError) {
+    //     console.error(
+    //       `Failed to ensure workshop invoice email in webhook for payment ${payment.id}:`,
+    //       emailError,
+    //     );
+    //   }
+    // }
   }
 
   private async handleCheckoutSessionExpired(session: any) {
@@ -1658,15 +1669,21 @@ export class PaymentsService {
       throw new NotFoundException('User not found');
     }
 
-    const payment = await this.paymentsRepo.findOne({
+    const paidPayments = await this.paymentsRepo.find({
       where: {
         userId,
         domainType: PaymentDomainType.WORKSHOP,
-        finalizedRefId: summaryId,
         status: PaymentTransactionStatus.PAID,
       } as any,
       order: { createdAt: 'DESC' } as any,
     });
+
+    const payment = paidPayments.find(
+      (p) =>
+        p.finalizedRefId === summaryId ||
+        p.domainRefId === summaryId ||
+        p.metadata?.orderSummaryId === summaryId,
+    );
 
     if (!payment) {
       throw new NotFoundException('Paid workshop payment not found');
@@ -1730,16 +1747,16 @@ export class PaymentsService {
 
               await this.paymentsRepo.save(payment);
             }
-            if (payment.domainType === PaymentDomainType.WORKSHOP) {
-              try {
-                await this.ensureWorkshopInvoiceEmailSent(payment);
-              } catch (emailError) {
-                console.error(
-                  `Failed to ensure workshop invoice email during session status check for payment ${payment.id}:`,
-                  emailError,
-                );
-              }
-            }
+            // if (payment.domainType === PaymentDomainType.WORKSHOP) {
+            //   try {
+            //     await this.ensureWorkshopInvoiceEmailSent(payment);
+            //   } catch (emailError) {
+            //     console.error(
+            //       `Failed to ensure workshop invoice email during session status check for payment ${payment.id}:`,
+            //       emailError,
+            //     );
+            //   }
+            // }
           }
         }
       } catch (err) {
@@ -1749,19 +1766,19 @@ export class PaymentsService {
         );
       }
     }
-    if (
-      payment.domainType === PaymentDomainType.WORKSHOP &&
-      payment.status === PaymentTransactionStatus.PAID
-    ) {
-      try {
-        await this.ensureWorkshopInvoiceEmailSent(payment);
-      } catch (emailError) {
-        console.error(
-          `Failed final workshop invoice email safeguard for payment ${payment.id}:`,
-          emailError,
-        );
-      }
-    }
+    // if (
+    //   payment.domainType === PaymentDomainType.WORKSHOP &&
+    //   payment.status === PaymentTransactionStatus.PAID
+    // ) {
+    //   try {
+    //     await this.ensureWorkshopInvoiceEmailSent(payment);
+    //   } catch (emailError) {
+    //     console.error(
+    //       `Failed final workshop invoice email safeguard for payment ${payment.id}:`,
+    //       emailError,
+    //     );
+    //   }
+    // }
     return {
       message: 'Payment session status fetched successfully',
       data: {

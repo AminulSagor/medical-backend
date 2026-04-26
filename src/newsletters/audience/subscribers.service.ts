@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -17,7 +18,10 @@ import { SubscriberHistoryQueryDto } from './dto/subscriber-history-query.dto';
 import { CreateSubscriberNoteDto } from './dto/create-subscriber-note.dto';
 import { UpdateSubscriberProfileDto } from './dto/update-subscriber-profile.dto';
 import { ListSubscribersAdvancedQueryDto } from './dto/list-subscribers-advanced-query.dto';
-import { PublicSubscribeDto } from './dto/public-subscribe.dto';
+import {
+  CompleteSubscriberProfileDto,
+  PublicSubscribeDto,
+} from './dto/public-subscribe.dto';
 import { NewsletterBroadcast } from '../broadcasts/entities/newsletter-broadcast.entity';
 import { User } from 'src/users/entities/user.entity';
 import { Order } from 'src/orders/entities/order.entity';
@@ -58,12 +62,20 @@ export class SubscribersService {
     dto: PublicSubscribeDto,
   ): Promise<Record<string, unknown>> {
     const email = dto.email.trim().toLowerCase();
-    const source = dto.source?.trim().toUpperCase() || 'WEBSITE';
+    const allowedSources = ['FOOTER', 'POPUP', 'CHECKOUT', 'WEBINAR'];
+    const source = dto.source?.trim().toUpperCase() || 'FOOTER';
+
+    if (!allowedSources.includes(source)) {
+      throw new BadRequestException(
+        `Invalid source. Allowed sources: ${allowedSources.join(', ')}`,
+      );
+    }
 
     let subscriber = await this.subscriberRepo.findOne({ where: { email } });
 
     if (subscriber) {
       let updated = false;
+      const s: any = subscriber;
 
       if (subscriber.status !== NewsletterSubscriberStatus.ACTIVE) {
         subscriber.status = NewsletterSubscriberStatus.ACTIVE;
@@ -79,20 +91,109 @@ export class SubscribersService {
       }
 
       if (updated) {
-        await this.subscriberRepo.save(subscriber);
+        subscriber = await this.subscriberRepo.save(subscriber);
       }
-      return { message: 'Successfully subscribed to the newsletter' };
+
+      const profileCompleted = Boolean(
+        subscriber.fullName || s.clinicalRole || s.phone || s.institution,
+      );
+
+      return {
+        message: 'Successfully subscribed to the newsletter',
+        data: {
+          subscriberId: subscriber.id,
+          email: subscriber.email,
+          source: subscriber.source,
+          profileCompleted,
+          nextStep: profileCompleted
+            ? 'SUBSCRIPTION_COMPLETED'
+            : 'COMPLETE_PROFILE_OPTIONAL',
+        },
+      };
     }
 
     subscriber = this.subscriberRepo.create({
       email,
       fullName: dto.fullName?.trim() || null,
       status: NewsletterSubscriberStatus.ACTIVE,
-      source: source,
+      source,
     });
 
-    await this.subscriberRepo.save(subscriber);
-    return { message: 'Successfully subscribed to the newsletter' };
+    subscriber = await this.subscriberRepo.save(subscriber);
+
+    return {
+      message: 'Successfully subscribed to the newsletter',
+      data: {
+        subscriberId: subscriber.id,
+        email: subscriber.email,
+        source: subscriber.source,
+        profileCompleted: Boolean(subscriber.fullName),
+        nextStep: 'COMPLETE_PROFILE_OPTIONAL',
+      },
+    };
+  }
+
+  async completePublicSubscriberProfile(
+    subscriberId: string,
+    dto: CompleteSubscriberProfileDto,
+  ): Promise<Record<string, unknown>> {
+    const subscriber: any = await this.subscriberRepo.findOne({
+      where: { id: subscriberId } as any,
+    });
+
+    if (!subscriber) {
+      throw new NotFoundException('Subscriber not found');
+    }
+
+    if (subscriber.status !== NewsletterSubscriberStatus.ACTIVE) {
+      throw new BadRequestException(
+        'Only active subscribers can complete profile',
+      );
+    }
+
+    let updated = false;
+
+    if (dto.fullName !== undefined) {
+      subscriber.fullName = dto.fullName?.trim() || null;
+      updated = true;
+    }
+
+    if (dto.clinicalRole !== undefined) {
+      subscriber.clinicalRole = dto.clinicalRole?.trim() || null;
+      updated = true;
+    }
+
+    if (dto.phone !== undefined) {
+      subscriber.phone = dto.phone?.trim() || null;
+      updated = true;
+    }
+
+    if (dto.institution !== undefined) {
+      subscriber.institution = dto.institution?.trim() || null;
+      updated = true;
+    }
+
+    if (updated) {
+      await this.subscriberRepo.save(subscriber);
+    }
+
+    return {
+      message: 'Subscriber profile completed successfully',
+      data: {
+        subscriberId: subscriber.id,
+        email: subscriber.email,
+        fullName: subscriber.fullName ?? null,
+        clinicalRole: subscriber.clinicalRole ?? null,
+        phone: subscriber.phone ?? null,
+        institution: subscriber.institution ?? null,
+        profileCompleted: Boolean(
+          subscriber.fullName ||
+          subscriber.clinicalRole ||
+          subscriber.phone ||
+          subscriber.institution,
+        ),
+      },
+    };
   }
 
   async getMetrics(): Promise<Record<string, unknown>> {
@@ -802,6 +903,141 @@ export class SubscribersService {
         limit,
         total,
         totalPages: Math.max(Math.ceil(total / limit), 1),
+      },
+    };
+  }
+
+  async ensureSubscribedFromTrustedSource(params: {
+    email: string;
+    source: 'CHECKOUT' | 'WEBINAR' | 'POPUP';
+    fullName?: string | null;
+    clinicalRole?: string | null;
+    phone?: string | null;
+    institution?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const email = params.email?.trim().toLowerCase();
+
+    if (!email) {
+      return {
+        subscribed: false,
+        reason: 'EMAIL_MISSING',
+      };
+    }
+
+    let subscriber: any = await this.subscriberRepo.findOne({
+      where: { email } as any,
+    });
+
+    // Respect existing unsubscribed users instead of auto-reactivating them
+    if (subscriber) {
+      if (subscriber.status === NewsletterSubscriberStatus.ACTIVE) {
+        let updated = false;
+
+        if (!subscriber.fullName && params.fullName?.trim()) {
+          subscriber.fullName = params.fullName.trim();
+          updated = true;
+        }
+
+        if (!subscriber.clinicalRole && params.clinicalRole?.trim()) {
+          subscriber.clinicalRole = params.clinicalRole.trim();
+          updated = true;
+        }
+
+        if (!subscriber.phone && params.phone?.trim()) {
+          subscriber.phone = params.phone.trim();
+          updated = true;
+        }
+
+        if (!subscriber.institution && params.institution?.trim()) {
+          subscriber.institution = params.institution.trim();
+          updated = true;
+        }
+
+        if (updated) {
+          await this.subscriberRepo.save(subscriber);
+        }
+
+        return {
+          subscribed: true,
+          alreadySubscribed: true,
+          subscriberId: subscriber.id,
+          status: subscriber.status,
+        };
+      }
+
+      return {
+        subscribed: false,
+        alreadySubscribed: false,
+        subscriberId: subscriber.id,
+        status: subscriber.status,
+        reason: 'EXISTS_BUT_NOT_ACTIVE',
+      };
+    }
+
+    subscriber = this.subscriberRepo.create({
+      email,
+      fullName: params.fullName?.trim() || null,
+      clinicalRole: params.clinicalRole?.trim() || null,
+      phone: params.phone?.trim() || null,
+      institution: params.institution?.trim() || null,
+      status: NewsletterSubscriberStatus.ACTIVE,
+      source: params.source,
+    } as any);
+
+    const saved = await this.subscriberRepo.save(subscriber);
+
+    return {
+      subscribed: true,
+      alreadySubscribed: false,
+      subscriberId: saved.id,
+      status: saved.status,
+      source: saved.source,
+    };
+  }
+
+  async getLoggedInSubscriptionStatus(
+    userId: string,
+  ): Promise<Record<string, unknown>> {
+    const user: any = await this.usersRepo.findOne({
+      where: { id: userId } as any,
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const email = user.medicalEmail?.trim()?.toLowerCase() || null;
+
+    if (!email) {
+      return {
+        message: 'Newsletter subscription status fetched successfully',
+        data: {
+          email: null,
+          subscriberId: null,
+          isSubscribed: false,
+          subscriberStatus: null,
+          shouldShowPopup: false,
+          suggestedSource: 'POPUP',
+        },
+      };
+    }
+
+    const subscriber = await this.subscriberRepo.findOne({
+      where: { email } as any,
+    });
+
+    const isSubscribed =
+      !!subscriber && subscriber.status === NewsletterSubscriberStatus.ACTIVE;
+
+    return {
+      message: 'Newsletter subscription status fetched successfully',
+      data: {
+        email,
+        subscriberId: subscriber?.id ?? null,
+        isSubscribed,
+        subscriberStatus: subscriber?.status ?? null,
+        shouldShowPopup: !isSubscribed,
+        suggestedSource: !isSubscribed ? 'POPUP' : null,
       },
     };
   }
