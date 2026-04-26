@@ -1245,7 +1245,6 @@ export class WorkshopsService {
       );
     }
 
-    // FIX: hasRefundRequests=true should mean pending refund requests only
     if (query.hasRefundRequests === 'true') {
       qb.andWhere(
         `EXISTS (
@@ -1259,11 +1258,20 @@ export class WorkshopsService {
     }
 
     const sortBy = query.sortBy ?? 'createdAt';
-    const sortOrder = (query.sortOrder ?? 'desc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+    const sortOrder =
+      (query.sortOrder ?? 'desc').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-    qb.orderBy(`w.${sortBy}`, sortOrder);
+    if (sortBy === 'date') {
+      qb.orderBy(
+        `(SELECT MIN(wd.date) FROM workshop_days wd WHERE wd."workshopId" = w.id)`,
+        sortOrder,
+      );
+      qb.addOrderBy('w.createdAt', 'DESC');
+    } else if (sortBy === 'title') {
+      qb.orderBy('w.title', sortOrder);
+    } else {
+      qb.orderBy('w.createdAt', sortOrder);
+    }
 
     qb.skip(skip).take(limit);
 

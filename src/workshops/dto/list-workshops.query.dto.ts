@@ -52,8 +52,8 @@ export class ListWorkshopsQueryDto {
   limit?: number = 10;
 
   @IsOptional()
-  @IsIn(['createdAt', 'title'])
-  sortBy?: 'createdAt' | 'title' = 'createdAt';
+  @IsIn(['createdAt', 'title', 'date'])
+  sortBy?: 'createdAt' | 'title' | 'date';
 
   @IsOptional()
   @IsIn(['asc', 'desc'])
