@@ -16,6 +16,15 @@ import {
 } from './dto/update-my-profile.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
 import { ActivateDeactivateUserDto } from './dto/activate-deactivate-user.dto';
+import {
+  Workshop,
+  WorkshopStatus,
+} from 'src/workshops/entities/workshop.entity';
+import {
+  ReservationStatus,
+  WorkshopReservation,
+} from 'src/workshops/entities/workshop-reservation.entity';
+import { CourseProgressStatus } from 'src/workshops/entities/course-progress-status.enum';
 
 function toInt(v: any, fallback: number) {
   const n = parseInt(String(v ?? ''), 10);
@@ -67,6 +76,9 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
     @InjectRepository(Faculty) private facultyRepo: Repository<Faculty>,
+    @InjectRepository(Workshop) private workshopsRepo: Repository<Workshop>,
+    @InjectRepository(WorkshopReservation)
+    private reservationsRepo: Repository<WorkshopReservation>,
   ) {}
 
   private buildSelfProfilePayload(user: User) {
@@ -262,7 +274,7 @@ export class UsersService {
         `NULL::int as "coursesCount"`,
         `u."createdAt" as "joinedAt"`,
       ])
-      .where(`u.role = :userRole`, { userRole: UserRole.USER });
+      .where(`u.role = :userRole`, { userRole: UserRole.STUDENT });
 
     // status filter (students only)
     if (status === 'active') {
@@ -407,7 +419,7 @@ export class UsersService {
 
   private async getTabCounts() {
     const students = await this.usersRepo.count({
-      where: { role: UserRole.USER },
+      where: { role: UserRole.STUDENT },
     });
 
     const faculty = await this.facultyRepo.count();
@@ -773,11 +785,82 @@ export class UsersService {
     };
   }
 
-  private async calculateDirectoryStatistics() {
-    // Total community count
-    const totalCommunity = await this.usersRepo.count();
+  // private async calculateDirectoryStatistics() {
+  //   // Total community count
+  //   const totalCommunity = await this.usersRepo.count();
+  //   //  Active students count
+  //   const activeStudents = await this.usersRepo.count({
+  //     where: { role: UserRole.STUDENT, status: UserStatus.ACTIVE },
+  //   });
+  //   // Growth pulse (users joined in last 30 days)
+  //   const thirtyDaysAgo = new Date();
+  //   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  //   const recentUsers = await this.usersRepo
+  //     .createQueryBuilder('user')
+  //     .where('user.createdAt >= :thirtyDaysAgo', { thirtyDaysAgo })
+  //     .getCount();
+  //   const previousUsers = await this.usersRepo
+  //     .createQueryBuilder('user')
+  //     .where('user.createdAt < :thirtyDaysAgo', { thirtyDaysAgo })
+  //     .getCount();
+  //   const growthPulse =
+  //     previousUsers > 0
+  //       ? ((recentUsers / previousUsers) * 100).toFixed(1) + '%'
+  //       : '0%';
+  //   //  Engagement rate (users active in last 7 days / total users)
+  //   const sevenDaysAgo = new Date();
+  //   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  //   const activeUsersLastWeek = await this.usersRepo
+  //     .createQueryBuilder('user')
+  //     .where('user.lastActiveAt >= :sevenDaysAgo', { sevenDaysAgo })
+  //     .getCount();
+  //   const engagementRate =
+  //     totalCommunity > 0
+  //       ? ((activeUsersLastWeek / totalCommunity) * 100).toFixed(1) + '%'
+  //       : '0%';
+  //   //  Role distribution
+  //   const roleCounts = await this.usersRepo
+  //     .createQueryBuilder('user')
+  //     .select('user.role', 'role')
+  //     .addSelect('COUNT(*)', 'count')
+  //     .groupBy('user.role')
+  //     .getRawMany();
+  //   const roleDistribution = roleCounts.reduce(
+  //     (acc, item) => {
+  //       acc[item.role] = parseInt(item.count);
+  //       return acc;
+  //     },
+  //     {} as Record<string, number>,
+  //   );
+  //   return {
+  //     totalCommunity,
+  //     activeStudents,
+  //     growthPulse,
+  //     engagementRate,
+  //     roleDistribution,
+  //   };
+  // }
 
-    // Active students count
+  private async calculateDirectoryStatistics() {
+    const startOfThisWeek = new Date();
+    const currentDay = startOfThisWeek.getDay();
+    const diffToMonday = currentDay === 0 ? 6 : currentDay - 1;
+    startOfThisWeek.setDate(startOfThisWeek.getDate() - diffToMonday);
+    startOfThisWeek.setHours(0, 0, 0, 0);
+
+    const toPercent = (value: number) => `${value.toFixed(1)}%`;
+
+    // support both old and new role naming
+    const studentRoles = ['student', 'user'];
+    const adminRoles = ['admin'];
+
+    const totalUsers = await this.usersRepo.count();
+    const totalFaculty = await this.facultyRepo.count();
+
+    const totalStudents = await this.usersRepo.count({
+      where: { role: UserRole.STUDENT },
+    });
+
     const activeStudents = await this.usersRepo.count({
       where: {
         role: UserRole.STUDENT,
@@ -785,60 +868,137 @@ export class UsersService {
       },
     });
 
-    // Growth pulse (users joined in last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const recentUsers = await this.usersRepo
+    const newStudentsThisWeek = await this.usersRepo
       .createQueryBuilder('user')
-      .where('user.createdAt >= :thirtyDaysAgo', { thirtyDaysAgo })
+      .where('user.role = :role', { role: UserRole.STUDENT })
+      .andWhere('user.createdAt >= :startOfThisWeek', { startOfThisWeek })
       .getCount();
 
-    const previousUsers = await this.usersRepo
-      .createQueryBuilder('user')
-      .where('user.createdAt < :thirtyDaysAgo', { thirtyDaysAgo })
+    const totalAdmins = await this.usersRepo.count({
+      where: { role: UserRole.ADMIN },
+    });
+
+    const newFacultyThisWeek = await this.facultyRepo
+      .createQueryBuilder('faculty')
+      .where('faculty.createdAt >= :startOfThisWeek', { startOfThisWeek })
       .getCount();
 
-    const growthPulse =
-      previousUsers > 0
-        ? ((recentUsers / previousUsers) * 100).toFixed(1) + '%'
-        : '0%';
+    const totalCommunity = totalUsers + totalFaculty;
+    const growthPulse = newStudentsThisWeek + newFacultyThisWeek;
+    const studentGrowthPulse = newStudentsThisWeek;
+    const instructorGrowthPulse = newFacultyThisWeek;
+    const activeInstructors = totalFaculty;
 
-    // Engagement rate (users active in last 7 days / total users)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const totalStudentEnrollmentsRaw = await this.reservationsRepo
+      .createQueryBuilder('reservation')
+      .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
+      .where('reservation.status = :status', {
+        status: ReservationStatus.CONFIRMED,
+      })
+      .getRawOne<{ total: string }>();
 
-    const activeUsersLastWeek = await this.usersRepo
-      .createQueryBuilder('user')
-      .where('user.lastActiveAt >= :sevenDaysAgo', { sevenDaysAgo })
-      .getCount();
+    const completedStudentEnrollmentsRaw = await this.reservationsRepo
+      .createQueryBuilder('reservation')
+      .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
+      .where('reservation.status = :status', {
+        status: ReservationStatus.CONFIRMED,
+      })
+      .andWhere('reservation.courseProgressStatus = :progressStatus', {
+        progressStatus: CourseProgressStatus.COMPLETED,
+      })
+      .getRawOne<{ total: string }>();
 
-    const engagementRate =
-      totalCommunity > 0
-        ? ((activeUsersLastWeek / totalCommunity) * 100).toFixed(1) + '%'
-        : '0%';
-
-    // Role distribution
-    const roleCounts = await this.usersRepo
-      .createQueryBuilder('user')
-      .select('user.role', 'role')
-      .addSelect('COUNT(*)', 'count')
-      .groupBy('user.role')
-      .getRawMany();
-
-    const roleDistribution = roleCounts.reduce(
-      (acc, item) => {
-        acc[item.role] = parseInt(item.count);
-        return acc;
-      },
-      {} as Record<string, number>,
+    const totalStudentEnrollments = Number(
+      totalStudentEnrollmentsRaw?.total ?? 0,
     );
+    const completedStudentEnrollments = Number(
+      completedStudentEnrollmentsRaw?.total ?? 0,
+    );
+
+    const studentEngagementRateValue =
+      totalStudentEnrollments > 0
+        ? (completedStudentEnrollments / totalStudentEnrollments) * 100
+        : 0;
+
+    const activeEnrollmentsRaw = await this.reservationsRepo
+      .createQueryBuilder('reservation')
+      .innerJoin(Workshop, 'workshop', 'workshop.id = reservation.workshopId')
+      .select('COALESCE(SUM(reservation.numberOfSeats), 0)', 'total')
+      .where('reservation.status = :reservationStatus', {
+        reservationStatus: ReservationStatus.CONFIRMED,
+      })
+      .andWhere('workshop.status = :workshopStatus', {
+        workshopStatus: WorkshopStatus.PUBLISHED,
+      })
+      .andWhere(
+        `
+      EXISTS (
+        SELECT 1
+        FROM workshop_days wd
+        WHERE wd."workshopId" = workshop.id
+          AND wd.date >= CURRENT_DATE
+      )
+    `,
+      )
+      .getRawOne<{ total: string }>();
+
+    const activeEnrollments = Number(activeEnrollmentsRaw?.total ?? 0);
+
+    const instructorTotalWorkshopTaughtRaw = await this.workshopsRepo
+      .createQueryBuilder('workshop')
+      .innerJoin('workshop.faculty', 'faculty')
+      .select('COUNT(DISTINCT workshop.id)', 'total')
+      .where('workshop.status != :draftStatus', {
+        draftStatus: WorkshopStatus.DRAFT,
+      })
+      .getRawOne<{ total: string }>();
+
+    const instructorTotalWorkshopTaught = Number(
+      instructorTotalWorkshopTaughtRaw?.total ?? 0,
+    );
+
+    const engagedInstructorsRaw = await this.workshopsRepo
+      .createQueryBuilder('workshop')
+      .innerJoin('workshop.faculty', 'faculty')
+      .select('COUNT(DISTINCT faculty.id)', 'total')
+      .where('workshop.status != :draftStatus', {
+        draftStatus: WorkshopStatus.DRAFT,
+      })
+      .getRawOne<{ total: string }>();
+
+    const engagedInstructors = Number(engagedInstructorsRaw?.total ?? 0);
+
+    const instructorEngagementRateValue =
+      activeInstructors > 0
+        ? (engagedInstructors / activeInstructors) * 100
+        : 0;
+
+    const engagementRateValue =
+      (studentEngagementRateValue + instructorEngagementRateValue) / 2;
+
+    const roleDistribution = {
+      students: totalStudents,
+      instructors: totalFaculty,
+      admins: totalAdmins,
+      others: Math.max(totalUsers - totalStudents - totalAdmins, 0),
+    };
 
     return {
       totalCommunity,
-      activeStudents,
       growthPulse,
-      engagementRate,
+      engagementRate: toPercent(engagementRateValue),
+
+      activeStudents,
+      studentGrowthPulse,
+      studentEngagementRate: toPercent(studentEngagementRateValue),
+
+      activeEnrollments,
+
+      activeInstructors,
+      instructorGrowthPulse,
+      instructorTotalWorkshopTaught,
+      instructorEngagementRate: toPercent(instructorEngagementRateValue),
+
       roleDistribution,
     };
   }

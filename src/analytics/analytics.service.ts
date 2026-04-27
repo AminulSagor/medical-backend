@@ -5,7 +5,7 @@ import { In, Repository } from 'typeorm';
 // Replace these with your actual entity imports
 import { Order } from 'src/orders/entities/order.entity';
 import { OrderItem } from 'src/orders/entities/order-item.entity';
-import { User } from 'src/users/entities/user.entity';
+import { User, UserRole } from 'src/users/entities/user.entity';
 import { WorkshopEnrollment } from 'src/workshops/entities/workshop-enrollment.entity';
 
 import {
@@ -81,13 +81,13 @@ export class AnalyticsService {
     const getRevenue = async (s: Date, e: Date) => {
       const qb1 = this.orderRepo
         .createQueryBuilder('ord')
-        .select('SUM(ord.grandTotal)', 'total')
+        .select('COALESCE(SUM(ord.grandTotal), 0)', 'total')
         .where('ord.paymentStatus = :status', { status: PaymentStatus.PAID })
         .andWhere('ord.type = :type', { type: OrderType.PRODUCT });
 
       const qb2 = this.workshopOrderSummaryRepo
         .createQueryBuilder('wos')
-        .select('SUM(wos.totalPrice)', 'total')
+        .select('COALESCE(SUM(wos.totalPrice), 0)', 'total')
         .where('wos.status = :status', {
           status: OrderSummaryStatus.COMPLETED,
         });
@@ -97,35 +97,49 @@ export class AnalyticsService {
         qb2.andWhere('wos.createdAt BETWEEN :s AND :e', { s, e });
       }
 
-      const prodRes = await qb1.getRawOne();
-      const courseRes = await qb2.getRawOne();
-      return Number(prodRes?.total || 0) + Number(courseRes?.total || 0);
+      const [prodRes, courseRes] = await Promise.all([
+        qb1.getRawOne<{ total: string }>(),
+        qb2.getRawOne<{ total: string }>(),
+      ]);
+
+      return Number(prodRes?.total ?? 0) + Number(courseRes?.total ?? 0);
     };
 
     const getStudents = async (s: Date, e: Date) => {
-      const qb = this.enrollmentRepo
-        .createQueryBuilder('enrollment')
-        .select('COUNT(DISTINCT enrollment.userId)', 'total');
-      if (!isAllTime)
-        qb.where('enrollment.createdAt BETWEEN :s AND :e', { s, e });
-      const res = await qb.getRawOne();
-      return Number(res?.total || 0);
+      const qb = this.usersRepo
+        .createQueryBuilder('user')
+        .select('COUNT(DISTINCT user.id)', 'total')
+        .where('user.role = :role', { role: UserRole.STUDENT });
+
+      if (!isAllTime) {
+        qb.andWhere('user.createdAt BETWEEN :s AND :e', { s, e });
+      }
+
+      const res = await qb.getRawOne<{ total: string }>();
+      return Number(res?.total ?? 0);
     };
 
-    // Calculate (Mocked Profit and Conversion for now due to DB schema limits)
-    const currRev = await getRevenue(start, end);
-    const prevRev = await getRevenue(prevStart, prevEnd);
-    const currStudents = await getStudents(start, end);
-    const prevStudents = await getStudents(prevStart, prevEnd);
+    const calculateSafeGrowth = (current: number, previous: number) => {
+      if (previous === 0 && current === 0) return 0;
+      if (previous === 0 && current > 0) return 100;
+      return Number((((current - previous) / previous) * 100).toFixed(2));
+    };
+
+    const [currRev, prevRev, currStudents, prevStudents] = await Promise.all([
+      getRevenue(start, end),
+      getRevenue(prevStart, prevEnd),
+      getStudents(start, end),
+      getStudents(prevStart, prevEnd),
+    ]);
 
     return {
       totalRevenue: {
-        value: currRev,
-        growthRatePercent: this.calculateGrowth(currRev, prevRev),
+        value: Number(currRev.toFixed(2)),
+        growthRatePercent: calculateSafeGrowth(currRev, prevRev),
       },
       totalStudents: {
         value: currStudents,
-        growthRatePercent: this.calculateGrowth(currStudents, prevStudents),
+        growthRatePercent: calculateSafeGrowth(currStudents, prevStudents),
       },
     };
   }
