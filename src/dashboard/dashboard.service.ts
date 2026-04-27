@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { Order } from 'src/orders/entities/order.entity';
 import { WorkshopEnrollment } from 'src/workshops/entities/workshop-enrollment.entity';
@@ -20,6 +20,7 @@ import {
   ReservationStatus,
   WorkshopReservation,
 } from 'src/workshops/entities/workshop-reservation.entity';
+import { CourseProgressStatus } from 'src/workshops/entities/course-progress-status.enum';
 
 @Injectable()
 export class DashboardService {
@@ -81,6 +82,13 @@ export class DashboardService {
       };
     };
 
+    const formatLabel = (value?: string | null) => {
+      if (!value) return null;
+      return value
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+    };
+
     const getProductRevenue = async (start?: Date, end?: Date) => {
       const qb = this.orderRepo
         .createQueryBuilder('o')
@@ -134,7 +142,7 @@ export class DashboardService {
         .innerJoin('workshops', 'w', 'w.id = r."workshopId"')
         .select('COUNT(DISTINCT r."userId")', 'total')
         .where('r.status = :reservationStatus', {
-          reservationStatus: 'confirmed',
+          reservationStatus: ReservationStatus.CONFIRMED,
         })
         .andWhere('w.status != :draftStatus', {
           draftStatus: WorkshopStatus.DRAFT,
@@ -186,7 +194,7 @@ export class DashboardService {
       .innerJoin('workshops', 'w', 'w.id = r."workshopId"')
       .select('COUNT(DISTINCT r."userId")', 'total')
       .where('r.status = :reservationStatus', {
-        reservationStatus: 'confirmed',
+        reservationStatus: ReservationStatus.CONFIRMED,
       })
       .andWhere('w.status != :draftStatus', {
         draftStatus: WorkshopStatus.DRAFT,
@@ -205,10 +213,10 @@ export class DashboardService {
       .createQueryBuilder('r')
       .select('COALESCE(SUM(r.numberOfSeats), 0)', 'total')
       .where('r.status = :reservationStatus', {
-        reservationStatus: 'confirmed',
+        reservationStatus: ReservationStatus.CONFIRMED,
       })
       .andWhere('r.courseProgressStatus = :progressStatus', {
-        progressStatus: 'completed',
+        progressStatus: CourseProgressStatus.COMPLETED,
       })
       .andWhere('r.createdAt >= :quarterStart', { quarterStart })
       .getRawOne<{ total: string }>();
@@ -220,17 +228,19 @@ export class DashboardService {
         'p.name AS name',
         'p.stockQuantity AS "stockQuantity"',
         'p.lowStockAlert AS "lowStockAlert"',
+        'p.updatedAt AS "updatedAt"',
       ])
       .where('p.isActive = :isActive', { isActive: true })
       .andWhere('p.stockQuantity <= p.lowStockAlert')
-      .orderBy('p.stockQuantity', 'ASC')
-      .addOrderBy('p.updatedAt', 'DESC')
-      .take(4)
+      .orderBy('p.updatedAt', 'DESC')
+      .addOrderBy('p.stockQuantity', 'ASC')
+      .limit(5)
       .getRawMany<{
         id: string;
         name: string;
         stockQuantity: string;
         lowStockAlert: string;
+        updatedAt: Date;
       }>();
 
     const recentEnrollmentsPromise = this.reservationsRepo
@@ -247,12 +257,14 @@ export class DashboardService {
         'w.id AS "courseId"',
         'w.title AS "courseTitle"',
       ])
-      .where('r.status != :cancelledStatus', { cancelledStatus: 'cancelled' })
+      .where('r.status != :cancelledStatus', {
+        cancelledStatus: ReservationStatus.CANCELLED,
+      })
       .andWhere('w.status != :draftStatus', {
         draftStatus: WorkshopStatus.DRAFT,
       })
       .orderBy('r.createdAt', 'DESC')
-      .take(4)
+      .limit(10)
       .getRawMany<{
         id: string;
         date: Date;
@@ -266,25 +278,23 @@ export class DashboardService {
 
     const topCoursesPromise = this.workshopOrderSummaryRepo
       .createQueryBuilder('wos')
-      .innerJoin('workshops', 'w', 'w.id = wos."workshopId"')
-      .select([
-        'w.id AS id',
-        'w.title AS title',
-        'COALESCE(SUM(wos.totalPrice), 0) AS revenue',
-      ])
-      .where('wos.status = :status', {
-        status: OrderSummaryStatus.COMPLETED,
-      })
+      .leftJoin('wos.workshop', 'w')
+      .select('wos.workshopId', 'id')
+      .addSelect('MAX(w.title)', 'name')
+      .addSelect('SUM(wos.numberOfSeats)', 'enrolled')
+      .addSelect('SUM(wos.totalPrice)', 'revenue')
+      .where('wos.workshopId IS NOT NULL')
       .andWhere('w.status != :draftStatus', {
         draftStatus: WorkshopStatus.DRAFT,
       })
-      .groupBy('w.id')
-      .addGroupBy('w.title')
-      .orderBy('SUM(wos.totalPrice)', 'DESC')
-      .take(4)
+      .groupBy('wos.workshopId')
+      .orderBy('SUM(wos.numberOfSeats)', 'DESC')
+      .addOrderBy('SUM(wos.totalPrice)', 'DESC')
+      .limit(3)
       .getRawMany<{
         id: string;
-        title: string;
+        name: string;
+        enrolled: string;
         revenue: string;
       }>();
 
@@ -298,7 +308,7 @@ export class DashboardService {
       ])
       .where('o.paymentStatus = :status', { status: PaymentStatus.PAID })
       .orderBy('o.createdAt', 'DESC')
-      .take(4)
+      .limit(5)
       .getRawMany<{
         id: string;
         orderNumber: string;
@@ -313,11 +323,9 @@ export class DashboardService {
         'b.title AS title',
         'COALESCE(b.publishedAt, b.createdAt) AS "createdAt"',
       ])
-      .where('b.publishingStatus = :status', {
-        status: PublishingStatus.PUBLISHED,
-      })
+      .where('b.publishingStatus = :status', { status: 'published' })
       .orderBy('COALESCE(b.publishedAt, b.createdAt)', 'DESC')
-      .take(4)
+      .limit(5)
       .getRawMany<{
         id: string;
         title: string;
@@ -331,7 +339,7 @@ export class DashboardService {
         draftStatus: WorkshopStatus.DRAFT,
       })
       .orderBy('w.createdAt', 'DESC')
-      .take(4)
+      .limit(5)
       .getRawMany<{
         id: string;
         title: string;
@@ -491,12 +499,123 @@ export class DashboardService {
       })),
     ]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, 6);
+      .slice(0, 5);
 
-    const maxTopCourseRevenue = Math.max(
-      ...topCoursesRaw.map((c) => Number(c.revenue ?? 0)),
+    const topCourseIds = topCoursesRaw.map((row) => row.id).filter(Boolean);
+
+    const topCourseWorkshops = topCourseIds.length
+      ? await this.workshopsRepo.find({
+          where: { id: In(topCourseIds) } as any,
+          relations: ['days', 'faculty'],
+        })
+      : [];
+
+    const topCourseWorkshopMap = new Map(
+      topCourseWorkshops.map((workshop) => [workshop.id, workshop]),
+    );
+
+    const reservationRows = topCourseIds.length
+      ? await this.reservationsRepo
+          .createQueryBuilder('reservation')
+          .select('reservation.workshopId', 'workshopId')
+          .addSelect(
+            'COALESCE(SUM(reservation.numberOfSeats), 0)',
+            'totalSeats',
+          )
+          .addSelect(
+            `COALESCE(SUM(CASE WHEN reservation.courseProgressStatus = :completedStatus THEN reservation.numberOfSeats ELSE 0 END), 0)`,
+            'completedSeats',
+          )
+          .where('reservation.workshopId IN (:...workshopIds)', {
+            workshopIds: topCourseIds,
+          })
+          .andWhere('reservation.status = :confirmedStatus', {
+            confirmedStatus: ReservationStatus.CONFIRMED,
+          })
+          .setParameter('completedStatus', CourseProgressStatus.COMPLETED)
+          .groupBy('reservation.workshopId')
+          .getRawMany<{
+            workshopId: string;
+            totalSeats: string;
+            completedSeats: string;
+          }>()
+      : [];
+
+    const topCourseReservationMap = new Map(
+      reservationRows.map((row) => [
+        row.workshopId,
+        {
+          totalSeats: Number(row.totalSeats || 0),
+          completedSeats: Number(row.completedSeats || 0),
+        },
+      ]),
+    );
+
+    const maxTopCourseEnrolled = Math.max(
+      ...topCoursesRaw.map((c) => Number(c.enrolled ?? 0)),
       0,
     );
+
+    const topPerformingCourses = topCoursesRaw.map((row, idx) => {
+      const workshop: any = topCourseWorkshopMap.get(row.id);
+      const reservationStats = topCourseReservationMap.get(row.id) ?? {
+        totalSeats: 0,
+        completedSeats: 0,
+      };
+
+      const completion =
+        reservationStats.totalSeats > 0
+          ? `${(
+              (reservationStats.completedSeats / reservationStats.totalSeats) *
+              100
+            ).toFixed(1)}%`
+          : '0.0%';
+
+      const sortedDays = [...(workshop?.days ?? [])]
+        .map((day: any) => day?.date)
+        .filter(Boolean)
+        .sort((a: string, b: string) => a.localeCompare(b));
+
+      const today = new Date().toISOString().slice(0, 10);
+      const nextSession =
+        sortedDays.find((date: string) => date >= today) ??
+        sortedDays[0] ??
+        workshop?.registrationDeadline ??
+        null;
+
+      const instructor = workshop?.faculty?.[0];
+      const enrolled = Number(row.enrolled || 0);
+      const revenue = Number(row.revenue || 0);
+
+      return {
+        courseId: row.id,
+        courseTitle: row.name || workshop?.title || 'Unknown Course',
+        scorePercent:
+          maxTopCourseEnrolled > 0
+            ? Number(((enrolled / maxTopCourseEnrolled) * 100).toFixed(1))
+            : 0,
+        rank: idx + 1,
+        enrolled,
+        completion,
+        revenue,
+        category: workshop?.deliveryMode
+          ? formatLabel(workshop.deliveryMode)
+          : null,
+        nextSession,
+        instructorDetails: instructor
+          ? {
+              id: instructor.id,
+              name:
+                [instructor.firstName, instructor.lastName]
+                  .filter(Boolean)
+                  .join(' ') || 'Unknown Instructor',
+              image: instructor.imageUrl || null,
+            }
+          : null,
+        status: workshop?.status ? formatLabel(workshop.status) : null,
+        barColorKey: idx === 0 ? 'blue' : idx === 1 ? 'indigo' : 'purple',
+      };
+    });
 
     return {
       title: 'Overview Analytics',
@@ -584,22 +703,7 @@ export class DashboardService {
         };
       }),
       recentActivities,
-      topPerformingCourses: topCoursesRaw.map((c, idx) => {
-        const revenue = Number(c.revenue ?? 0);
-        const scorePercent =
-          maxTopCourseRevenue > 0
-            ? Number(((revenue / maxTopCourseRevenue) * 100).toFixed(1))
-            : 0;
-
-        return {
-          courseId: c.id,
-          courseTitle: c.title,
-          scorePercent,
-          rank: idx + 1,
-          revenue,
-          barColorKey: idx === 0 ? 'blue' : idx === 1 ? 'indigo' : 'purple',
-        };
-      }),
+      topPerformingCourses,
     };
   }
 
