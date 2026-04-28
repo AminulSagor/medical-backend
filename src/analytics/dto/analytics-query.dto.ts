@@ -1,10 +1,4 @@
-import {
-  IsDateString,
-  IsEnum,
-  IsOptional,
-  IsNumber,
-  Min,
-} from 'class-validator';
+import { IsDateString, IsOptional, IsNumber, Min, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class AnalyticsQueryDto {
@@ -31,7 +25,7 @@ export class AnalyticsQueryDto {
 
 export class RevenueChartQueryDto extends AnalyticsQueryDto {
   @IsOptional()
-  @IsEnum(['day', 'week', 'month', 'life-time'])
+  @IsIn(['week', 'month', 'year', 'life-time'])
   groupBy?: 'week' | 'month' | 'year' | 'life-time' = 'week';
 }
 
