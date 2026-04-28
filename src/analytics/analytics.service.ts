@@ -617,80 +617,144 @@ export class AnalyticsService {
   async getRevenueChart(
     query: RevenueChartQueryDto,
   ): Promise<Record<string, unknown>> {
-    const { start, end, isAllTime } = this.getDateRanges(query);
+    const now = new Date();
 
-    const isLifetime = query.groupBy === 'life-time';
+    const startOfDay = (date: Date) => {
+      const d = new Date(date);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
 
-    let productDateGroup = `DATE_TRUNC('week', ord.createdAt)`;
-    let workshopDateGroup = `DATE_TRUNC('week', wos.createdAt)`;
+    const endOfDay = (date: Date) => {
+      const d = new Date(date);
+      d.setHours(23, 59, 59, 999);
+      return d;
+    };
 
-    if (query.groupBy === 'month') {
-      productDateGroup = `DATE_TRUNC('month', ord.createdAt)`;
-      workshopDateGroup = `DATE_TRUNC('month', wos.createdAt)`;
+    const requestedGroupBy = query.groupBy ?? 'week';
+
+    let productDateGroup = `DATE_TRUNC('day', ord."createdAt")`;
+    let workshopDateGroup = `DATE_TRUNC('day', wos."createdAt")`;
+
+    let start: Date | null = null;
+    let end: Date | null = null;
+
+    if (requestedGroupBy === 'week') {
+      productDateGroup = `DATE_TRUNC('day', ord."createdAt")`;
+      workshopDateGroup = `DATE_TRUNC('day', wos."createdAt")`;
+
+      start = query.startDate
+        ? startOfDay(new Date(query.startDate))
+        : startOfDay(new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000));
+
+      end = query.endDate ? endOfDay(new Date(query.endDate)) : endOfDay(now);
     }
 
-    if (query.groupBy === 'year') {
-      productDateGroup = `DATE_TRUNC('year', ord.createdAt)`;
-      workshopDateGroup = `DATE_TRUNC('year', wos.createdAt)`;
+    if (requestedGroupBy === 'month') {
+      productDateGroup = `DATE_TRUNC('month', ord."createdAt")`;
+      workshopDateGroup = `DATE_TRUNC('month', wos."createdAt")`;
+
+      start = query.startDate
+        ? startOfDay(new Date(query.startDate))
+        : startOfDay(new Date(now.getFullYear(), now.getMonth() - 11, 1));
+
+      end = query.endDate ? endOfDay(new Date(query.endDate)) : endOfDay(now);
+    }
+
+    if (requestedGroupBy === 'year') {
+      productDateGroup = `DATE_TRUNC('year', ord."createdAt")`;
+      workshopDateGroup = `DATE_TRUNC('year', wos."createdAt")`;
+
+      start = query.startDate
+        ? startOfDay(new Date(query.startDate))
+        : startOfDay(new Date(now.getFullYear() - 4, 0, 1));
+
+      end = query.endDate ? endOfDay(new Date(query.endDate)) : endOfDay(now);
+    }
+
+    if (requestedGroupBy === 'life-time') {
+      productDateGroup = `DATE_TRUNC('year', ord."createdAt")`;
+      workshopDateGroup = `DATE_TRUNC('year', wos."createdAt")`;
+
+      if (query.startDate || query.endDate) {
+        start = query.startDate ? startOfDay(new Date(query.startDate)) : null;
+        end = query.endDate ? endOfDay(new Date(query.endDate)) : endOfDay(now);
+      } else {
+        const [productMinRow, workshopMinRow] = await Promise.all([
+          this.orderRepo
+            .createQueryBuilder('ord')
+            .select('MIN(ord."createdAt")', 'minDate')
+            .where('ord.paymentStatus = :status', {
+              status: PaymentStatus.PAID,
+            })
+            .andWhere('ord.type = :type', { type: OrderType.PRODUCT })
+            .getRawOne<{ minDate: string | null }>(),
+
+          this.workshopOrderSummaryRepo
+            .createQueryBuilder('wos')
+            .select('MIN(wos."createdAt")', 'minDate')
+            .where('wos.status = :status', {
+              status: OrderSummaryStatus.COMPLETED,
+            })
+            .getRawOne<{ minDate: string | null }>(),
+        ]);
+
+        const minDates = [productMinRow?.minDate, workshopMinRow?.minDate]
+          .filter(Boolean)
+          .map((value) => new Date(value as string))
+          .sort((a, b) => a.getTime() - b.getTime());
+
+        start = minDates.length > 0 ? startOfDay(minDates[0]) : null;
+        end = endOfDay(now);
+      }
     }
 
     const qbProd = this.orderRepo
       .createQueryBuilder('ord')
+      .select(productDateGroup, 'date')
+      .addSelect('COALESCE(SUM(ord.grandTotal), 0)', 'productRevenue')
       .where('ord.paymentStatus = :status', { status: PaymentStatus.PAID })
       .andWhere('ord.type = :type', { type: OrderType.PRODUCT });
 
     const qbCourse = this.workshopOrderSummaryRepo
       .createQueryBuilder('wos')
+      .select(workshopDateGroup, 'date')
+      .addSelect('COALESCE(SUM(wos.totalPrice), 0)', 'courseRevenue')
       .where('wos.status = :status', { status: OrderSummaryStatus.COMPLETED });
 
-    const shouldFilterByDate = !isAllTime && !isLifetime;
-
-    if (shouldFilterByDate) {
-      qbProd.andWhere('ord.createdAt BETWEEN :s AND :e', { s: start, e: end });
-      qbCourse.andWhere('wos.createdAt BETWEEN :s AND :e', {
-        s: start,
-        e: end,
-      });
+    if (start) {
+      qbProd.andWhere('ord."createdAt" >= :start', { start });
+      qbCourse.andWhere('wos."createdAt" >= :start', { start });
     }
 
-    let productData: Array<{ date: string; productRevenue: string }> = [];
-    let courseData: Array<{ date: string; courseRevenue: string }> = [];
+    if (end) {
+      qbProd.andWhere('ord."createdAt" <= :end', { end });
+      qbCourse.andWhere('wos."createdAt" <= :end', { end });
+    }
 
-    if (isLifetime) {
-      productData = await qbProd
-        .select(`'life-time'`, 'date')
-        .addSelect('COALESCE(SUM(ord.grandTotal), 0)', 'productRevenue')
-        .getRawMany<{ date: string; productRevenue: string }>();
-
-      courseData = await qbCourse
-        .select(`'life-time'`, 'date')
-        .addSelect('COALESCE(SUM(wos.totalPrice), 0)', 'courseRevenue')
-        .getRawMany<{ date: string; courseRevenue: string }>();
-    } else {
-      productData = await qbProd
-        .select(productDateGroup, 'date')
-        .addSelect('COALESCE(SUM(ord.grandTotal), 0)', 'productRevenue')
+    const [productData, courseData] = await Promise.all([
+      qbProd
         .groupBy(productDateGroup)
-        .getRawMany<{ date: string; productRevenue: string }>();
+        .orderBy(productDateGroup, 'ASC')
+        .getRawMany<{ date: string; productRevenue: string }>(),
 
-      courseData = await qbCourse
-        .select(workshopDateGroup, 'date')
-        .addSelect('COALESCE(SUM(wos.totalPrice), 0)', 'courseRevenue')
+      qbCourse
         .groupBy(workshopDateGroup)
-        .getRawMany<{ date: string; courseRevenue: string }>();
-    }
+        .orderBy(workshopDateGroup, 'ASC')
+        .getRawMany<{ date: string; courseRevenue: string }>(),
+    ]);
 
     const chartMap = new Map<
       string,
-      { date: string; courseRevenue: number; productRevenue: number }
+      {
+        date: string;
+        courseRevenue: number;
+        productRevenue: number;
+      }
     >();
 
     productData.forEach((row) => {
-      const key =
-        row.date === 'life-time'
-          ? 'life-time'
-          : new Date(row.date).toISOString();
-
+      const key = new Date(row.date).toISOString();
       chartMap.set(key, {
         date: key,
         courseRevenue: 0,
@@ -699,10 +763,7 @@ export class AnalyticsService {
     });
 
     courseData.forEach((row) => {
-      const key =
-        row.date === 'life-time'
-          ? 'life-time'
-          : new Date(row.date).toISOString();
+      const key = new Date(row.date).toISOString();
 
       if (chartMap.has(key)) {
         chartMap.get(key)!.courseRevenue = Number(row.courseRevenue || 0);
@@ -715,12 +776,17 @@ export class AnalyticsService {
       }
     });
 
-    const series = Array.from(chartMap.values()).sort((a, b) => {
-      if (a.date === 'life-time') return -1;
-      if (b.date === 'life-time') return 1;
-      return new Date(a.date).getTime() - new Date(b.date).getTime();
-    });
+    const series = Array.from(chartMap.values()).sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
 
-    return { series };
+    return {
+      groupBy: requestedGroupBy,
+      range: {
+        startDate: start ? start.toISOString() : null,
+        endDate: end ? end.toISOString() : null,
+      },
+      series,
+    };
   }
 }
