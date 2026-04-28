@@ -619,31 +619,33 @@ export class AnalyticsService {
   ): Promise<Record<string, unknown>> {
     const { start, end, isAllTime } = this.getDateRanges(query);
 
-    let dateGroup = "DATE_TRUNC('day', ord.createdAt)";
-    let wosDateGroup = "DATE_TRUNC('day', wos.createdAt)";
-    if (query.groupBy === 'week') {
-      dateGroup = "DATE_TRUNC('week', ord.createdAt)";
-      wosDateGroup = "DATE_TRUNC('week', wos.createdAt)";
-    }
+    const isLifetime = query.groupBy === 'life-time';
+
+    let productDateGroup = `DATE_TRUNC('week', ord.createdAt)`;
+    let workshopDateGroup = `DATE_TRUNC('week', wos.createdAt)`;
+
     if (query.groupBy === 'month') {
-      dateGroup = "DATE_TRUNC('month', ord.createdAt)";
-      wosDateGroup = "DATE_TRUNC('month', wos.createdAt)";
+      productDateGroup = `DATE_TRUNC('month', ord.createdAt)`;
+      workshopDateGroup = `DATE_TRUNC('month', wos.createdAt)`;
+    }
+
+    if (query.groupBy === 'year') {
+      productDateGroup = `DATE_TRUNC('year', ord.createdAt)`;
+      workshopDateGroup = `DATE_TRUNC('year', wos.createdAt)`;
     }
 
     const qbProd = this.orderRepo
       .createQueryBuilder('ord')
-      .select(`${dateGroup}`, 'date')
-      .addSelect(`SUM(ord.grandTotal)`, 'productRevenue')
       .where('ord.paymentStatus = :status', { status: PaymentStatus.PAID })
       .andWhere('ord.type = :type', { type: OrderType.PRODUCT });
 
     const qbCourse = this.workshopOrderSummaryRepo
       .createQueryBuilder('wos')
-      .select(`${wosDateGroup}`, 'date')
-      .addSelect(`SUM(wos.totalPrice)`, 'courseRevenue')
       .where('wos.status = :status', { status: OrderSummaryStatus.COMPLETED });
 
-    if (!isAllTime) {
+    const shouldFilterByDate = !isAllTime && !isLifetime;
+
+    if (shouldFilterByDate) {
       qbProd.andWhere('ord.createdAt BETWEEN :s AND :e', { s: start, e: end });
       qbCourse.andWhere('wos.createdAt BETWEEN :s AND :e', {
         s: start,
@@ -651,36 +653,73 @@ export class AnalyticsService {
       });
     }
 
-    const productData = await qbProd.groupBy('date').getRawMany();
-    const courseData = await qbCourse.groupBy('date').getRawMany();
+    let productData: Array<{ date: string; productRevenue: string }> = [];
+    let courseData: Array<{ date: string; courseRevenue: string }> = [];
 
-    const chartMap = new Map<string, any>();
+    if (isLifetime) {
+      productData = await qbProd
+        .select(`'life-time'`, 'date')
+        .addSelect('COALESCE(SUM(ord.grandTotal), 0)', 'productRevenue')
+        .getRawMany<{ date: string; productRevenue: string }>();
+
+      courseData = await qbCourse
+        .select(`'life-time'`, 'date')
+        .addSelect('COALESCE(SUM(wos.totalPrice), 0)', 'courseRevenue')
+        .getRawMany<{ date: string; courseRevenue: string }>();
+    } else {
+      productData = await qbProd
+        .select(productDateGroup, 'date')
+        .addSelect('COALESCE(SUM(ord.grandTotal), 0)', 'productRevenue')
+        .groupBy(productDateGroup)
+        .getRawMany<{ date: string; productRevenue: string }>();
+
+      courseData = await qbCourse
+        .select(workshopDateGroup, 'date')
+        .addSelect('COALESCE(SUM(wos.totalPrice), 0)', 'courseRevenue')
+        .groupBy(workshopDateGroup)
+        .getRawMany<{ date: string; courseRevenue: string }>();
+    }
+
+    const chartMap = new Map<
+      string,
+      { date: string; courseRevenue: number; productRevenue: number }
+    >();
 
     productData.forEach((row) => {
-      const dStr = new Date(row.date).toISOString();
-      chartMap.set(dStr, {
-        date: dStr,
+      const key =
+        row.date === 'life-time'
+          ? 'life-time'
+          : new Date(row.date).toISOString();
+
+      chartMap.set(key, {
+        date: key,
         courseRevenue: 0,
         productRevenue: Number(row.productRevenue || 0),
       });
     });
 
     courseData.forEach((row) => {
-      const dStr = new Date(row.date).toISOString();
-      if (chartMap.has(dStr)) {
-        chartMap.get(dStr).courseRevenue = Number(row.courseRevenue || 0);
+      const key =
+        row.date === 'life-time'
+          ? 'life-time'
+          : new Date(row.date).toISOString();
+
+      if (chartMap.has(key)) {
+        chartMap.get(key)!.courseRevenue = Number(row.courseRevenue || 0);
       } else {
-        chartMap.set(dStr, {
-          date: dStr,
+        chartMap.set(key, {
+          date: key,
           courseRevenue: Number(row.courseRevenue || 0),
           productRevenue: 0,
         });
       }
     });
 
-    const series = Array.from(chartMap.values()).sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-    );
+    const series = Array.from(chartMap.values()).sort((a, b) => {
+      if (a.date === 'life-time') return -1;
+      if (b.date === 'life-time') return 1;
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
 
     return { series };
   }
