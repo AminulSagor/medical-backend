@@ -31,7 +31,7 @@ export class AnalyticsQueryDto {
 
 export class RevenueChartQueryDto extends AnalyticsQueryDto {
   @IsOptional()
-  @IsEnum(['day', 'week', 'month', 'life-time'])
+  @IsEnum(['year', 'week', 'month', 'life-time'])
   groupBy?: 'week' | 'month' | 'year' | 'life-time' = 'week';
 }
 
