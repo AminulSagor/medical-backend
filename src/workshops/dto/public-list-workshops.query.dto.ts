@@ -1,5 +1,13 @@
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min } from "class-validator";
-import { Type } from "class-transformer";
+import {
+  IsIn,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class PublicListWorkshopsQueryDto {
   // ─── Pagination ─────────────────────────────────────────────────────────────
@@ -18,25 +26,24 @@ export class PublicListWorkshopsQueryDto {
 
   // ─── Sorting ─────────────────────────────────────────────────────────────────
   @IsOptional()
-  @IsIn(["date", "price", "title"])
-  sortBy?: "date" | "price" | "title" = "date";
+  @IsIn(['date', 'price', 'title'])
+  sortBy?: 'date' | 'price' | 'title' = 'date';
 
   @IsOptional()
-  @IsIn(["asc", "desc"])
-  sortOrder?: "asc" | "desc" = "asc";
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc' = 'asc';
 
   // ─── Filters ─────────────────────────────────────────────────────────────────
 
   /** Workshop type filter: in_person | online */
   @IsOptional()
-  @IsIn(["in_person", "online"])
-  deliveryMode?: "in_person" | "online";
-
+  @IsIn(['in_person', 'online'])
+  deliveryMode?: 'in_person' | 'online';
 
   /** Seat availability: 'true' = has seats, 'false' = fully booked */
   @IsOptional()
-  @IsIn(["true", "false"])
-  hasAvailableSeats?: "true" | "false";
+  @IsIn(['true', 'false'])
+  hasAvailableSeats?: 'true' | 'false';
 
   /**
    * CME credits range filter.
@@ -64,8 +71,8 @@ export class PublicListWorkshopsQueryDto {
    * Leave empty (or 'false') to return ALL workshops (past + upcoming).
    */
   @IsOptional()
-  @IsIn(["true", "false"])
-  upcoming?: "true" | "false";
+  @IsIn(['true', 'false'])
+  upcoming?: 'true' | 'false';
 
   /**
    * Topic filter — case-insensitive substring match against segment courseTopic.
@@ -93,4 +100,3 @@ export class PublicListWorkshopsQueryDto {
   @IsString()
   q?: string;
 }
-

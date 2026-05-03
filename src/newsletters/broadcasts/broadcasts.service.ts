@@ -14,7 +14,6 @@ import { NewsletterBroadcastCustomContentToken } from './entities/newsletter-bro
 import { NewsletterBroadcastCustomEditorSnapshot } from './entities/newsletter-broadcast-custom-editor-snapshot.entity';
 import { NewsletterBroadcastArticleLink } from './entities/newsletter-broadcast-article-link.entity';
 import { NewsletterBroadcastAttachment } from './entities/newsletter-broadcast-attachment.entity';
-
 import { NewsletterCadenceSetting } from '../cadence/entities/newsletter-cadence-settings.entity';
 
 import { CreateBroadcastDto } from './dto/create-broadcast.dto';

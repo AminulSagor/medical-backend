@@ -1,87 +1,93 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
-import { Facility } from "./entities/facility.entity";
-import { CreateFacilityDto } from "./dto/create-facility.dto";
-import { UpdateFacilityDto } from "./dto/update-facility.dto";
-
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Facility } from './entities/facility.entity';
+import { CreateFacilityDto } from './dto/create-facility.dto';
+import { UpdateFacilityDto } from './dto/update-facility.dto';
 
 @Injectable()
 export class FacilitiesService {
-    constructor(@InjectRepository(Facility) private repo: Repository<Facility>) { }
+  constructor(@InjectRepository(Facility) private repo: Repository<Facility>) {}
 
-    async create(dto: CreateFacilityDto) {
-        const name = dto.name?.trim();
-        if (!name) throw new BadRequestException("Facility name is required");
+  async create(dto: CreateFacilityDto) {
+    const name = dto.name?.trim();
+    if (!name) throw new BadRequestException('Facility name is required');
 
-        const roomNumber = dto.roomNumber?.trim();
-        if (!roomNumber) throw new BadRequestException("Room number is required");
+    const roomNumber = dto.roomNumber?.trim();
+    if (!roomNumber) throw new BadRequestException('Room number is required');
 
-        const physicalAddress = dto.physicalAddress?.trim();
-        if (!physicalAddress) throw new BadRequestException("Physical address is required");
+    const physicalAddress = dto.physicalAddress?.trim();
+    if (!physicalAddress)
+      throw new BadRequestException('Physical address is required');
 
-        const exists = await this.repo.findOne({ where: { name } });
-        if (exists) throw new BadRequestException("Facility already exists");
+    const exists = await this.repo.findOne({ where: { name } });
+    if (exists) throw new BadRequestException('Facility already exists');
 
-        const facility = this.repo.create({
-            name,
-            roomNumber,
-            physicalAddress,
-            capacity: dto.capacity,
-            notes: dto.notes?.trim() || null,
-        });
-        return await this.repo.save(facility);
+    const facility = this.repo.create({
+      name,
+      roomNumber,
+      physicalAddress,
+      capacity: dto.capacity,
+      notes: dto.notes?.trim() || null,
+    });
+    return await this.repo.save(facility);
+  }
+
+  async listActive() {
+    // since there is no isActive anymore, this returns all
+    const items = await this.repo.find({ order: { name: 'ASC' } });
+    return { items };
+  }
+
+  async findOne(id: string) {
+    const facility = await this.repo.findOne({ where: { id } });
+    if (!facility) throw new NotFoundException('Facility not found');
+    return facility;
+  }
+
+  async update(id: string, dto: UpdateFacilityDto) {
+    const facility = await this.findOne(id);
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Facility name is required');
+      const exists = await this.repo.findOne({ where: { name } });
+      if (exists && exists.id !== id)
+        throw new BadRequestException('Facility already exists');
+      facility.name = name;
     }
 
-    async listActive() {
-        // since there is no isActive anymore, this returns all
-        const items = await this.repo.find({ order: { name: "ASC" } });
-        return { items };
+    if (dto.roomNumber !== undefined) {
+      const roomNumber = dto.roomNumber.trim();
+      if (!roomNumber) throw new BadRequestException('Room number is required');
+      facility.roomNumber = roomNumber;
     }
 
-    async findOne(id: string) {
-        const facility = await this.repo.findOne({ where: { id } });
-        if (!facility) throw new NotFoundException("Facility not found");
-        return facility;
+    if (dto.physicalAddress !== undefined) {
+      const physicalAddress = dto.physicalAddress.trim();
+      if (!physicalAddress)
+        throw new BadRequestException('Physical address is required');
+      facility.physicalAddress = physicalAddress;
     }
 
-    async update(id: string, dto: UpdateFacilityDto) {
-        const facility = await this.findOne(id);
-
-        if (dto.name !== undefined) {
-            const name = dto.name.trim();
-            if (!name) throw new BadRequestException("Facility name is required");
-            const exists = await this.repo.findOne({ where: { name } });
-            if (exists && exists.id !== id) throw new BadRequestException("Facility already exists");
-            facility.name = name;
-        }
-
-        if (dto.roomNumber !== undefined) {
-            const roomNumber = dto.roomNumber.trim();
-            if (!roomNumber) throw new BadRequestException("Room number is required");
-            facility.roomNumber = roomNumber;
-        }
-
-        if (dto.physicalAddress !== undefined) {
-            const physicalAddress = dto.physicalAddress.trim();
-            if (!physicalAddress) throw new BadRequestException("Physical address is required");
-            facility.physicalAddress = physicalAddress;
-        }
-
-        if (dto.capacity !== undefined) {
-            facility.capacity = dto.capacity;
-        }
-
-        if (dto.notes !== undefined) {
-            facility.notes = dto.notes?.trim() || null;
-        }
-
-        return await this.repo.save(facility);
+    if (dto.capacity !== undefined) {
+      facility.capacity = dto.capacity;
     }
 
-    async remove(id: string) {
-        const facility = await this.findOne(id);
-        await this.repo.remove(facility);
-        return { message: "Facility deleted successfully" };
+    if (dto.notes !== undefined) {
+      facility.notes = dto.notes?.trim() || null;
     }
+
+    return await this.repo.save(facility);
+  }
+
+  async remove(id: string) {
+    const facility = await this.findOne(id);
+    await this.repo.remove(facility);
+    return { message: 'Facility deleted successfully' };
+  }
 }

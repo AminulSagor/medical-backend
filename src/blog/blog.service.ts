@@ -138,7 +138,7 @@ export class BlogService {
       title: post.title,
       description: post.excerpt || post.content?.substring(0, 200),
       coverImageUrl: post.coverImages ?? [],
-      authorName: post.authorName ?? (post.authors?.[0]?.fullLegalName ?? null),
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName ?? null,
       categories:
         post.categories?.map((cat) => ({
           id: cat.id,
@@ -235,7 +235,8 @@ export class BlogService {
     if (dto.title !== undefined) post.title = dto.title;
     if (dto.content !== undefined) post.content = dto.content;
     if (dto.coverImageUrl !== undefined) post.coverImages = dto.coverImageUrl;
-    if (dto.authorName !== undefined) post.authorName = dto.authorName?.trim() || undefined;
+    if (dto.authorName !== undefined)
+      post.authorName = dto.authorName?.trim() || undefined;
     if (dto.publishingStatus !== undefined)
       post.publishingStatus = dto.publishingStatus;
     if (dto.scheduledPublishDate !== undefined)
@@ -430,7 +431,7 @@ export class BlogService {
       content: post.content,
       description: post.excerpt,
       coverImageUrl: post.coverImages ?? [],
-      authorName: post.authorName ?? (post.authors?.[0]?.fullLegalName ?? null),
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName ?? null,
       categories:
         post.categories?.map((cat) => ({ id: cat.id, name: cat.name })) ?? [],
       tags: post.tags?.map((tag) => ({ id: tag.id, name: tag.name })) ?? [],

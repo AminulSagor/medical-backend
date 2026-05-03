@@ -68,7 +68,7 @@ export class AuthService {
       professionalRole: dto.professionalRole.trim(),
       password: passwordHash,
       isVerified: false,
-      role: UserRole.STUDENT,  // ✅ Default to STUDENT on signup
+      role: UserRole.STUDENT, // ✅ Default to STUDENT on signup
     });
 
     const saved = await this.userRepo.save(user);

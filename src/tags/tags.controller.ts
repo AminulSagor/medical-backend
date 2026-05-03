@@ -1,33 +1,33 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from "@nestjs/common";
-import { AuthGuard } from "@nestjs/passport";
-import { Roles } from "../auth/decorators/roles.decorator";
-import { RolesGuard } from "../auth/guards/roles.guard";
-import { TagsService } from "./tags.service";
-import { CreateTagDto } from "./dto/create-tag.dto";
-import { BulkCreateTagDto } from "./dto/bulk-create-tag.dto";
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { TagsService } from './tags.service';
+import { CreateTagDto } from './dto/create-tag.dto';
+import { BulkCreateTagDto } from './dto/bulk-create-tag.dto';
 
-@Controller("admin/tags")
+@Controller('admin/tags')
 export class TagsController {
-    constructor(private readonly tagsService: TagsService) { }
+  constructor(private readonly tagsService: TagsService) {}
 
-    @Get()
-    @UseGuards(AuthGuard("jwt"), RolesGuard)
-    @Roles("admin")
-    list(@Query("q") q?: string) {
-        return this.tagsService.list(q);
-    }
+  @Get()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  list(@Query('q') q?: string) {
+    return this.tagsService.list(q);
+  }
 
-    @Post()
-    @UseGuards(AuthGuard("jwt"), RolesGuard)
-    @Roles("admin")
-    create(@Body() dto: CreateTagDto) {
-        return this.tagsService.create(dto);
-    }
+  @Post()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  create(@Body() dto: CreateTagDto) {
+    return this.tagsService.create(dto);
+  }
 
-    @Post("bulk")
-    @UseGuards(AuthGuard("jwt"), RolesGuard)
-    @Roles("admin")
-    bulkCreate(@Body() dto: BulkCreateTagDto) {
-        return this.tagsService.bulkCreate(dto);
-    }
+  @Post('bulk')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  bulkCreate(@Body() dto: BulkCreateTagDto) {
+    return this.tagsService.bulkCreate(dto);
+  }
 }

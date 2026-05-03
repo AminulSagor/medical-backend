@@ -1,9 +1,9 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
-import { Faculty } from "./entities/faculty.entity";
-import { CreateFacultyDto } from "./dto/create-faculty.dto";
-import { User, UserRole, UserStatus } from "../users/entities/user.entity";
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Faculty } from './entities/faculty.entity';
+import { CreateFacultyDto } from './dto/create-faculty.dto';
+import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -13,17 +13,15 @@ export class FacultyService {
     private facultyRepo: Repository<Faculty>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
-  ) { }
-
+  ) {}
 
   async create(dto: CreateFacultyDto) {
-
     const emailExists = await this.facultyRepo.findOne({
       where: { email: dto.email.toLowerCase() },
     });
 
     if (emailExists) {
-      throw new BadRequestException("Email already exists");
+      throw new BadRequestException('Email already exists');
     }
 
     const npiExists = await this.facultyRepo.findOne({
@@ -31,12 +29,14 @@ export class FacultyService {
     });
 
     if (npiExists) {
-      throw new BadRequestException("NPI already exists");
+      throw new BadRequestException('NPI already exists');
     }
 
     // ✅ Check if user already exists with this email
     const userEmail = dto.email.toLowerCase();
-    let user = await this.userRepo.findOne({ where: { medicalEmail: userEmail } });
+    let user = await this.userRepo.findOne({
+      where: { medicalEmail: userEmail },
+    });
 
     // ✅ Create user with INSTRUCTOR role if doesn't exist
     if (!user) {
@@ -49,9 +49,10 @@ export class FacultyService {
         lastName: dto.lastName,
         medicalEmail: userEmail,
         phoneNumber: dto.phoneNumber,
-        professionalRole: dto.primaryClinicalRole || dto.medicalDesignation || 'Instructor',
+        professionalRole:
+          dto.primaryClinicalRole || dto.medicalDesignation || 'Instructor',
         password: passwordHash,
-        role: UserRole.INSTRUCTOR,  // ✅ Faculty gets INSTRUCTOR role
+        role: UserRole.INSTRUCTOR, // ✅ Faculty gets INSTRUCTOR role
         status: UserStatus.ACTIVE,
         isVerified: false,
         profilePhotoUrl: dto.imageUrl,
@@ -71,7 +72,7 @@ export class FacultyService {
     await this.facultyRepo.save(faculty);
 
     return {
-      message: "Faculty added successfully",
+      message: 'Faculty added successfully',
       data: {
         faculty,
         user: {
@@ -84,33 +85,38 @@ export class FacultyService {
     };
   }
 
-
-
   async list(params: { q?: string; page?: string; limit?: string }) {
-    const q = String(params.q ?? "").trim();
-    const page = Math.max(parseInt(String(params.page ?? "1"), 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(String(params.limit ?? "10"), 10) || 10, 1), 50);
+    const q = String(params.q ?? '').trim();
+    const page = Math.max(parseInt(String(params.page ?? '1'), 10) || 1, 1);
+    const limit = Math.min(
+      Math.max(parseInt(String(params.limit ?? '10'), 10) || 10, 1),
+      50,
+    );
     const skip = (page - 1) * limit;
 
-    const qb = this.facultyRepo.createQueryBuilder("f");
+    const qb = this.facultyRepo.createQueryBuilder('f');
 
     if (q) {
       const like = `%${q.toLowerCase()}%`;
-      qb.where("LOWER(f.firstName) LIKE :like", { like })
-        .orWhere("LOWER(f.lastName) LIKE :like", { like })
-        .orWhere("LOWER(f.medicalDesignation) LIKE :like", { like })
-        .orWhere("LOWER(f.institutionOrHospital) LIKE :like", { like });
+      qb.where('LOWER(f.firstName) LIKE :like', { like })
+        .orWhere('LOWER(f.lastName) LIKE :like', { like })
+        .orWhere('LOWER(f.medicalDesignation) LIKE :like', { like })
+        .orWhere('LOWER(f.institutionOrHospital) LIKE :like', { like });
     }
 
-    qb.orderBy("f.createdAt", "DESC").skip(skip).take(limit);
+    qb.orderBy('f.createdAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      message: "Faculty fetched successfully",
-      meta: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) },
+      message: 'Faculty fetched successfully',
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(Math.ceil(total / limit), 1),
+      },
       data,
     };
   }
-
 }

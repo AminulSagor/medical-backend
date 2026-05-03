@@ -1,48 +1,59 @@
-import { IsOptional, IsString, IsNumberString, IsInt, Min, IsArray } from "class-validator";
-import { Type, Transform } from "class-transformer";
+import {
+  IsOptional,
+  IsString,
+  IsNumberString,
+  IsInt,
+  Min,
+  IsArray,
+} from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class ListProductsPublicQueryDto {
-    @IsOptional()
-    @Type(() => Number)
-    @IsInt()
-    @Min(1)
-    page?: number = 1;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
 
-    @IsOptional()
-    @Type(() => Number)
-    @IsInt()
-    @Min(1)
-    limit?: number = 12;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number = 12;
 
-    @IsOptional()
-    @IsString()
-    search?: string;
+  @IsOptional()
+  @IsString()
+  search?: string;
 
-    // Filter by category ID(s)
-    @IsOptional()
-    @IsArray()
-    @IsString({ each: true })
-    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
-    categoryIds?: string[];
+  // Filter by category ID(s)
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) =>
+    Array.isArray(value) ? value : [value].filter(Boolean),
+  )
+  categoryIds?: string[];
 
-    // Filter by brand(s)
-    @IsOptional()
-    @IsArray()
-    @IsString({ each: true })
-    @Transform(({ value }) => (Array.isArray(value) ? value : [value].filter(Boolean)))
-    brands?: string[];
+  // Filter by brand(s)
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) =>
+    Array.isArray(value) ? value : [value].filter(Boolean),
+  )
+  brands?: string[];
 
-    // Price range filters
-    @IsOptional()
-    @IsNumberString()
-    minPrice?: string;
+  // Price range filters
+  @IsOptional()
+  @IsNumberString()
+  minPrice?: string;
 
-    @IsOptional()
-    @IsNumberString()
-    maxPrice?: string;
+  @IsOptional()
+  @IsNumberString()
+  maxPrice?: string;
 
-    // Sort options
-    @IsOptional()
-    @IsString()
-    sortBy?: 'price-asc' | 'price-desc' | 'name-asc' | 'name-desc' | 'newest';
+  // Sort options
+  @IsOptional()
+  @IsString()
+  sortBy?: 'price-asc' | 'price-desc' | 'name-asc' | 'name-desc' | 'newest';
 }
