@@ -1,5 +1,6 @@
 import {
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
@@ -8,25 +9,27 @@ import {
 } from 'class-validator';
 
 export class CreateFacilityDto {
+  @IsNotEmpty()
   @IsString()
   @MaxLength(200)
   name: string;
 
   @IsOptional()
   @IsString()
-  roomNumber: string;
+  roomNumber?: string;
 
+  @IsNotEmpty()
   @IsString()
   @MaxLength(400)
   physicalAddress: string;
 
-  @IsInt()
   @IsOptional()
-  capacity: number;
+  @IsInt()
+  @Min(0)
+  capacity?: number;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
-  @MinLength(0)
   notes?: string;
 }
