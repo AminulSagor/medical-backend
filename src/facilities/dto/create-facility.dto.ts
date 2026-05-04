@@ -1,24 +1,32 @@
-import { IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateFacilityDto {
-    @IsString()
-    @MaxLength(200)
-    name: string;
+  @IsString()
+  @MaxLength(200)
+  name: string;
 
-    @IsString()
-    @MaxLength(100)
-    roomNumber: string;
+  @IsOptional()
+  @IsString()
+  roomNumber: string;
 
-    @IsString()
-    @MaxLength(400)
-    physicalAddress: string;
+  @IsString()
+  @MaxLength(400)
+  physicalAddress: string;
 
-    @IsInt()
-    @Min(1)
-    capacity: number;
+  @IsInt()
+  @IsOptional()
+  capacity: number;
 
-    @IsOptional()
-    @IsString()
-    @MaxLength(2000)
-    notes?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  @MinLength(0)
+  notes?: string;
 }
