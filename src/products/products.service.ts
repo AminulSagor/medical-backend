@@ -354,6 +354,37 @@ export class ProductsService {
     };
   }
 
+  // ✅ ADMIN: Delete a product
+  async remove(id: string) {
+    const product = await this.productsRepo.findOne({
+      where: { id },
+      relations: ['details'],
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    // Attempt to delete.
+    // Note: If you have foreign key constraints from order_items without CASCADE,
+    // this will throw a QueryFailedError. It's usually good practice to soft-delete
+    // or block deletion if the product has been sold.
+    try {
+      await this.productsRepo.delete(id);
+      return { message: 'Product successfully deleted', id };
+    } catch (error) {
+      if (
+        error instanceof QueryFailedError &&
+        (error as any).driverError?.code === '23503' // Foreign key violation in Postgres
+      ) {
+        throw new BadRequestException(
+          'Cannot delete product because it is linked to existing orders. Consider setting it to inactive instead.',
+        );
+      }
+      throw error;
+    }
+  }
+
   async findAll(query: GetProductsQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
