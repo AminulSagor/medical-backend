@@ -12,13 +12,25 @@ import { generateOtp6, normalizeEmail } from '../common/utils/email.util';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { MailService } from '../common/services/mail.service';
+import { UserAuthIdentity } from 'src/users/entities/user-auth-identity.entity';
+import { SocialProfile } from 'src/common/types/socials.types';
+import {
+  FacebookSocialLoginDto,
+  GoogleSocialLoginDto,
+} from './dto/social-login.dto';
+import axios from 'axios';
+import { ConfigService } from '@nestjs/config';
+import { OAuth2Client } from 'google-auth-library';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(UserAuthIdentity)
+    private readonly userAuthIdentityRepo: Repository<UserAuthIdentity>,
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
+    private readonly config: ConfigService,
   ) {}
 
   private static otpStore = new Map<
@@ -30,6 +42,291 @@ export class AuthService {
     string,
     { expiresAt: number }
   >();
+
+  // --- start ---
+
+  private buildAuthUser(user: User) {
+    return {
+      id: user.id,
+      fullLegalName: user.fullLegalName,
+      medicalEmail: user.medicalEmail,
+      professionalRole: user.professionalRole,
+    };
+  }
+
+  private async signAccessToken(user: User): Promise<string> {
+    const payload = {
+      sub: user.id,
+      role: user.role,
+      medicalEmail: user.medicalEmail,
+    };
+
+    return this.jwtService.signAsync(payload);
+  }
+
+  private splitFullLegalName(fullLegalName: string) {
+    const nameTokens = fullLegalName.trim().split(/\s+/);
+    return {
+      firstName: nameTokens[0] ?? '',
+      lastName: nameTokens.slice(1).join(' ') || undefined,
+    };
+  }
+
+  private async verifyGoogleIdToken(idToken: string): Promise<SocialProfile> {
+    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
+
+    if (!clientId) {
+      throw new BadRequestException('GOOGLE_CLIENT_ID is not configured');
+    }
+
+    const client = new OAuth2Client(clientId);
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: clientId,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload?.sub) {
+      throw new UnauthorizedException('Invalid Google token');
+    }
+
+    if (!payload.email) {
+      throw new BadRequestException('Google account did not provide an email');
+    }
+
+    if (payload.email_verified === false) {
+      throw new UnauthorizedException('Google email is not verified');
+    }
+
+    const fullLegalName = payload.name?.trim() || payload.email;
+
+    const nameParts = this.splitFullLegalName(fullLegalName);
+
+    return {
+      provider: 'google',
+      providerId: payload.sub,
+      email: normalizeEmail(payload.email),
+      fullLegalName,
+      firstName: nameParts.firstName,
+      lastName: nameParts.lastName,
+      pictureUrl: payload.picture ?? null,
+    };
+  }
+
+  private async verifyFacebookAccessToken(
+    accessToken: string,
+  ): Promise<SocialProfile> {
+    const appId = this.config.get<string>('FACEBOOK_APP_ID');
+    const appSecret = this.config.get<string>('FACEBOOK_APP_SECRET');
+
+    if (!appId || !appSecret) {
+      throw new BadRequestException(
+        'FACEBOOK_APP_ID / FACEBOOK_APP_SECRET is not configured',
+      );
+    }
+
+    const debugResponse = await axios.get<{
+      data?: {
+        app_id?: string;
+        is_valid?: boolean;
+        user_id?: string;
+      };
+    }>('https://graph.facebook.com/debug_token', {
+      params: {
+        input_token: accessToken,
+        access_token: `${appId}|${appSecret}`,
+      },
+    });
+
+    const debugData = debugResponse.data?.data;
+
+    if (!debugData?.is_valid) {
+      throw new UnauthorizedException('Invalid Facebook access token');
+    }
+
+    if (debugData.app_id !== appId) {
+      throw new UnauthorizedException(
+        'Facebook token does not belong to this app',
+      );
+    }
+
+    const profileResponse = await axios.get<{
+      id: string;
+      name?: string;
+      email?: string;
+      picture?: {
+        data?: {
+          url?: string;
+        };
+      };
+    }>('https://graph.facebook.com/me', {
+      params: {
+        fields: 'id,name,email,picture.type(large)',
+        access_token: accessToken,
+      },
+    });
+
+    const profile = profileResponse.data;
+
+    if (!profile?.id) {
+      throw new UnauthorizedException('Unable to read Facebook profile');
+    }
+
+    if (!profile.email) {
+      throw new BadRequestException(
+        'Facebook account did not provide an email',
+      );
+    }
+
+    const fullLegalName = profile.name?.trim() || profile.email;
+    const nameParts = this.splitFullLegalName(fullLegalName);
+
+    return {
+      provider: 'facebook',
+      providerId: profile.id,
+      email: normalizeEmail(profile.email),
+      fullLegalName,
+      firstName: nameParts.firstName,
+      lastName: nameParts.lastName,
+      pictureUrl: profile.picture?.data?.url ?? null,
+    };
+  }
+
+  private async findOrCreateSocialUser(profile: SocialProfile): Promise<User> {
+    let user: User | null = null;
+    let authIdentity: UserAuthIdentity | null = null;
+
+    if (profile.provider === 'google') {
+      authIdentity = await this.userAuthIdentityRepo.findOne({
+        where: { googleId: profile.providerId },
+        relations: ['user'],
+      });
+    }
+
+    if (!authIdentity && profile.provider === 'facebook') {
+      authIdentity = await this.userAuthIdentityRepo.findOne({
+        where: { facebookId: profile.providerId },
+        relations: ['user'],
+      });
+    }
+
+    if (authIdentity?.user) {
+      user = authIdentity.user;
+    }
+
+    if (!user) {
+      user = await this.userRepo.findOne({
+        where: { medicalEmail: profile.email },
+      });
+    }
+
+    if (!user) {
+      const newUser = new User();
+      newUser.fullLegalName = profile.fullLegalName;
+      newUser.firstName = profile.firstName;
+      newUser.lastName = profile.lastName;
+      newUser.medicalEmail = profile.email;
+      newUser.professionalRole = 'Student';
+      newUser.isVerified = true;
+      newUser.role = UserRole.STUDENT;
+      newUser.profilePhotoUrl = profile.pictureUrl ?? null;
+      (newUser as any).password = null;
+
+      const savedUser = await this.userRepo.save(newUser);
+
+      const newAuthIdentity = new UserAuthIdentity();
+      newAuthIdentity.userId = savedUser.id;
+      newAuthIdentity.authProvider = profile.provider;
+      newAuthIdentity.googleId =
+        profile.provider === 'google' ? profile.providerId : null;
+      newAuthIdentity.facebookId =
+        profile.provider === 'facebook' ? profile.providerId : null;
+
+      await this.userAuthIdentityRepo.save(newAuthIdentity);
+
+      return savedUser;
+    }
+
+    let ensuredUser = user;
+    let shouldSaveUser = false;
+
+    if (!ensuredUser.fullLegalName && profile.fullLegalName) {
+      ensuredUser.fullLegalName = profile.fullLegalName;
+      shouldSaveUser = true;
+    }
+
+    if (!ensuredUser.firstName && profile.firstName) {
+      ensuredUser.firstName = profile.firstName;
+      shouldSaveUser = true;
+    }
+
+    if (!ensuredUser.lastName && profile.lastName) {
+      ensuredUser.lastName = profile.lastName;
+      shouldSaveUser = true;
+    }
+
+    if (!ensuredUser.medicalEmail && profile.email) {
+      ensuredUser.medicalEmail = profile.email;
+      shouldSaveUser = true;
+    }
+
+    if (!ensuredUser.isVerified) {
+      ensuredUser.isVerified = true;
+      shouldSaveUser = true;
+    }
+
+    if (!ensuredUser.profilePhotoUrl && profile.pictureUrl) {
+      ensuredUser.profilePhotoUrl = profile.pictureUrl;
+      shouldSaveUser = true;
+    }
+
+    if (shouldSaveUser) {
+      ensuredUser = await this.userRepo.save(ensuredUser);
+    }
+
+    if (!authIdentity) {
+      authIdentity = await this.userAuthIdentityRepo.findOne({
+        where: { userId: ensuredUser.id },
+      });
+    }
+
+    if (!authIdentity) {
+      const newAuthIdentity = new UserAuthIdentity();
+      newAuthIdentity.userId = ensuredUser.id;
+      newAuthIdentity.authProvider = profile.provider;
+      newAuthIdentity.googleId =
+        profile.provider === 'google' ? profile.providerId : null;
+      newAuthIdentity.facebookId =
+        profile.provider === 'facebook' ? profile.providerId : null;
+
+      await this.userAuthIdentityRepo.save(newAuthIdentity);
+      return ensuredUser;
+    }
+
+    let shouldSaveIdentity = false;
+
+    if (authIdentity.authProvider !== profile.provider) {
+      authIdentity.authProvider = profile.provider;
+      shouldSaveIdentity = true;
+    }
+
+    if (profile.provider === 'google' && !authIdentity.googleId) {
+      authIdentity.googleId = profile.providerId;
+      shouldSaveIdentity = true;
+    }
+
+    if (profile.provider === 'facebook' && !authIdentity.facebookId) {
+      authIdentity.facebookId = profile.providerId;
+      shouldSaveIdentity = true;
+    }
+
+    if (shouldSaveIdentity) {
+      await this.userAuthIdentityRepo.save(authIdentity);
+    }
+
+    return ensuredUser;
+  }
 
   async register(dto: RegisterDto): Promise<{
     message: string;
@@ -48,7 +345,10 @@ export class AuthService {
 
     const medicalEmail = normalizeEmail(dto.medicalEmail);
 
-    const exists = await this.userRepo.findOne({ where: { medicalEmail } });
+    const exists = await this.userRepo.findOne({
+      where: { medicalEmail },
+    });
+
     if (exists) {
       throw new BadRequestException('Medical email already exists');
     }
@@ -56,31 +356,33 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
     const fullLegalName = dto.fullLegalName.trim();
-    const nameTokens = fullLegalName.split(/\s+/);
-    const firstName = nameTokens[0] ?? '';
-    const lastName = nameTokens.slice(1).join(' ') || undefined;
+    const nameParts = this.splitFullLegalName(fullLegalName);
 
     const user = this.userRepo.create({
       fullLegalName,
-      firstName,
-      lastName,
+      firstName: nameParts.firstName,
+      lastName: nameParts.lastName,
       medicalEmail,
       professionalRole: dto.professionalRole.trim(),
       password: passwordHash,
       isVerified: false,
-      role: UserRole.STUDENT,  // ✅ Default to STUDENT on signup
+      role: UserRole.STUDENT,
     });
 
     const saved = await this.userRepo.save(user);
 
+    const authIdentity = this.userAuthIdentityRepo.create({
+      userId: saved.id,
+      authProvider: 'local',
+      googleId: null,
+      facebookId: null,
+    });
+
+    await this.userAuthIdentityRepo.save(authIdentity);
+
     return {
       message: 'Account created successfully',
-      user: {
-        id: saved.id,
-        fullLegalName: saved.fullLegalName,
-        medicalEmail: saved.medicalEmail,
-        professionalRole: saved.professionalRole,
-      },
+      user: this.buildAuthUser(saved),
     };
   }
 
@@ -93,13 +395,13 @@ export class AuthService {
       professionalRole: string;
     };
   }> {
-    const email = dto.email.toLowerCase();
+    const email = normalizeEmail(dto.email);
 
     const user = await this.userRepo.findOne({
       where: { medicalEmail: email },
     });
 
-    if (!user) {
+    if (!user || !user.password) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -113,28 +415,53 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const payload = {
-      sub: user.id,
-      role: user.role,
-      medicalEmail: user.medicalEmail,
-    };
-
-    const accessToken = await this.jwtService.signAsync(payload);
-
-    if (!isMatch) {
-      throw new UnauthorizedException('Invalid email or password');
-    }
+    const accessToken = await this.signAccessToken(user);
 
     return {
       accessToken,
-      user: {
-        id: user.id,
-        fullLegalName: user.fullLegalName,
-        medicalEmail: user.medicalEmail,
-        professionalRole: user.professionalRole,
-      },
+      user: this.buildAuthUser(user),
     };
   }
+
+  async loginWithGoogle(dto: GoogleSocialLoginDto): Promise<{
+    accessToken: string;
+    user: {
+      id: string;
+      fullLegalName: string;
+      medicalEmail: string;
+      professionalRole: string;
+    };
+  }> {
+    const profile = await this.verifyGoogleIdToken(dto.idToken);
+    const user = await this.findOrCreateSocialUser(profile);
+    const accessToken = await this.signAccessToken(user);
+
+    return {
+      accessToken,
+      user: this.buildAuthUser(user),
+    };
+  }
+
+  async loginWithFacebook(dto: FacebookSocialLoginDto): Promise<{
+    accessToken: string;
+    user: {
+      id: string;
+      fullLegalName: string;
+      medicalEmail: string;
+      professionalRole: string;
+    };
+  }> {
+    const profile = await this.verifyFacebookAccessToken(dto.accessToken);
+    const user = await this.findOrCreateSocialUser(profile);
+    const accessToken = await this.signAccessToken(user);
+
+    return {
+      accessToken,
+      user: this.buildAuthUser(user),
+    };
+  }
+
+  // --- end ---
 
   async sendOtp(
     dto: SendOtpDto,

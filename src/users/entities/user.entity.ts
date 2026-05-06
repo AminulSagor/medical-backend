@@ -5,7 +5,9 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
+  OneToOne,
 } from 'typeorm';
+import { UserAuthIdentity } from './user-auth-identity.entity';
 
 export enum UserRole {
   ADMIN = 'admin',
@@ -42,7 +44,7 @@ export class User {
   professionalRole: string;
 
   @Column({ type: 'text', nullable: true })
-  profilePhotoUrl?: string;
+  profilePhotoUrl?: string | null;
 
   @Column({ type: 'varchar', length: 30, nullable: true })
   phoneNumber?: string;
@@ -78,7 +80,7 @@ export class User {
   @Column({ type: 'varchar', length: 100, nullable: true })
   shippingCountry?: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   password: string;
 
   @Column({ type: 'boolean', default: false })
@@ -99,6 +101,12 @@ export class User {
 
   @Column({ type: 'timestamptz', nullable: true })
   lastActiveAt?: Date;
+
+  @OneToOne(() => UserAuthIdentity, (authIdentity) => authIdentity.user, {
+    cascade: true,
+    eager: false,
+  })
+  authIdentity: UserAuthIdentity;
 
   @CreateDateColumn()
   createdAt: Date;

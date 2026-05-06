@@ -11,11 +11,12 @@ import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { JwtStrategy } from './jwt.strategy';
 import { StringValue } from 'ms';
+import { UserAuthIdentity } from 'src/users/entities/user-auth-identity.entity';
 
 @Module({
   imports: [
     UsersModule,
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, UserAuthIdentity]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
