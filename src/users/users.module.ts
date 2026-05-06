@@ -13,6 +13,7 @@ import { Order } from 'src/orders/entities/order.entity';
 import { PaymentSettingsController } from './payment-settings.controller';
 import { PaymentSettingsService } from './payment-settings.service';
 import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation.entity';
+import { UserAuthIdentity } from './entities/user-auth-identity.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { WorkshopReservation } from 'src/workshops/entities/workshop-reservation
       WorkshopEnrollment,
       Order,
       WorkshopReservation,
+      UserAuthIdentity,
     ]),
   ],
   controllers: [
