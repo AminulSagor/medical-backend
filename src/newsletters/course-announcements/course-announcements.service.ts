@@ -54,6 +54,7 @@ import {
   ReservationStatus,
   WorkshopReservation,
 } from 'src/workshops/entities/workshop-reservation.entity';
+import { CourseAnnouncementRecipientItem } from 'src/common/types/broadcasts.types';
 
 @Injectable()
 export class CourseAnnouncementsService {
@@ -408,6 +409,7 @@ export class CourseAnnouncementsService {
       },
       relations: ['customContent', 'attachments'],
     });
+
     if (!b) throw new NotFoundException('Announcement not found');
 
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
@@ -417,32 +419,15 @@ export class CourseAnnouncementsService {
       where: { id: meta.workshopId },
       relations: ['days'],
     });
+
     if (!workshop) throw new NotFoundException('Cohort not found');
 
-    // ✅ FIXED: Calculate Total Cohort Recipients from BOTH tables
-    const [enrollments, reservations] = await Promise.all([
-      this.enrollmentRepo.find({
-        where: { workshopId: meta.workshopId, isActive: true },
-        select: ['userId'],
-      }),
-      this.reservationsRepo.find({
-        where: {
-          workshopId: meta.workshopId,
-          status: ReservationStatus.CONFIRMED,
-        },
-        select: ['userId'],
-      }),
-    ]);
-
-    const totalCohortRecipients = new Set([
-      ...enrollments.map((e) => e.userId),
-      ...reservations.map((r) => r.userId),
-    ]).size;
+    const allRecipients = await this.resolveCohortRecipients(meta.workshopId);
 
     const selectedCount =
       meta.recipientMode === CourseAnnouncementRecipientMode.ALL
-        ? totalCohortRecipients
-        : await this.courseRecipientRepo.count({ where: { broadcastId } });
+        ? allRecipients.length
+        : await this.getSelectedRecipientsCount(broadcastId, allRecipients);
 
     const preview = await this.listRecipients(broadcastId, {
       page: 1,
@@ -452,13 +437,17 @@ export class CourseAnnouncementsService {
     const dayDates = (workshop.days ?? [])
       .map((x: any) => new Date(x.date))
       .filter((d: Date) => !Number.isNaN(d.getTime()))
-      .sort((a, b) => a.getTime() - b.getTime());
+      .sort((a, c) => a.getTime() - c.getTime());
+
     const cohortDate = dayDates[0] ?? null;
 
     return {
       header: {
         title: 'Broadcast Announcement',
-        cohort: { id: workshop.id, name: (workshop as any).title },
+        cohort: {
+          id: workshop.id,
+          name: (workshop as any).title,
+        },
         scheduledDate: cohortDate,
         systemReady: this.isSystemReady(b, meta, selectedCount),
       },
@@ -471,7 +460,7 @@ export class CourseAnnouncementsService {
       },
       recipients: {
         recipientMode: meta.recipientMode,
-        totalInCohort: totalCohortRecipients,
+        totalInCohort: allRecipients.length,
         selectedCount,
         preview: (preview.items as any[]).slice(0, 6),
       },
@@ -572,108 +561,63 @@ export class CourseAnnouncementsService {
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
     if (!meta) throw new NotFoundException('Announcement meta not found');
 
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 24;
+    const page = Number(query.page ?? 1);
+    const limit = Number(query.limit ?? 24);
 
-    // 1. Fetch User IDs from BOTH Enrollments and Reservations concurrently
-    const [enrollments, reservations] = await Promise.all([
-      this.enrollmentRepo.find({
-        where: { workshopId: meta.workshopId, isActive: true },
-        select: ['userId'],
-      }),
-      this.reservationsRepo.find({
-        where: {
-          workshopId: meta.workshopId,
-          status: ReservationStatus.CONFIRMED,
-        },
-        select: ['userId'],
-      }),
-    ]);
+    const allRecipients = await this.resolveCohortRecipients(meta.workshopId);
 
-    // 2. Merge and Remove Duplicate User IDs using a Set
-    const uniqueUserIds = [
-      ...new Set([
-        ...enrollments.map((e) => e.userId),
-        ...reservations.map((r) => r.userId),
-      ]),
-    ];
+    let filtered = allRecipients;
 
-    // Early return if nobody is enrolled/reserved yet
-    if (uniqueUserIds.length === 0) {
-      return {
-        recipientMode: meta.recipientMode,
-        items: [],
-        meta: { page, limit, total: 0 },
-      };
+    if (query.search?.trim()) {
+      const search = query.search.trim().toLowerCase();
+
+      filtered = filtered.filter((recipient) => {
+        return (
+          recipient.name.toLowerCase().includes(search) ||
+          recipient.email.toLowerCase().includes(search) ||
+          recipient.role?.toLowerCase().includes(search) ||
+          recipient.institutionOrHospital?.toLowerCase().includes(search)
+        );
+      });
     }
 
-    // 3. Query the User table directly for those unique IDs
-    const userQb = this.userRepo
-      .createQueryBuilder('u')
-      .whereInIds(uniqueUserIds);
+    let selectedIds = new Set<string>();
 
-    // Apply Search Filter
-    if (query.search?.trim()) {
-      const s = `%${query.search.trim().toLowerCase()}%`;
-      userQb.andWhere(
-        '(LOWER(u.fullLegalName) LIKE :s OR LOWER(u.medicalEmail) LIKE :s)',
-        { s },
+    if (meta.recipientMode === CourseAnnouncementRecipientMode.SELECTED) {
+      const selectedRows = await this.courseRecipientRepo.find({
+        where: { broadcastId },
+        select: ['userId', 'attendeeId'] as any,
+      });
+
+      selectedIds = new Set(
+        selectedRows
+          .map((row: any) => row.userId ?? row.attendeeId)
+          .filter(Boolean),
       );
     }
 
-    // Pagination and Selection
-    userQb
-      .select([
-        'u.id as id',
-        'u.fullLegalName as name',
-        'u.medicalEmail as email',
-        'u.professionalRole as role',
-      ])
-      .orderBy('u.fullLegalName', 'ASC')
-      .offset((page - 1) * limit)
-      .limit(limit);
+    const total = filtered.length;
+    const paginated = filtered.slice((page - 1) * limit, page * limit);
 
-    // Execute query and count
-    const [raw, total] = await Promise.all([
-      userQb.getRawMany<{
-        id: string;
-        name: string;
-        email: string;
-        role: string;
-      }>(),
-      userQb
-        .clone()
-        .offset(undefined as any)
-        .limit(undefined as any)
-        .getCount(),
-    ]);
-
-    // 4. Handle "Selected" vs "All" mode
-    let selectedSet = new Set<string>();
-    if (meta.recipientMode === CourseAnnouncementRecipientMode.SELECTED) {
-      const rows = await this.courseRecipientRepo.find({
-        where: { broadcastId },
-        select: ['userId'],
-      });
-      selectedSet = new Set(rows.map((r) => r.userId));
-    }
-
-    // Map final output
-    const items = raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      role: r.role,
+    const items = paginated.map((recipient) => ({
+      id: recipient.id,
+      name: recipient.name,
+      email: recipient.email,
+      role: recipient.role,
       selected:
         meta.recipientMode === CourseAnnouncementRecipientMode.ALL
           ? true
-          : selectedSet.has(r.id),
+          : selectedIds.has(recipient.id),
     }));
 
     return {
       recipientMode: meta.recipientMode,
       items,
-      meta: { page, limit, total },
+      meta: {
+        page,
+        limit,
+        total,
+      },
     };
   }
 
@@ -740,30 +684,34 @@ export class CourseAnnouncementsService {
       },
       relations: ['customContent'],
     });
+
     if (!b) throw new NotFoundException('Announcement not found');
-    if (b.status === NewsletterBroadcastStatus.SENT)
+    if (b.status === NewsletterBroadcastStatus.SENT) {
       throw new ConflictException('Announcement already sent');
+    }
 
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
     if (!meta) throw new NotFoundException('Announcement meta not found');
 
-    if (!b.subjectLine?.trim())
+    if (!b.subjectLine?.trim()) {
       throw new UnprocessableEntityException('subjectLine is required');
-    if (!b.customContent?.messageBodyHtml?.trim())
-      throw new UnprocessableEntityException('messageBodyHtml is required');
+    }
 
-    const userIds = await this.resolveRecipientUserIds(
+    if (!b.customContent?.messageBodyHtml?.trim()) {
+      throw new UnprocessableEntityException('messageBodyHtml is required');
+    }
+
+    const recipients = await this.resolveDeliveryRecipients(
       broadcastId,
       meta.workshopId,
       meta.recipientMode,
     );
-    if (!userIds.length)
-      throw new UnprocessableEntityException('No recipients selected');
 
-    const users = await this.userRepo.findBy({ id: In(userIds) });
-    const validUsers = users.filter((user) => user.medicalEmail?.trim());
+    const validRecipients = recipients.filter((recipient) =>
+      recipient.email?.trim(),
+    );
 
-    if (!validUsers.length) {
+    if (!validRecipients.length) {
       throw new UnprocessableEntityException(
         'No deliverable recipient email addresses were found',
       );
@@ -778,41 +726,43 @@ export class CourseAnnouncementsService {
             jobStatus: NewsletterDeliveryJobStatus.PROCESSING,
             scheduledExecutionAt: new Date(),
             startedAt: new Date(),
-            totalRecipients: validUsers.length,
+            totalRecipients: validRecipients.length,
             successCount: 0,
             failureCount: 0,
             provider: 'SES',
           }),
         );
 
-        const emailList = validUsers.map((user) =>
-          user.medicalEmail.trim().toLowerCase(),
+        const emailList = validRecipients.map((recipient) =>
+          recipient.email.trim().toLowerCase(),
         );
+
         const existingSubscribers = emailList.length
           ? await manager.find(NewsletterSubscriber, {
               where: { email: In(emailList) },
             })
           : [];
+
         const existingMap = new Map(
           existingSubscribers.map((subscriber) => [
-            subscriber.email,
+            subscriber.email.toLowerCase(),
             subscriber,
           ]),
         );
 
-        const subscribersToCreate = emailList
-          .filter((email) => !existingMap.has(email))
-          .map((email) => {
-            const user = validUsers.find(
-              (candidate) =>
-                candidate.medicalEmail.trim().toLowerCase() === email,
-            )!;
+        const subscribersToCreate = validRecipients
+          .filter((recipient) => {
+            const email = recipient.email.trim().toLowerCase();
+            return !existingMap.has(email);
+          })
+          .map((recipient) => {
+            const email = recipient.email.trim().toLowerCase();
 
             return manager.create(NewsletterSubscriber, {
               email,
-              fullName: user.fullLegalName,
-              clinicalRole: user.professionalRole ?? null,
-              institution: user.institutionOrHospital ?? null,
+              fullName: recipient.name,
+              clinicalRole: recipient.role ?? null,
+              institution: recipient.institutionOrHospital ?? null,
               status: NewsletterSubscriberStatus.ACTIVE,
               source: 'COURSE_ANNOUNCEMENT',
               createdByAdminId: adminUserId,
@@ -825,14 +775,16 @@ export class CourseAnnouncementsService {
             NewsletterSubscriber,
             subscribersToCreate,
           );
+
           for (const subscriber of createdSubscribers) {
-            existingMap.set(subscriber.email, subscriber);
+            existingMap.set(subscriber.email.toLowerCase(), subscriber);
           }
         }
 
-        const recipients = validUsers.map((user) => {
-          const email = user.medicalEmail.trim().toLowerCase();
+        const deliveryRecipients = validRecipients.map((recipient) => {
+          const email = recipient.email.trim().toLowerCase();
           const subscriber = existingMap.get(email)!;
+
           return manager.create(NewsletterDeliveryRecipient, {
             deliveryJobId: job.id,
             broadcastId: b.id,
@@ -844,12 +796,12 @@ export class CourseAnnouncementsService {
 
         const savedRecipients = await manager.save(
           NewsletterDeliveryRecipient,
-          recipients,
+          deliveryRecipients,
         );
 
         const savedRecipientMap = new Map(
           savedRecipients.map((recipient) => [
-            recipient.emailSnapshot,
+            recipient.emailSnapshot.toLowerCase(),
             recipient,
           ]),
         );
@@ -862,6 +814,7 @@ export class CourseAnnouncementsService {
       b.subjectLine,
       b.customContent.messageBodyHtml,
     );
+
     const text = this.buildCourseAnnouncementText(
       b.subjectLine,
       b.customContent.messageBodyText,
@@ -872,9 +825,10 @@ export class CourseAnnouncementsService {
     let failureCount = 0;
     const failedEmails: string[] = [];
 
-    for (const user of validUsers) {
-      const email = user.medicalEmail.trim().toLowerCase();
+    for (const recipient of validRecipients) {
+      const email = recipient.email.trim().toLowerCase();
       const deliveryRecipient = subscriberMap.get(email);
+
       if (!deliveryRecipient) continue;
 
       try {
@@ -916,12 +870,14 @@ export class CourseAnnouncementsService {
         deliveryRecipient.deliveryStatus =
           NewsletterDeliveryRecipientStatus.SENT;
         deliveryRecipient.failureReason = null;
+
         successCount += 1;
       } catch (error) {
         deliveryRecipient.deliveryStatus =
           NewsletterDeliveryRecipientStatus.FAILED;
         deliveryRecipient.failureReason =
           error instanceof Error ? error.message : 'SES send failed';
+
         failedEmails.push(email);
         failureCount += 1;
       }
@@ -938,12 +894,14 @@ export class CourseAnnouncementsService {
       deliveryJob.completedAt = new Date();
       deliveryJob.errorSummary =
         failureCount > 0 ? `${failureCount} course recipient(s) failed` : null;
+
       deliveryJob.jobStatus =
         successCount === 0
           ? NewsletterDeliveryJobStatus.FAILED
           : failureCount > 0
             ? NewsletterDeliveryJobStatus.PARTIAL
             : NewsletterDeliveryJobStatus.COMPLETED;
+
       await manager.save(NewsletterDeliveryJob, deliveryJob);
 
       b.status =
@@ -956,29 +914,34 @@ export class CourseAnnouncementsService {
         ? `Failed recipients: ${failedEmails.join(', ')}`
         : null;
       b.updatedByAdminId = adminUserId;
+
       await manager.save(NewsletterBroadcast, b);
 
       if (meta.pushToStudentPanel && successCount > 0) {
-        const notifications = validUsers.map((user) =>
-          manager.create(Notification, {
-            userId: user.id,
-            title: b.subjectLine,
-            message: this.buildInAppNotificationMessage(
-              meta.priority,
-              b.customContent?.messageBodyText,
-              b.customContent?.messageBodyHtml,
-            ),
-            category: 'course_updates',
-            type: 'COURSE_ANNOUNCEMENT',
-            priority: this.mapNotificationPriority(meta.priority),
-            icon: 'announcement',
-            resourceType: 'Workshop',
-            resourceId: meta.workshopId,
-            actionRoute: `/student/courses/${meta.workshopId}`,
-          }),
-        );
+        const notifications = validRecipients
+          .filter((recipient) => recipient.userId)
+          .map((recipient) =>
+            manager.create(Notification, {
+              userId: recipient.userId!,
+              title: b.subjectLine,
+              message: this.buildInAppNotificationMessage(
+                meta.priority,
+                b.customContent?.messageBodyText,
+                b.customContent?.messageBodyHtml,
+              ),
+              category: 'course_updates',
+              type: 'COURSE_ANNOUNCEMENT',
+              priority: this.mapNotificationPriority(meta.priority),
+              icon: 'announcement',
+              resourceType: 'Workshop',
+              resourceId: meta.workshopId,
+              actionRoute: `/student/courses/${meta.workshopId}`,
+            }),
+          );
 
-        await manager.save(Notification, notifications);
+        if (notifications.length) {
+          await manager.save(Notification, notifications);
+        }
       }
     });
 
@@ -989,7 +952,7 @@ export class CourseAnnouncementsService {
           : 'Course announcement sent successfully',
       id: b.id,
       subjectLine: b.subjectLine,
-      recipientsCount: validUsers.length,
+      recipientsCount: validRecipients.length,
       successCount,
       failureCount,
     };
@@ -1137,39 +1100,29 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     return true;
   }
 
-  private async resolveRecipientUserIds(
+  private async resolveDeliveryRecipients(
     broadcastId: string,
     workshopId: string,
     mode: CourseAnnouncementRecipientMode,
-  ): Promise<string[]> {
-    if (mode === CourseAnnouncementRecipientMode.ALL) {
-      const [enrollments, reservations] = await Promise.all([
-        this.enrollmentRepo.find({
-          where: { workshopId, isActive: true },
-          select: ['userId'],
-        }),
-        this.reservationsRepo.find({
-          where: {
-            workshopId,
-            status: ReservationStatus.CONFIRMED,
-          },
-          select: ['userId'],
-        }),
-      ]);
+  ): Promise<CourseAnnouncementRecipientItem[]> {
+    const allRecipients = await this.resolveCohortRecipients(workshopId);
 
-      return [
-        ...new Set([
-          ...enrollments.map((row) => row.userId),
-          ...reservations.map((row) => row.userId),
-        ]),
-      ];
+    if (mode === CourseAnnouncementRecipientMode.ALL) {
+      return allRecipients;
     }
 
-    const selected = await this.courseRecipientRepo.find({
+    const selectedRows = await this.courseRecipientRepo.find({
       where: { broadcastId },
-      select: ['userId'],
+      select: ['userId', 'attendeeId'] as any,
     });
-    return selected.map((r) => r.userId);
+
+    const selectedIds = new Set(
+      selectedRows
+        .map((row: any) => row.userId ?? row.attendeeId)
+        .filter(Boolean),
+    );
+
+    return allRecipients.filter((recipient) => selectedIds.has(recipient.id));
   }
 
   private async applyRecipients(
@@ -1179,71 +1132,191 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     mode: CourseAnnouncementRecipientMode,
     providedIds: string[],
   ): Promise<number> {
-    // 1. Clear existing recipients for this broadcast (FIXED ENTITY NAME)
     await manager.delete(NewsletterCourseAnnouncementRecipient, {
       broadcastId,
     });
 
-    // 2. Fetch all valid User IDs from BOTH Enrollments and Reservations
-    const [enrollments, reservations] = await Promise.all([
-      manager.find(WorkshopEnrollment, {
-        where: { workshopId, isActive: true },
-        select: ['userId'],
-      }),
-      manager.find(WorkshopReservation, {
-        where: { workshopId, status: ReservationStatus.CONFIRMED },
-        select: ['userId'],
-      }),
-    ]);
+    const allRecipients = await this.resolveCohortRecipients(
+      workshopId,
+      manager,
+    );
+    const validRecipientMap = new Map(
+      allRecipients.map((recipient) => [recipient.id, recipient]),
+    );
 
-    // Create a Set of all valid, unique user IDs for this workshop
-    const validUserIds = new Set([
-      ...enrollments.map((e) => e.userId),
-      ...reservations.map((r) => r.userId),
-    ]);
-
-    // 3. Handle "ALL" mode
     if (mode === CourseAnnouncementRecipientMode.ALL) {
-      if (validUserIds.size === 0) return 0;
+      if (!allRecipients.length) return 0;
 
-      // Insert all valid users into the recipients table (FIXED ENTITY NAME)
-      const entities = Array.from(validUserIds).map((userId) =>
+      const entities = allRecipients.map((recipient) =>
         manager.create(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
-          userId,
-        }),
+          userId: recipient.userId,
+          attendeeId: recipient.attendeeId,
+        } as any),
       );
+
       await manager.save(NewsletterCourseAnnouncementRecipient, entities);
-      return validUserIds.size;
+
+      return allRecipients.length;
     }
 
-    // 4. Handle "SELECTED" mode
     if (mode === CourseAnnouncementRecipientMode.SELECTED) {
-      if (!providedIds || providedIds.length === 0) {
-        return 0;
-      }
+      if (!providedIds?.length) return 0;
 
-      // Verify that EVERY provided ID actually belongs to the workshop
-      for (const id of providedIds) {
-        if (!validUserIds.has(id)) {
+      const uniqueProvidedIds = [...new Set(providedIds)];
+
+      for (const id of uniqueProvidedIds) {
+        if (!validRecipientMap.has(id)) {
           throw new BadRequestException(
             'One or more recipients are not enrolled in this cohort',
           );
         }
       }
 
-      // If all are valid, insert them (FIXED ENTITY NAME)
-      const entities = providedIds.map((userId) =>
-        manager.create(NewsletterCourseAnnouncementRecipient, {
+      const entities = uniqueProvidedIds.map((id) => {
+        const recipient = validRecipientMap.get(id)!;
+
+        return manager.create(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
-          userId,
-        }),
-      );
+          userId: recipient.userId,
+          attendeeId: recipient.attendeeId,
+        } as any);
+      });
+
       await manager.save(NewsletterCourseAnnouncementRecipient, entities);
-      return providedIds.length;
+
+      return entities.length;
     }
 
     return 0;
+  }
+
+  private async resolveCohortRecipients(
+    workshopId: string,
+    manager?: EntityManager,
+  ): Promise<CourseAnnouncementRecipientItem[]> {
+    const enrollmentRepo = manager
+      ? manager.getRepository(WorkshopEnrollment)
+      : this.enrollmentRepo;
+
+    const userRepo = manager ? manager.getRepository(User) : this.userRepo;
+
+    const reservationRepo = manager
+      ? manager.getRepository(WorkshopReservation)
+      : this.reservationsRepo;
+
+    const recipients: CourseAnnouncementRecipientItem[] = [];
+    const usedEmails = new Set<string>();
+
+    const addRecipient = (recipient: CourseAnnouncementRecipientItem) => {
+      const email = recipient.email?.trim().toLowerCase();
+
+      if (!email) return;
+      if (usedEmails.has(email)) return;
+
+      usedEmails.add(email);
+
+      recipients.push({
+        ...recipient,
+        email,
+      });
+    };
+
+    const enrollments = await enrollmentRepo.find({
+      where: {
+        workshopId,
+        isActive: true,
+      },
+      select: ['userId'],
+    });
+
+    const userIds = [
+      ...new Set(
+        enrollments.map((enrollment) => enrollment.userId).filter(Boolean),
+      ),
+    ];
+
+    const users = userIds.length
+      ? await userRepo.find({
+          where: {
+            id: In(userIds),
+          },
+        })
+      : [];
+
+    for (const user of users) {
+      addRecipient({
+        id: user.id,
+        userId: user.id,
+        attendeeId: null,
+        name: user.fullLegalName ?? 'Unknown',
+        email: user.medicalEmail ?? '',
+        role: user.professionalRole ?? null,
+        institutionOrHospital: (user as any).institutionOrHospital ?? null,
+      });
+    }
+
+    const reservations = await reservationRepo.find({
+      where: {
+        workshopId,
+      },
+      relations: ['attendees'],
+    });
+
+    for (const reservation of reservations) {
+      const reservationStatus = String((reservation as any).status ?? '')
+        .trim()
+        .toLowerCase();
+
+      if (reservationStatus === 'cancelled') continue;
+
+      for (const attendee of (reservation as any).attendees ?? []) {
+        const attendeeStatus = String(attendee.status ?? '')
+          .trim()
+          .toLowerCase();
+
+        if (attendeeStatus === 'cancelled' || attendeeStatus === 'refunded') {
+          continue;
+        }
+
+        addRecipient({
+          id: attendee.id,
+          userId: null,
+          attendeeId: attendee.id,
+          name: attendee.fullName ?? 'Unknown',
+          email: attendee.email ?? '',
+          role: null,
+          institutionOrHospital:
+            attendee.institutionOrHospital ??
+            reservation.institutionOrHospital ??
+            null,
+        });
+      }
+    }
+
+    return recipients.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private async getSelectedRecipientsCount(
+    broadcastId: string,
+    allRecipients: CourseAnnouncementRecipientItem[],
+    manager?: EntityManager,
+  ): Promise<number> {
+    const repo = manager
+      ? manager.getRepository(NewsletterCourseAnnouncementRecipient)
+      : this.courseRecipientRepo;
+
+    const selectedRows = await repo.find({
+      where: { broadcastId },
+      select: ['userId', 'attendeeId'] as any,
+    });
+
+    const validIds = new Set(allRecipients.map((recipient) => recipient.id));
+
+    return selectedRows.filter((row: any) => {
+      const id = row.userId ?? row.attendeeId;
+      return id && validIds.has(id);
+    }).length;
   }
 
   async toggleRecipient(
@@ -1252,14 +1325,18 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     userId: string,
     dto: ToggleRecipientDto,
   ): Promise<Record<string, unknown>> {
+    const recipientId = userId;
+
     const broadcast = await this.broadcastRepo.findOne({
       where: {
         id: broadcastId,
         channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT,
       },
     });
-    if (!broadcast)
+
+    if (!broadcast) {
       throw new NotFoundException('Course announcement not found');
+    }
 
     if (
       ![
@@ -1273,16 +1350,21 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     }
 
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
-    if (!meta)
-      throw new NotFoundException('Course announcement meta not found');
 
-    const enrolled = await this.enrollmentRepo.findOne({
-      where: { workshopId: meta.workshopId, userId, isActive: true },
-      select: ['userId'],
-    });
-    if (!enrolled) {
+    if (!meta) {
+      throw new NotFoundException('Course announcement meta not found');
+    }
+
+    const allRecipients = await this.resolveCohortRecipients(meta.workshopId);
+    const recipientMap = new Map(
+      allRecipients.map((recipient) => [recipient.id, recipient]),
+    );
+
+    const targetRecipient = recipientMap.get(recipientId);
+
+    if (!targetRecipient) {
       throw new BadRequestException(
-        'Recipient is not an active student in this cohort',
+        'Recipient is not an active member in this cohort',
       );
     }
 
@@ -1292,35 +1374,41 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
       const metaLocked = await manager.findOne(NewsletterCourseAnnouncement, {
         where: { broadcastId },
       });
-      if (!metaLocked)
-        throw new NotFoundException('Course announcement meta not found');
 
-      // If currently ALL and user unchecks one -> convert to SELECTED and store all except this user
+      if (!metaLocked) {
+        throw new NotFoundException('Course announcement meta not found');
+      }
+
+      const allLockedRecipients = await this.resolveCohortRecipients(
+        metaLocked.workshopId,
+        manager,
+      );
+
+      const lockedRecipientMap = new Map(
+        allLockedRecipients.map((recipient) => [recipient.id, recipient]),
+      );
+
       if (
         metaLocked.recipientMode === CourseAnnouncementRecipientMode.ALL &&
         selected === false
       ) {
-        const allActive = await manager.find(WorkshopEnrollment, {
-          where: { workshopId: metaLocked.workshopId, isActive: true },
-          select: ['userId'],
-        });
-
-        const keepIds = allActive
-          .map((r) => r.userId)
-          .filter((id) => id !== userId);
+        const keepRecipients = allLockedRecipients.filter(
+          (recipient) => recipient.id !== recipientId,
+        );
 
         await manager.delete(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
         });
 
-        if (keepIds.length) {
+        if (keepRecipients.length) {
           await manager.save(
             NewsletterCourseAnnouncementRecipient,
-            keepIds.map((id) =>
+            keepRecipients.map((recipient) =>
               manager.create(NewsletterCourseAnnouncementRecipient, {
                 broadcastId,
-                userId: id,
-              }),
+                userId: recipient.userId,
+                attendeeId: recipient.attendeeId,
+              } as any),
             ),
           );
         }
@@ -1333,55 +1421,72 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
         metaLocked.recipientMode === CourseAnnouncementRecipientMode.SELECTED
       ) {
         if (selected) {
-          const exists = await manager.findOne(
+          const recipient = lockedRecipientMap.get(recipientId);
+
+          if (!recipient) {
+            throw new BadRequestException(
+              'Recipient is not an active member in this cohort',
+            );
+          }
+
+          const existing = await manager.findOne(
             NewsletterCourseAnnouncementRecipient,
             {
-              where: { broadcastId, userId },
+              where: recipient.userId
+                ? { broadcastId, userId: recipient.userId }
+                : ({ broadcastId, attendeeId: recipient.attendeeId } as any),
             },
           );
-          if (!exists) {
+
+          if (!existing) {
             await manager.save(
               NewsletterCourseAnnouncementRecipient,
               manager.create(NewsletterCourseAnnouncementRecipient, {
                 broadcastId,
-                userId,
-              }),
+                userId: recipient.userId,
+                attendeeId: recipient.attendeeId,
+              } as any),
             );
           }
         } else {
-          await manager.delete(NewsletterCourseAnnouncementRecipient, {
-            broadcastId,
-            userId,
-          });
+          await manager.delete(
+            NewsletterCourseAnnouncementRecipient,
+            targetRecipient.userId
+              ? { broadcastId, userId: targetRecipient.userId }
+              : ({
+                  broadcastId,
+                  attendeeId: targetRecipient.attendeeId,
+                } as any),
+          );
         }
       }
 
-      // recompute selectedCount
-      let selectedCount = 0;
-      if (metaLocked.recipientMode === CourseAnnouncementRecipientMode.ALL) {
-        selectedCount = await manager.count(WorkshopEnrollment, {
-          where: { workshopId: metaLocked.workshopId, isActive: true },
-        });
-      } else {
-        selectedCount = await manager.count(
-          NewsletterCourseAnnouncementRecipient,
-          {
-            where: { broadcastId },
-          },
-        );
-      }
+      const selectedCount =
+        metaLocked.recipientMode === CourseAnnouncementRecipientMode.ALL
+          ? allLockedRecipients.length
+          : await this.getSelectedRecipientsCount(
+              broadcastId,
+              allLockedRecipients,
+              manager,
+            );
 
       const bLocked = await manager.findOne(NewsletterBroadcast, {
         where: { id: broadcastId },
       });
-      if (!bLocked)
+
+      if (!bLocked) {
         throw new NotFoundException('Course announcement not found');
+      }
 
       bLocked.estimatedRecipientsCount = selectedCount;
       bLocked.updatedByAdminId = adminUserId;
+
       await manager.save(NewsletterBroadcast, bLocked);
 
-      return { recipientMode: metaLocked.recipientMode, selectedCount };
+      return {
+        recipientMode: metaLocked.recipientMode,
+        selectedCount,
+      };
     });
 
     return {
