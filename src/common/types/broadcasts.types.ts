@@ -70,3 +70,13 @@ export type BroadcastDetail = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+export type CourseAnnouncementRecipientItem = {
+  id: string;
+  userId: string | null;
+  attendeeId: string | null;
+  name: string;
+  email: string;
+  role: string | null;
+  institutionOrHospital: string | null;
+};

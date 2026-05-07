@@ -15,8 +15,11 @@ export class NewsletterCourseAnnouncementRecipient {
   @Column('uuid')
   broadcastId: string;
 
-  @Column('uuid')
-  userId: string;
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  attendeeId: string | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
