@@ -13,6 +13,7 @@ export class SesProvider extends ProviderAdapterService {
   private readonly ses: SESv2Client;
   private readonly fromEmail: string;
   private readonly configurationSetName: string | null;
+  private readonly publicBaseUrl: string | null;
 
   constructor(private readonly configService: ConfigService) {
     super();
@@ -34,7 +35,12 @@ export class SesProvider extends ProviderAdapterService {
 
     this.fromEmail = fromEmail;
     this.configurationSetName =
-      this.configService.get<string>('SES_CONFIGURATION_SET_NAME') ?? null;
+      this.configService.get<string>('SES_CONFIGURATION_SET_NAME')?.trim() ||
+      null;
+
+    this.publicBaseUrl =
+      this.configService.get<string>('NEWSLETTER_PUBLIC_BASE_URL')?.trim() ||
+      null;
 
     this.ses = new SESv2Client({
       region,
@@ -50,6 +56,15 @@ export class SesProvider extends ProviderAdapterService {
 
     for (const recipient of payload.recipients) {
       try {
+        const html = this.appendUnsubscribeFooter(
+          payload.html,
+          recipient.email,
+        );
+        const text = this.appendUnsubscribeTextFooter(
+          payload.text,
+          recipient.email,
+        );
+
         const command = new SendEmailCommand({
           FromEmailAddress: this.fromEmail,
           Destination: {
@@ -73,13 +88,13 @@ export class SesProvider extends ProviderAdapterService {
               },
               Body: {
                 Html: {
-                  Data: payload.html,
+                  Data: html,
                   Charset: 'UTF-8',
                 },
-                ...(payload.text
+                ...(text
                   ? {
                       Text: {
-                        Data: payload.text,
+                        Data: text,
                         Charset: 'UTF-8',
                       },
                     }
@@ -122,5 +137,59 @@ export class SesProvider extends ProviderAdapterService {
       failedCount,
       recipientResults,
     };
+  }
+
+  private appendUnsubscribeFooter(html: string, email: string): string {
+    const unsubscribeUrl = this.buildUnsubscribeUrl(email);
+
+    if (!unsubscribeUrl) return html;
+
+    const footer = `
+      <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
+        <p style="margin:0;">
+          If you no longer want to receive these emails,
+          <a href="${this.escapeHtml(unsubscribeUrl)}" target="_blank" rel="noopener">unsubscribe here</a>.
+        </p>
+      </div>
+    `;
+
+    if (/<\/body>/i.test(html)) {
+      return html.replace(/<\/body>/i, `${footer}</body>`);
+    }
+
+    return `${html}${footer}`;
+  }
+
+  private appendUnsubscribeTextFooter(
+    text: string | null | undefined,
+    email: string,
+  ): string | null {
+    const unsubscribeUrl = this.buildUnsubscribeUrl(email);
+
+    if (!unsubscribeUrl) return text ?? null;
+
+    const baseText = text?.trim() ?? '';
+
+    return `${baseText}
+
+Unsubscribe: ${unsubscribeUrl}`.trim();
+  }
+
+  private buildUnsubscribeUrl(email: string): string | null {
+    if (!this.publicBaseUrl) return null;
+
+    const baseUrl = this.publicBaseUrl.replace(/\/+$/, '');
+    const token = encodeURIComponent(email.trim().toLowerCase());
+
+    return `${baseUrl}/public/newsletters/general/unsubscribe?token=${token}`;
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 }

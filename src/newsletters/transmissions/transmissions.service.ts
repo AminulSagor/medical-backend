@@ -196,7 +196,21 @@ export class TransmissionsService {
       delivered = await this.recipientRepo
         .createQueryBuilder('r')
         .where('r.broadcastId = :id', { id: broadcastId })
-        .andWhere('r.deliveredAt IS NOT NULL')
+        .andWhere(
+          `(
+      r.deliveredAt IS NOT NULL
+      OR r.firstOpenedAt IS NOT NULL
+      OR r.firstClickedAt IS NOT NULL
+      OR r.deliveryStatus IN (:...deliveredStatuses)
+    )`,
+          {
+            deliveredStatuses: [
+              NewsletterDeliveryRecipientStatus.DELIVERED,
+              NewsletterDeliveryRecipientStatus.OPENED,
+              NewsletterDeliveryRecipientStatus.CLICKED,
+            ],
+          },
+        )
         .getCount();
 
       opened = await this.recipientRepo
@@ -409,7 +423,11 @@ export class TransmissionsService {
             }
           : null,
       },
-      attachments: attachments.map((a) => ({ id: a.id, filename: a.fileName })),
+      attachments: attachments.map((a) => ({
+        id: a.id,
+        filename: a.fileName,
+        fileKey: a.fileKey,
+      })),
     };
   }
 
