@@ -718,7 +718,17 @@ export class CourseAnnouncementsService {
       throw new UnprocessableEntityException('No recipients selected');
     }
 
-    const users = await this.userRepo.findBy({ id: In(userIds) });
+    const users = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.id IN (:...userIds)', { userIds })
+      .addSelect([
+        'u.medicalEmail',
+        'u.fullLegalName',
+        'u.professionalRole',
+        'u.institutionOrHospital',
+      ])
+      .getMany();
+
     const validUsers = users.filter((user) => user.medicalEmail?.trim());
 
     if (!validUsers.length) {
