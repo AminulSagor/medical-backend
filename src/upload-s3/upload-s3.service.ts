@@ -93,8 +93,7 @@ export class UploadS3Service implements OnModuleInit {
       const putCommand = new PutObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-        ContentType: contentType,
-        ACL: 'public-read', // IMPORTANT
+        ContentType: contentType
       });
 
       // Temporary upload URL
