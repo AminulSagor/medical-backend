@@ -61,6 +61,7 @@ export class CourseAnnouncementsService {
   private readonly ses!: SESv2Client;
   private readonly sesFromEmail: string | null;
   private readonly sesConfigurationSetName: string | null;
+  private readonly publicBaseUrl: string | null;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -101,6 +102,10 @@ export class CourseAnnouncementsService {
 
     this.sesConfigurationSetName =
       this.configService.get<string>('SES_CONFIGURATION_SET_NAME')?.trim() ||
+      null;
+
+    this.publicBaseUrl =
+      this.configService.get<string>('NEWSLETTER_PUBLIC_BASE_URL')?.trim() ||
       null;
 
     if (region && accessKeyId && secretAccessKey) {
@@ -686,11 +691,13 @@ export class CourseAnnouncementsService {
     });
 
     if (!b) throw new NotFoundException('Announcement not found');
+
     if (b.status === NewsletterBroadcastStatus.SENT) {
       throw new ConflictException('Announcement already sent');
     }
 
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
+
     if (!meta) throw new NotFoundException('Announcement meta not found');
 
     if (!b.subjectLine?.trim()) {
@@ -701,17 +708,20 @@ export class CourseAnnouncementsService {
       throw new UnprocessableEntityException('messageBodyHtml is required');
     }
 
-    const recipients = await this.resolveDeliveryRecipients(
+    const userIds = await this.resolveRecipientUserIds(
       broadcastId,
       meta.workshopId,
       meta.recipientMode,
     );
 
-    const validRecipients = recipients.filter((recipient) =>
-      recipient.email?.trim(),
-    );
+    if (!userIds.length) {
+      throw new UnprocessableEntityException('No recipients selected');
+    }
 
-    if (!validRecipients.length) {
+    const users = await this.userRepo.findBy({ id: In(userIds) });
+    const validUsers = users.filter((user) => user.medicalEmail?.trim());
+
+    if (!validUsers.length) {
       throw new UnprocessableEntityException(
         'No deliverable recipient email addresses were found',
       );
@@ -726,15 +736,15 @@ export class CourseAnnouncementsService {
             jobStatus: NewsletterDeliveryJobStatus.PROCESSING,
             scheduledExecutionAt: new Date(),
             startedAt: new Date(),
-            totalRecipients: validRecipients.length,
+            totalRecipients: validUsers.length,
             successCount: 0,
             failureCount: 0,
             provider: 'SES',
           }),
         );
 
-        const emailList = validRecipients.map((recipient) =>
-          recipient.email.trim().toLowerCase(),
+        const emailList = validUsers.map((user) =>
+          user.medicalEmail.trim().toLowerCase(),
         );
 
         const existingSubscribers = emailList.length
@@ -745,24 +755,24 @@ export class CourseAnnouncementsService {
 
         const existingMap = new Map(
           existingSubscribers.map((subscriber) => [
-            subscriber.email.toLowerCase(),
+            subscriber.email,
             subscriber,
           ]),
         );
 
-        const subscribersToCreate = validRecipients
-          .filter((recipient) => {
-            const email = recipient.email.trim().toLowerCase();
-            return !existingMap.has(email);
-          })
-          .map((recipient) => {
-            const email = recipient.email.trim().toLowerCase();
+        const subscribersToCreate = emailList
+          .filter((email) => !existingMap.has(email))
+          .map((email) => {
+            const user = validUsers.find(
+              (candidate) =>
+                candidate.medicalEmail.trim().toLowerCase() === email,
+            )!;
 
             return manager.create(NewsletterSubscriber, {
               email,
-              fullName: recipient.name,
-              clinicalRole: recipient.role ?? null,
-              institution: recipient.institutionOrHospital ?? null,
+              fullName: user.fullLegalName,
+              clinicalRole: user.professionalRole ?? null,
+              institution: user.institutionOrHospital ?? null,
               status: NewsletterSubscriberStatus.ACTIVE,
               source: 'COURSE_ANNOUNCEMENT',
               createdByAdminId: adminUserId,
@@ -777,12 +787,12 @@ export class CourseAnnouncementsService {
           );
 
           for (const subscriber of createdSubscribers) {
-            existingMap.set(subscriber.email.toLowerCase(), subscriber);
+            existingMap.set(subscriber.email, subscriber);
           }
         }
 
-        const deliveryRecipients = validRecipients.map((recipient) => {
-          const email = recipient.email.trim().toLowerCase();
+        const recipients = validUsers.map((user) => {
+          const email = user.medicalEmail.trim().toLowerCase();
           const subscriber = existingMap.get(email)!;
 
           return manager.create(NewsletterDeliveryRecipient, {
@@ -796,12 +806,12 @@ export class CourseAnnouncementsService {
 
         const savedRecipients = await manager.save(
           NewsletterDeliveryRecipient,
-          deliveryRecipients,
+          recipients,
         );
 
         const savedRecipientMap = new Map(
           savedRecipients.map((recipient) => [
-            recipient.emailSnapshot.toLowerCase(),
+            recipient.emailSnapshot,
             recipient,
           ]),
         );
@@ -825,13 +835,16 @@ export class CourseAnnouncementsService {
     let failureCount = 0;
     const failedEmails: string[] = [];
 
-    for (const recipient of validRecipients) {
-      const email = recipient.email.trim().toLowerCase();
+    for (const user of validUsers) {
+      const email = user.medicalEmail.trim().toLowerCase();
       const deliveryRecipient = subscriberMap.get(email);
 
       if (!deliveryRecipient) continue;
 
       try {
+        const recipientHtml = this.appendUnsubscribeFooter(html, email);
+        const recipientText = this.appendUnsubscribeTextFooter(text, email);
+
         const response = await this.ses.send(
           new SendEmailCommand({
             FromEmailAddress: this.sesFromEmail,
@@ -852,11 +865,11 @@ export class CourseAnnouncementsService {
                 },
                 Body: {
                   Html: {
-                    Data: html,
+                    Data: recipientHtml,
                     Charset: 'UTF-8',
                   },
                   Text: {
-                    Data: text,
+                    Data: recipientText,
                     Charset: 'UTF-8',
                   },
                 },
@@ -894,7 +907,6 @@ export class CourseAnnouncementsService {
       deliveryJob.completedAt = new Date();
       deliveryJob.errorSummary =
         failureCount > 0 ? `${failureCount} course recipient(s) failed` : null;
-
       deliveryJob.jobStatus =
         successCount === 0
           ? NewsletterDeliveryJobStatus.FAILED
@@ -918,30 +930,26 @@ export class CourseAnnouncementsService {
       await manager.save(NewsletterBroadcast, b);
 
       if (meta.pushToStudentPanel && successCount > 0) {
-        const notifications = validRecipients
-          .filter((recipient) => recipient.userId)
-          .map((recipient) =>
-            manager.create(Notification, {
-              userId: recipient.userId!,
-              title: b.subjectLine,
-              message: this.buildInAppNotificationMessage(
-                meta.priority,
-                b.customContent?.messageBodyText,
-                b.customContent?.messageBodyHtml,
-              ),
-              category: 'course_updates',
-              type: 'COURSE_ANNOUNCEMENT',
-              priority: this.mapNotificationPriority(meta.priority),
-              icon: 'announcement',
-              resourceType: 'Workshop',
-              resourceId: meta.workshopId,
-              actionRoute: `/student/courses/${meta.workshopId}`,
-            }),
-          );
+        const notifications = validUsers.map((user) =>
+          manager.create(Notification, {
+            userId: user.id,
+            title: b.subjectLine,
+            message: this.buildInAppNotificationMessage(
+              meta.priority,
+              b.customContent?.messageBodyText,
+              b.customContent?.messageBodyHtml,
+            ),
+            category: 'course_updates',
+            type: 'COURSE_ANNOUNCEMENT',
+            priority: this.mapNotificationPriority(meta.priority),
+            icon: 'announcement',
+            resourceType: 'Workshop',
+            resourceId: meta.workshopId,
+            actionRoute: `/student/courses/${meta.workshopId}`,
+          }),
+        );
 
-        if (notifications.length) {
-          await manager.save(Notification, notifications);
-        }
+        await manager.save(Notification, notifications);
       }
     });
 
@@ -952,7 +960,7 @@ export class CourseAnnouncementsService {
           : 'Course announcement sent successfully',
       id: b.id,
       subjectLine: b.subjectLine,
-      recipientsCount: validRecipients.length,
+      recipientsCount: validUsers.length,
       successCount,
       failureCount,
     };
@@ -1100,29 +1108,47 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     return true;
   }
 
-  private async resolveDeliveryRecipients(
+  private async resolveRecipientUserIds(
     broadcastId: string,
     workshopId: string,
     mode: CourseAnnouncementRecipientMode,
-  ): Promise<CourseAnnouncementRecipientItem[]> {
-    const allRecipients = await this.resolveCohortRecipients(workshopId);
-
+  ): Promise<string[]> {
     if (mode === CourseAnnouncementRecipientMode.ALL) {
-      return allRecipients;
+      const [enrollments, reservations] = await Promise.all([
+        this.enrollmentRepo.find({
+          where: {
+            workshopId,
+            isActive: true,
+          },
+          select: ['userId'],
+        }),
+        this.reservationsRepo.find({
+          where: {
+            workshopId,
+            status: ReservationStatus.CONFIRMED,
+          },
+          select: ['userId'],
+        }),
+      ]);
+
+      const userIds = [
+        ...enrollments.map((row) => row.userId),
+        ...reservations.map((row) => row.userId),
+      ].filter((userId): userId is string => Boolean(userId));
+
+      return [...new Set(userIds)];
     }
 
-    const selectedRows = await this.courseRecipientRepo.find({
-      where: { broadcastId },
-      select: ['userId', 'attendeeId'] as any,
+    const selectedRecipients = await this.courseRecipientRepo.find({
+      where: {
+        broadcastId,
+      },
+      select: ['userId'],
     });
 
-    const selectedIds = new Set(
-      selectedRows
-        .map((row: any) => row.userId ?? row.attendeeId)
-        .filter(Boolean),
-    );
-
-    return allRecipients.filter((recipient) => selectedIds.has(recipient.id));
+    return selectedRecipients
+      .map((recipient) => recipient.userId)
+      .filter((userId): userId is string => Boolean(userId));
   }
 
   private async applyRecipients(
@@ -1317,6 +1343,46 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
       const id = row.userId ?? row.attendeeId;
       return id && validIds.has(id);
     }).length;
+  }
+
+  private appendUnsubscribeFooter(html: string, email: string): string {
+    const unsubscribeUrl = this.buildUnsubscribeUrl(email);
+
+    if (!unsubscribeUrl) return html;
+
+    const footer = `
+    <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
+      <p style="margin:0;">
+        If you no longer want to receive these emails,
+        <a href="${this.escapeHtml(unsubscribeUrl)}" target="_blank" rel="noopener">unsubscribe here</a>.
+      </p>
+    </div>
+  `;
+
+    if (/<\/body>/i.test(html)) {
+      return html.replace(/<\/body>/i, `${footer}</body>`);
+    }
+
+    return `${html}${footer}`;
+  }
+
+  private appendUnsubscribeTextFooter(text: string, email: string): string {
+    const unsubscribeUrl = this.buildUnsubscribeUrl(email);
+
+    if (!unsubscribeUrl) return text;
+
+    return `${text.trim()}
+
+Unsubscribe: ${unsubscribeUrl}`.trim();
+  }
+
+  private buildUnsubscribeUrl(email: string): string | null {
+    if (!this.publicBaseUrl) return null;
+
+    const baseUrl = this.publicBaseUrl.replace(/\/+$/, '');
+    const token = encodeURIComponent(email.trim().toLowerCase());
+
+    return `${baseUrl}/public/newsletters/general/unsubscribe?token=${token}`;
   }
 
   async toggleRecipient(
