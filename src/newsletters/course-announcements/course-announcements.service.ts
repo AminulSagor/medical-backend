@@ -632,6 +632,7 @@ export class CourseAnnouncementsService {
     dto: SetCourseRecipientsDto,
   ): Promise<Record<string, unknown>> {
     const meta = await this.courseMetaRepo.findOne({ where: { broadcastId } });
+
     if (!meta) throw new NotFoundException('Announcement meta not found');
 
     const b = await this.broadcastRepo.findOne({
@@ -640,14 +641,18 @@ export class CourseAnnouncementsService {
         channelType: NewsletterChannelType.COURSE_ANNOUNCEMENT,
       },
     });
+
     if (!b) throw new NotFoundException('Announcement not found');
-    if (b.status === NewsletterBroadcastStatus.SENT)
+
+    if (b.status === NewsletterBroadcastStatus.SENT) {
       throw new UnprocessableEntityException(
         'Sent announcements cannot be edited',
       );
+    }
 
     const count = await this.dataSource.transaction(async (manager) => {
       meta.recipientMode = dto.recipientMode;
+
       await manager.save(NewsletterCourseAnnouncement, meta);
 
       const recipientsCount = await this.applyRecipients(
@@ -660,6 +665,7 @@ export class CourseAnnouncementsService {
 
       b.estimatedRecipientsCount = recipientsCount;
       b.updatedByAdminId = adminUserId;
+
       await manager.save(NewsletterBroadcast, b);
 
       return recipientsCount;
@@ -708,28 +714,25 @@ export class CourseAnnouncementsService {
       throw new UnprocessableEntityException('messageBodyHtml is required');
     }
 
-    const userIds = await this.resolveRecipientUserIds(
+    const deliveryRecipients = await this.resolveDeliveryRecipients(
       broadcastId,
       meta.workshopId,
       meta.recipientMode,
     );
 
-    if (!userIds.length) {
+    if (!deliveryRecipients.length) {
       throw new UnprocessableEntityException('No recipients selected');
     }
 
-    const users = await this.userRepo
-      .createQueryBuilder('u')
-      .where('u.id IN (:...userIds)', { userIds })
-      .addSelect([
-        'u.medicalEmail',
-        'u.fullLegalName',
-        'u.professionalRole',
-        'u.institutionOrHospital',
-      ])
-      .getMany();
-
-    const validUsers = users.filter((user) => user.medicalEmail?.trim());
+    const validUsers = deliveryRecipients
+      .filter((recipient) => recipient.email?.trim())
+      .map((recipient: any) => ({
+        id: recipient.userId ?? recipient.id,
+        medicalEmail: recipient.email.trim().toLowerCase(),
+        fullLegalName: recipient.name ?? null,
+        professionalRole: recipient.role ?? null,
+        institutionOrHospital: recipient.institution ?? null,
+      }));
 
     if (!validUsers.length) {
       throw new UnprocessableEntityException(
@@ -1118,49 +1121,35 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
     return true;
   }
 
-  private async resolveRecipientUserIds(
+  private async resolveDeliveryRecipients(
     broadcastId: string,
     workshopId: string,
     mode: CourseAnnouncementRecipientMode,
-  ): Promise<string[]> {
+  ): Promise<CourseAnnouncementRecipientItem[]> {
+    const allRecipients = await this.resolveCohortRecipients(workshopId);
+
     if (mode === CourseAnnouncementRecipientMode.ALL) {
-      const [enrollments, reservations] = await Promise.all([
-        this.enrollmentRepo.find({
-          where: {
-            workshopId,
-            isActive: true,
-          },
-          select: ['userId'],
-        }),
-        this.reservationsRepo.find({
-          where: {
-            workshopId,
-            status: ReservationStatus.CONFIRMED,
-          },
-          select: ['userId'],
-        }),
-      ]);
-
-      const userIds = [
-        ...enrollments.map((row) => row.userId),
-        ...reservations.map((row) => row.userId),
-      ].filter((userId): userId is string => Boolean(userId));
-
-      return [...new Set(userIds)];
+      return allRecipients;
     }
 
     const selectedRows = await this.courseRecipientRepo.find({
-      where: {
-        broadcastId,
-      },
+      where: { broadcastId },
       select: ['userId', 'attendeeId'] as any,
     });
 
-    const selectedUserIds = selectedRows
-      .map((row: any) => row.userId ?? row.attendeeId)
-      .filter((id): id is string => Boolean(id));
+    const selectedIds = new Set(
+      selectedRows
+        .flatMap((row: any) => [row.userId, row.attendeeId])
+        .filter(Boolean),
+    );
 
-    return [...new Set(selectedUserIds)];
+    return allRecipients.filter((recipient: any) => {
+      return (
+        selectedIds.has(recipient.id) ||
+        selectedIds.has(recipient.userId) ||
+        selectedIds.has(recipient.attendeeId)
+      );
+    });
   }
 
   private async applyRecipients(
@@ -1174,18 +1163,21 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
       broadcastId,
     });
 
-    const allRecipients = await this.resolveCohortRecipients(
-      workshopId,
-      manager,
-    );
-    const validRecipientMap = new Map(
-      allRecipients.map((recipient) => [recipient.id, recipient]),
-    );
+    const allRecipients = await this.resolveCohortRecipients(workshopId);
+
+    const normalizedRecipients = allRecipients
+      .map((recipient: any) => ({
+        id: recipient.id,
+        userId: recipient.userId ?? recipient.id,
+        attendeeId: recipient.attendeeId ?? null,
+        email: recipient.email ?? null,
+      }))
+      .filter((recipient) => Boolean(recipient.userId));
 
     if (mode === CourseAnnouncementRecipientMode.ALL) {
-      if (!allRecipients.length) return 0;
+      if (!normalizedRecipients.length) return 0;
 
-      const entities = allRecipients.map((recipient) =>
+      const entities = normalizedRecipients.map((recipient) =>
         manager.create(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
           userId: recipient.userId,
@@ -1195,31 +1187,35 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
 
       await manager.save(NewsletterCourseAnnouncementRecipient, entities);
 
-      return allRecipients.length;
+      return entities.length;
     }
 
     if (mode === CourseAnnouncementRecipientMode.SELECTED) {
-      if (!providedIds?.length) return 0;
+      if (!providedIds.length) return 0;
 
-      const uniqueProvidedIds = [...new Set(providedIds)];
+      const providedIdSet = new Set(providedIds);
 
-      for (const id of uniqueProvidedIds) {
-        if (!validRecipientMap.has(id)) {
-          throw new BadRequestException(
-            'One or more recipients are not enrolled in this cohort',
-          );
-        }
+      const selectedRecipients = normalizedRecipients.filter((recipient) => {
+        return (
+          providedIdSet.has(recipient.id) ||
+          providedIdSet.has(recipient.userId) ||
+          providedIdSet.has(recipient.attendeeId)
+        );
+      });
+
+      if (selectedRecipients.length !== providedIds.length) {
+        throw new BadRequestException(
+          'One or more recipients are not enrolled in this cohort',
+        );
       }
 
-      const entities = uniqueProvidedIds.map((id) => {
-        const recipient = validRecipientMap.get(id)!;
-
-        return manager.create(NewsletterCourseAnnouncementRecipient, {
+      const entities = selectedRecipients.map((recipient) =>
+        manager.create(NewsletterCourseAnnouncementRecipient, {
           broadcastId,
           userId: recipient.userId,
           attendeeId: recipient.attendeeId,
-        } as any);
-      });
+        } as any),
+      );
 
       await manager.save(NewsletterCourseAnnouncementRecipient, entities);
 
