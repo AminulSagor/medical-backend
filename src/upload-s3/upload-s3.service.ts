@@ -102,9 +102,7 @@ export class UploadS3Service implements OnModuleInit {
         Key: key,
       });
 
-      const readUrl = await getSignedUrl(this.s3Client!, getCommand, {
-        expiresIn: 604800, // 7 days in seconds (AWS maximum for signed URLs)
-      });
+      const readUrl = await getSignedUrl(this.s3Client!, getCommand);
 
       // 4. Also provide the fileKey for reference
       return {
@@ -131,9 +129,7 @@ export class UploadS3Service implements OnModuleInit {
         Key: fileKey,
       });
 
-      const readUrl = await getSignedUrl(this.s3Client!, getCommand, {
-        expiresIn: 604800, // 7 days in seconds
-      });
+      const readUrl = await getSignedUrl(this.s3Client!, getCommand);
 
       return readUrl;
     } catch (error) {
