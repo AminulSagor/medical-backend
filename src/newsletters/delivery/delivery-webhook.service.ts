@@ -328,12 +328,19 @@ export class DeliveryWebhookService {
             'Type',
           ];
 
-    return fields
-      .filter(
-        (field) => payload[field] !== undefined && payload[field] !== null,
-      )
-      .map((field) => `${field}\n${payload[field]}`)
-      .join('\n');
+    let stringToSign = '';
+
+    for (const field of fields) {
+      if (
+        Object.prototype.hasOwnProperty.call(payload, field) &&
+        payload[field] !== undefined &&
+        payload[field] !== null
+      ) {
+        stringToSign += `${field}\n${payload[field]}\n`;
+      }
+    }
+
+    return stringToSign;
   }
 
   private async getSnsSigningCertificate(certUrl: string): Promise<string> {
