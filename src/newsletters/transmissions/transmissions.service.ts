@@ -183,6 +183,7 @@ export class TransmissionsService {
     const b = await this.broadcastRepo.findOne({
       where: { id: broadcastId, status: NewsletterBroadcastStatus.SENT },
     });
+
     if (!b) throw new NotFoundException('Transmission not found');
 
     let total = 0;
@@ -193,25 +194,36 @@ export class TransmissionsService {
     try {
       total = await this.recipientRepo.count({ where: { broadcastId } });
 
-      delivered = await this.recipientRepo
+      const acceptedStatuses = [
+        NewsletterDeliveryRecipientStatus.SENT,
+        NewsletterDeliveryRecipientStatus.DELIVERED,
+        NewsletterDeliveryRecipientStatus.OPENED,
+        NewsletterDeliveryRecipientStatus.CLICKED,
+        NewsletterDeliveryRecipientStatus.BOUNCED,
+      ];
+
+      const acceptedCount = await this.recipientRepo
         .createQueryBuilder('r')
         .where('r.broadcastId = :id', { id: broadcastId })
         .andWhere(
           `(
-      r.deliveredAt IS NOT NULL
-      OR r.firstOpenedAt IS NOT NULL
-      OR r.firstClickedAt IS NOT NULL
-      OR r.deliveryStatus IN (:...deliveredStatuses)
-    )`,
-          {
-            deliveredStatuses: [
-              NewsletterDeliveryRecipientStatus.DELIVERED,
-              NewsletterDeliveryRecipientStatus.OPENED,
-              NewsletterDeliveryRecipientStatus.CLICKED,
-            ],
-          },
+          r.sentAt IS NOT NULL
+          OR r.providerMessageId IS NOT NULL
+          OR r.deliveryStatus IN (:...acceptedStatuses)
+        )`,
+          { acceptedStatuses },
         )
         .getCount();
+
+      const bouncedCount = await this.recipientRepo
+        .createQueryBuilder('r')
+        .where('r.broadcastId = :id', { id: broadcastId })
+        .andWhere('r.deliveryStatus = :bouncedStatus', {
+          bouncedStatus: NewsletterDeliveryRecipientStatus.BOUNCED,
+        })
+        .getCount();
+
+      delivered = Math.max(acceptedCount - bouncedCount, 0);
 
       opened = await this.recipientRepo
         .createQueryBuilder('r')
@@ -234,10 +246,12 @@ export class TransmissionsService {
     const deliveryRate = total
       ? Number(((delivered / total) * 100).toFixed(1))
       : 0;
+
     const openRate = total ? Number(((opened / total) * 100).toFixed(1)) : 0;
     const clickRate = total ? Number(((clicked / total) * 100).toFixed(1)) : 0;
 
     let attritionCount = 0;
+
     try {
       attritionCount = await this.unsubRepo.count({
         where: [
@@ -253,6 +267,7 @@ export class TransmissionsService {
       total > 0 ? Number(((attritionCount / total) * 100).toFixed(2)) : 0;
 
     let avgVal = 0;
+
     try {
       const historicalAvg = await this.broadcastRepo
         .createQueryBuilder('b')
@@ -272,6 +287,7 @@ export class TransmissionsService {
       avgVal > 0 ? Number((openRate - avgVal).toFixed(1)) : 0;
 
     const buckets = Array(24).fill(0);
+
     try {
       const openData = await this.recipientRepo
         .createQueryBuilder('r')
@@ -286,7 +302,10 @@ export class TransmissionsService {
           const diffHours = Math.floor(
             (r.firstOpenedAt.getTime() - r.sentAt.getTime()) / 3600000,
           );
-          if (diffHours >= 0 && diffHours < 24) buckets[diffHours]++;
+
+          if (diffHours >= 0 && diffHours < 24) {
+            buckets[diffHours]++;
+          }
         }
       });
     } catch (e: any) {
@@ -303,7 +322,10 @@ export class TransmissionsService {
         clickThroughRatePercent: clickRate,
         attritionPercent,
       },
-      engagementOverTime: { unit: 'hour', buckets },
+      engagementOverTime: {
+        unit: 'hour',
+        buckets,
+      },
       topPerformingLinks: await this.getTopLinks(broadcastId),
       recipientLog: await this.listRecipients(broadcastId, {
         page: 1,
