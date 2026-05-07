@@ -59,6 +59,7 @@ import {
 export class CourseAnnouncementsService {
   private readonly ses!: SESv2Client;
   private readonly sesFromEmail: string | null;
+  private readonly sesConfigurationSetName: string | null;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -96,6 +97,10 @@ export class CourseAnnouncementsService {
 
     this.sesFromEmail =
       this.configService.get<string>('SES_FROM_EMAIL') ?? null;
+
+    this.sesConfigurationSetName =
+      this.configService.get<string>('SES_CONFIGURATION_SET_NAME')?.trim() ||
+      null;
 
     if (region && accessKeyId && secretAccessKey) {
       this.ses = new SESv2Client({
@@ -165,11 +170,12 @@ export class CourseAnnouncementsService {
       .addOrderBy('s.segmentNumber', 'ASC');
 
     if (query.search?.trim()) {
-      const s = `%${query.search.trim().toLowerCase()}%`;
-      qb.andWhere('LOWER(w.title) LIKE :s', { s });
+      const search = `%${query.search.trim().toLowerCase()}%`;
+
+      qb.andWhere('LOWER(w.title) LIKE :search', { search });
     }
 
-    // draft must be excluded
+    // Draft must be excluded
     if (tab === 'cancelled') {
       qb.andWhere('w.status = :cancelledStatus', {
         cancelledStatus: 'cancelled',
@@ -192,21 +198,27 @@ export class CourseAnnouncementsService {
     }
 
     const workshops = await qb.getMany();
+    const workshopIds = workshops.map((workshop) => workshop.id);
 
-    const workshopIds = workshops.map((w) => w.id);
-
-    const counts = workshopIds.length
-      ? await this.enrollmentRepo
-          .createQueryBuilder('e')
-          .select('e.workshopId', 'workshopId')
-          .addSelect('COUNT(*)', 'cnt')
-          .where('e.isActive = true')
-          .andWhere('e.workshopId IN (:...ids)', { ids: workshopIds })
-          .groupBy('e.workshopId')
-          .getRawMany<{ workshopId: string; cnt: string }>()
+    const reservationCounts = workshopIds.length
+      ? await this.reservationsRepo
+          .createQueryBuilder('r')
+          .select('r.workshopId', 'workshopId')
+          .addSelect('SUM(r.numberOfSeats)', 'reservedSeats')
+          .where('r.workshopId IN (:...workshopIds)', { workshopIds })
+          .andWhere('r.status != :cancelledStatus', {
+            cancelledStatus: 'cancelled',
+          })
+          .groupBy('r.workshopId')
+          .getRawMany<{ workshopId: string; reservedSeats: string }>()
       : [];
 
-    const countMap = new Map(counts.map((r) => [r.workshopId, Number(r.cnt)]));
+    const countMap = new Map(
+      reservationCounts.map((row) => [
+        row.workshopId,
+        Number(row.reservedSeats ?? 0),
+      ]),
+    );
 
     const sortDays = (days: any[] = []) =>
       [...days].sort((a, b) => {
@@ -225,12 +237,14 @@ export class CourseAnnouncementsService {
       if (!date) return null;
 
       const value = new Date(`${date}T${time || fallbackTime}`);
+
       return Number.isNaN(value.getTime()) ? null : value;
     };
 
     const getWorkshopStartAt = (days: any[] = []) => {
       const orderedDays = sortDays(days);
       const firstDay = orderedDays[0];
+
       if (!firstDay) return null;
 
       const firstStartTime =
@@ -245,6 +259,7 @@ export class CourseAnnouncementsService {
     const getWorkshopEndAt = (days: any[] = []) => {
       const orderedDays = sortDays(days);
       const lastDay = orderedDays[orderedDays.length - 1];
+
       if (!lastDay) return null;
 
       const sortedEndTimes = [...(lastDay.segments ?? [])]
@@ -259,22 +274,19 @@ export class CourseAnnouncementsService {
     };
 
     const rows = workshops
-      .map((w: any) => {
-        const startAt = getWorkshopStartAt(w.days ?? []);
-        const endAt = getWorkshopEndAt(w.days ?? []);
-        const enrolledCount = countMap.get(w.id) ?? 0;
-        const capacity = Number(w.capacity ?? 0);
+      .map((workshop: any) => {
+        const startAt = getWorkshopStartAt(workshop.days ?? []);
+        const endAt = getWorkshopEndAt(workshop.days ?? []);
+        const enrolledCount = countMap.get(workshop.id) ?? 0;
+        const capacity = Number(workshop.capacity ?? 0);
 
         let cohortStatus: 'upcoming' | 'completed' | 'cancelled';
 
-        if (String(w.status).toLowerCase() === 'cancelled') {
+        if (String(workshop.status).toLowerCase() === 'cancelled') {
           cohortStatus = 'cancelled';
         } else if (endAt && endAt.getTime() < now.getTime()) {
-          // all sessions finished
           cohortStatus = 'completed';
         } else {
-          // published and not finished yet = upcoming
-          // this also keeps ongoing workshops inside upcoming
           cohortStatus = 'upcoming';
         }
 
@@ -282,8 +294,8 @@ export class CourseAnnouncementsService {
           capacity > 0 && enrolledCount >= capacity ? 'FULLY_BOOKED' : 'OPEN';
 
         return {
-          id: w.id,
-          title: w.title,
+          id: workshop.id,
+          title: workshop.title,
           startDate: startAt,
           status: cohortStatus,
           seatStatus,
@@ -293,6 +305,7 @@ export class CourseAnnouncementsService {
       })
       .filter((row) => {
         if (tab === 'all') return true;
+
         return row.status === tab;
       });
 
@@ -302,7 +315,11 @@ export class CourseAnnouncementsService {
 
     return {
       items,
-      meta: { page, limit, total },
+      meta: {
+        page,
+        limit,
+        total,
+      },
     };
   }
 
@@ -872,6 +889,7 @@ export class CourseAnnouncementsService {
               { Name: 'deliveryJobId', Value: deliveryJob.id },
               { Name: 'deliveryRecipientId', Value: deliveryRecipient.id },
             ],
+            ConfigurationSetName: this.sesConfigurationSetName ?? undefined,
             Content: {
               Simple: {
                 Subject: {

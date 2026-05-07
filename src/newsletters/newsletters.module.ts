@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 // Dashboard
@@ -63,6 +63,7 @@ import { User } from 'src/users/entities/user.entity';
 import { Order } from 'src/orders/entities/order.entity';
 import { WorkshopOrderSummary } from 'src/workshops/entities/workshop-order-summary.entity';
 import { PaymentTransaction } from 'src/payments/entities/payment-transaction.entity';
+import { text } from 'express';
 
 @Module({
   imports: [
@@ -152,4 +153,10 @@ import { PaymentTransaction } from 'src/payments/entities/payment-transaction.en
     SubscribersService,
   ],
 })
-export class NewslettersModule {}
+export class NewslettersModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(text({ type: ['text/plain', 'text/*'] }))
+      .forRoutes(DeliveryWebhooksController);
+  }
+}

@@ -1,7 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, createVerify, timingSafeEqual } from 'crypto';
+import { get } from 'https';
 import { Repository } from 'typeorm';
 
 import { NewsletterTransmissionEvent } from './entities/newsletter-transmission-event.entity';
@@ -12,8 +13,16 @@ import {
   NewsletterTransmissionEventType,
 } from 'src/common/enums/newsletter-constants.enum';
 
+type WebhookSource =
+  | 'custom'
+  | 'sns-notification'
+  | 'sns-subscription-confirmation'
+  | 'sns-unsubscribe-confirmation';
+
 @Injectable()
 export class DeliveryWebhookService {
+  private readonly snsCertificateCache = new Map<string, string>();
+
   constructor(
     @InjectRepository(NewsletterTransmissionEvent)
     private readonly eventRepo: Repository<NewsletterTransmissionEvent>,
@@ -29,13 +38,41 @@ export class DeliveryWebhookService {
     signature?: string | null;
     payload: any;
   }): Promise<Record<string, unknown>> {
-    this.assertValidSignature(input.signature, input.payload);
+    const source = await this.verifyWebhookSource(
+      input.signature,
+      input.payload,
+    );
+
+    if (source === 'sns-subscription-confirmation') {
+      await this.confirmSnsSubscription(input.payload);
+
+      return {
+        message: 'SNS subscription confirmed',
+        provider: 'SNS',
+      };
+    }
+
+    if (source === 'sns-unsubscribe-confirmation') {
+      return {
+        message: 'SNS unsubscribe confirmation received',
+        provider: 'SNS',
+      };
+    }
 
     const providerPayload = this.normalizePayload(input.payload);
-    const normalizedProvider = input.provider?.toUpperCase?.() || 'UNKNOWN';
-    const providerEventId = this.resolveProviderEventId(providerPayload);
+    const normalizedProvider = this.resolveProvider(
+      input.provider,
+      providerPayload,
+    );
     const eventType = this.resolveEventType(providerPayload);
     const occurredAt = this.resolveOccurredAt(providerPayload);
+    const providerMessageId = this.resolveProviderMessageId(providerPayload);
+    const providerEventId = this.resolveProviderEventId(
+      providerPayload,
+      eventType,
+      occurredAt,
+      providerMessageId,
+    );
 
     const existingEvent = providerEventId
       ? await this.eventRepo.findOne({
@@ -70,9 +107,9 @@ export class DeliveryWebhookService {
       });
     }
 
-    if (!recipient && providerEventId) {
+    if (!recipient && providerMessageId) {
       recipient = await this.recipientRepo.findOne({
-        where: { providerMessageId: providerEventId },
+        where: { providerMessageId },
       });
     }
 
@@ -99,15 +136,30 @@ export class DeliveryWebhookService {
       switch (eventType) {
         case NewsletterTransmissionEventType.DELIVERED:
           recipient.deliveredAt = recipient.deliveredAt ?? occurredAt;
-          recipient.deliveryStatus =
-            NewsletterDeliveryRecipientStatus.DELIVERED;
           recipient.failureReason = null;
+
+          if (
+            [
+              NewsletterDeliveryRecipientStatus.PENDING,
+              NewsletterDeliveryRecipientStatus.SENT,
+              NewsletterDeliveryRecipientStatus.DELIVERED,
+            ].includes(recipient.deliveryStatus)
+          ) {
+            recipient.deliveryStatus =
+              NewsletterDeliveryRecipientStatus.DELIVERED;
+          }
           break;
 
         case NewsletterTransmissionEventType.OPENED:
           recipient.firstOpenedAt = recipient.firstOpenedAt ?? occurredAt;
           recipient.openCount = (recipient.openCount ?? 0) + 1;
-          recipient.deliveryStatus = NewsletterDeliveryRecipientStatus.OPENED;
+
+          if (
+            recipient.deliveryStatus !==
+            NewsletterDeliveryRecipientStatus.CLICKED
+          ) {
+            recipient.deliveryStatus = NewsletterDeliveryRecipientStatus.OPENED;
+          }
           break;
 
         case NewsletterTransmissionEventType.CLICKED:
@@ -143,7 +195,29 @@ export class DeliveryWebhookService {
     };
   }
 
-  private assertValidSignature(
+  private async verifyWebhookSource(
+    signature: string | null | undefined,
+    payload: any,
+  ): Promise<WebhookSource> {
+    if (this.isSnsEnvelope(payload)) {
+      await this.assertValidSnsSignature(payload);
+
+      if (payload.Type === 'SubscriptionConfirmation') {
+        return 'sns-subscription-confirmation';
+      }
+
+      if (payload.Type === 'UnsubscribeConfirmation') {
+        return 'sns-unsubscribe-confirmation';
+      }
+
+      return 'sns-notification';
+    }
+
+    this.assertValidCustomSignature(signature, payload);
+    return 'custom';
+  }
+
+  private assertValidCustomSignature(
     signature: string | null | undefined,
     payload: any,
   ): void {
@@ -194,6 +268,147 @@ export class DeliveryWebhookService {
     return timingSafeEqual(aBuffer, bBuffer);
   }
 
+  private isSnsEnvelope(payload: any): boolean {
+    return Boolean(
+      payload &&
+      typeof payload === 'object' &&
+      typeof payload.Type === 'string' &&
+      typeof payload.MessageId === 'string' &&
+      typeof payload.Signature === 'string' &&
+      typeof payload.SigningCertURL === 'string',
+    );
+  }
+
+  private async assertValidSnsSignature(payload: any): Promise<void> {
+    this.assertExpectedSnsTopic(payload);
+
+    const certUrl = String(payload.SigningCertURL ?? '');
+    const cert = await this.getSnsSigningCertificate(certUrl);
+    const stringToSign = this.buildSnsStringToSign(payload);
+
+    const algorithm =
+      String(payload.SignatureVersion) === '2' ? 'RSA-SHA256' : 'RSA-SHA1';
+
+    const verifier = createVerify(algorithm);
+    verifier.update(stringToSign, 'utf8');
+    verifier.end();
+
+    const isValid = verifier.verify(cert, String(payload.Signature), 'base64');
+
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid SNS signature');
+    }
+  }
+
+  private assertExpectedSnsTopic(payload: any): void {
+    const expectedTopicArn = this.configService
+      .get<string>('NEWSLETTER_SNS_TOPIC_ARN')
+      ?.trim();
+
+    if (!expectedTopicArn) return;
+
+    if (payload.TopicArn !== expectedTopicArn) {
+      throw new UnauthorizedException('Unexpected SNS topic');
+    }
+  }
+
+  private buildSnsStringToSign(payload: any): string {
+    const type = String(payload.Type);
+
+    const fields =
+      type === 'Notification'
+        ? ['Message', 'MessageId', 'Subject', 'Timestamp', 'TopicArn', 'Type']
+        : [
+            'Message',
+            'MessageId',
+            'SubscribeURL',
+            'Timestamp',
+            'Token',
+            'TopicArn',
+            'Type',
+          ];
+
+    return fields
+      .filter(
+        (field) => payload[field] !== undefined && payload[field] !== null,
+      )
+      .map((field) => `${field}\n${payload[field]}`)
+      .join('\n');
+  }
+
+  private async getSnsSigningCertificate(certUrl: string): Promise<string> {
+    const parsedUrl = this.validateSnsUrl(certUrl, true);
+    const normalizedUrl = parsedUrl.toString();
+
+    const cached = this.snsCertificateCache.get(normalizedUrl);
+    if (cached) return cached;
+
+    const cert = await this.getHttpsText(normalizedUrl);
+    this.snsCertificateCache.set(normalizedUrl, cert);
+
+    return cert;
+  }
+
+  private async confirmSnsSubscription(payload: any): Promise<void> {
+    const subscribeUrl = String(payload?.SubscribeURL ?? '');
+    const parsedUrl = this.validateSnsUrl(subscribeUrl, false);
+
+    await this.getHttpsText(parsedUrl.toString());
+  }
+
+  private validateSnsUrl(urlValue: string, requirePem: boolean): URL {
+    let parsedUrl: URL;
+
+    try {
+      parsedUrl = new URL(urlValue);
+    } catch {
+      throw new UnauthorizedException('Invalid SNS URL');
+    }
+
+    const isAmazonSnsHost = /^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$/i.test(
+      parsedUrl.hostname,
+    );
+
+    if (parsedUrl.protocol !== 'https:' || !isAmazonSnsHost) {
+      throw new UnauthorizedException('Untrusted SNS URL');
+    }
+
+    if (requirePem && !parsedUrl.pathname.endsWith('.pem')) {
+      throw new UnauthorizedException('Invalid SNS certificate URL');
+    }
+
+    return parsedUrl;
+  }
+
+  private getHttpsText(urlValue: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const request = get(urlValue, (response) => {
+        const statusCode = response.statusCode ?? 0;
+
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          reject(new Error(`HTTPS request failed with status ${statusCode}`));
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+
+        response.on('end', () => {
+          resolve(Buffer.concat(chunks).toString('utf8'));
+        });
+      });
+
+      request.on('error', reject);
+      request.setTimeout(10000, () => {
+        request.destroy(new Error('HTTPS request timed out'));
+      });
+    });
+  }
+
   private normalizePayload(payload: any): any {
     if (
       payload?.Type === 'Notification' &&
@@ -209,14 +424,68 @@ export class DeliveryWebhookService {
     return payload;
   }
 
-  private resolveProviderEventId(payload: any): string | null {
+  private resolveProvider(inputProvider: string, payload: any): string {
+    const provider = inputProvider?.trim();
+
+    if (provider && provider.toUpperCase() !== 'UNKNOWN') {
+      return provider.toUpperCase();
+    }
+
+    if (payload?.mail?.messageId || payload?.eventType) {
+      return 'SES';
+    }
+
+    return 'UNKNOWN';
+  }
+
+  private resolveProviderMessageId(payload: any): string | null {
     return (
       payload?.mail?.messageId ??
+      payload?.mail?.commonHeaders?.messageId ??
       payload?.messageId ??
-      payload?.eventId ??
-      payload?.notificationId ??
       null
     );
+  }
+
+  private resolveProviderEventId(
+    payload: any,
+    eventType: NewsletterTransmissionEventType,
+    occurredAt: Date,
+    providerMessageId: string | null,
+  ): string | null {
+    const directEventId =
+      payload?.eventId ??
+      payload?.notificationId ??
+      payload?.delivery?.feedbackId ??
+      payload?.bounce?.feedbackId ??
+      payload?.complaint?.feedbackId ??
+      null;
+
+    const baseId = directEventId ?? providerMessageId;
+
+    if (!baseId) {
+      return null;
+    }
+
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          eventType,
+          occurredAt: occurredAt.toISOString(),
+          providerMessageId,
+          clickLink: payload?.click?.link ?? null,
+          bounceFeedbackId: payload?.bounce?.feedbackId ?? null,
+          complaintFeedbackId: payload?.complaint?.feedbackId ?? null,
+          deliveryTimestamp: payload?.delivery?.timestamp ?? null,
+          openTimestamp: payload?.open?.timestamp ?? null,
+          clickTimestamp: payload?.click?.timestamp ?? null,
+          bounceTimestamp: payload?.bounce?.timestamp ?? null,
+        }),
+      )
+      .digest('hex')
+      .slice(0, 32);
+
+    return `${baseId}:${eventType}:${fingerprint}`.slice(0, 255);
   }
 
   private resolveOccurredAt(payload: any): Date {
@@ -225,6 +494,9 @@ export class DeliveryWebhookService {
       payload?.open?.timestamp ??
       payload?.click?.timestamp ??
       payload?.bounce?.timestamp ??
+      payload?.complaint?.timestamp ??
+      payload?.reject?.timestamp ??
+      payload?.failure?.timestamp ??
       payload?.mail?.timestamp ??
       payload?.timestamp;
 
@@ -233,9 +505,14 @@ export class DeliveryWebhookService {
   }
 
   private resolveEventType(payload: any): NewsletterTransmissionEventType {
-    const raw = String(payload?.eventType ?? '').toUpperCase();
+    const raw = String(payload?.eventType ?? '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .toUpperCase();
 
     switch (raw) {
+      case 'SEND':
+        return NewsletterTransmissionEventType.SENT;
       case 'DELIVERY':
         return NewsletterTransmissionEventType.DELIVERED;
       case 'OPEN':
@@ -245,10 +522,11 @@ export class DeliveryWebhookService {
       case 'BOUNCE':
         return NewsletterTransmissionEventType.BOUNCED;
       case 'REJECT':
+        return NewsletterTransmissionEventType.DROPPED;
       case 'COMPLAINT':
+      case 'RENDERING_FAILURE':
+      case 'DELIVERY_DELAY':
         return NewsletterTransmissionEventType.FAILED;
-      case 'SEND':
-        return NewsletterTransmissionEventType.SENT;
       default:
         return NewsletterTransmissionEventType.FAILED;
     }
@@ -256,9 +534,22 @@ export class DeliveryWebhookService {
 
   private extractEmail(payload: any): string | null {
     const destination = payload?.mail?.destination;
+
     if (Array.isArray(destination) && destination.length > 0) {
       return String(destination[0]).toLowerCase();
     }
+
+    const bouncedEmail = payload?.bounce?.bouncedRecipients?.[0]?.emailAddress;
+    if (bouncedEmail) {
+      return String(bouncedEmail).toLowerCase();
+    }
+
+    const complainedEmail =
+      payload?.complaint?.complainedRecipients?.[0]?.emailAddress;
+    if (complainedEmail) {
+      return String(complainedEmail).toLowerCase();
+    }
+
     return null;
   }
 
@@ -294,6 +585,7 @@ export class DeliveryWebhookService {
     return (
       payload?.bounce?.bouncedRecipients?.[0]?.diagnosticCode ??
       payload?.bounce?.bounceType ??
+      payload?.reject?.reason ??
       payload?.failure?.message ??
       payload?.complaint?.complainedRecipients?.[0]?.emailAddress ??
       null
@@ -304,11 +596,13 @@ export class DeliveryWebhookService {
     const broadcast = await this.broadcastRepo.findOne({
       where: { id: broadcastId },
     });
+
     if (!broadcast) return;
 
     const recipients = await this.recipientRepo.find({
       where: { broadcastId },
     });
+
     const sentCount = recipients.filter((row) => row.sentAt).length;
     const openedCount = recipients.filter((row) => row.firstOpenedAt).length;
     const clickedCount = recipients.filter((row) => row.firstClickedAt).length;
