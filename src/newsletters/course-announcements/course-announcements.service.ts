@@ -1139,16 +1139,18 @@ ${this.stripHtml(messageBodyHtml ?? '')}`.trim();
       return [...new Set(userIds)];
     }
 
-    const selectedRecipients = await this.courseRecipientRepo.find({
+    const selectedRows = await this.courseRecipientRepo.find({
       where: {
         broadcastId,
       },
-      select: ['userId'],
+      select: ['userId', 'attendeeId'] as any,
     });
 
-    return selectedRecipients
-      .map((recipient) => recipient.userId)
-      .filter((userId): userId is string => Boolean(userId));
+    const selectedUserIds = selectedRows
+      .map((row: any) => row.userId ?? row.attendeeId)
+      .filter((id): id is string => Boolean(id));
+
+    return [...new Set(selectedUserIds)];
   }
 
   private async applyRecipients(
