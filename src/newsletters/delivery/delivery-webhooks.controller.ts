@@ -16,7 +16,17 @@ export class DeliveryWebhooksController {
     return this.deliveryWebhookService.ingestProviderEvents({
       provider: provider ?? 'UNKNOWN',
       signature: signature ?? null,
-      payload,
+      payload: this.parsePayload(payload),
     });
+  }
+
+  private parsePayload(payload: any): any {
+    if (typeof payload !== 'string') return payload;
+
+    try {
+      return JSON.parse(payload);
+    } catch {
+      return payload;
+    }
   }
 }

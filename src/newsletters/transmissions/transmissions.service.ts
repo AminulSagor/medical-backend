@@ -299,10 +299,7 @@ export class TransmissionsService {
   }
 
   private async getTopLinks(broadcastId: string) {
-    // 5. CALCULATE ACTUAL TOP LINKS BY CLICK VOLUME
-    // ✅ FIX: Explicitly set the type to any[] (or NewsletterTransmissionEvent[])
-    // to prevent the 'never[]' TS compilation error.
-    let clickEvents: any[] = [];
+    let clickEvents: NewsletterTransmissionEvent[] = [];
 
     try {
       clickEvents = await this.eventRepo.find({
@@ -311,23 +308,33 @@ export class TransmissionsService {
           eventType: NewsletterTransmissionEventType.CLICKED,
         },
       });
-    } catch (e) {
+    } catch (error: any) {
       console.warn(
         'Event repo query failed, returning empty top links.',
-        e.message,
+        error.message,
       );
+
       return [];
     }
 
     const counts = new Map<string, number>();
-    clickEvents.forEach((e) => {
-      if (e.payloadText) {
-        try {
-          const payload = JSON.parse(e.payloadText);
-          const url = payload.url || payload.link;
-          if (url) counts.set(url, (counts.get(url) || 0) + 1);
-        } catch {}
-      }
+
+    clickEvents.forEach((event) => {
+      if (!event.payloadText) return;
+
+      try {
+        const payload = JSON.parse(event.payloadText);
+        const url =
+          payload?.click?.link ??
+          payload?.click?.url ??
+          payload?.url ??
+          payload?.link ??
+          null;
+
+        if (url) {
+          counts.set(url, (counts.get(url) || 0) + 1);
+        }
+      } catch {}
     });
 
     return [...counts.entries()]
