@@ -12,8 +12,8 @@ export class Facility {
   @Column({ type: 'varchar', length: 100, nullable: true })
   roomNumber: string | null;
 
-  @Column({ type: 'varchar', length: 400 })
-  physicalAddress: string;
+  @Column({ type: 'varchar', length: 400, nullable: true })
+  physicalAddress: string | null;
 
   @Column({ type: 'int', nullable: true })
   capacity: number | null;

@@ -11,13 +11,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+
 import type { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface';
-import { SubscribersService } from './subscribers.service';
-import { ListSubscribersQueryDto } from './dto/list-subscribers-query.dto';
-import { CreateSubscriberDto } from './dto/create-subscriber.dto';
-import { UpdateSubscriberDto } from './dto/update-subscriber.dto';
-import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from 'src/auth/decorators/roles.decorator';
+import { RolesGuard } from 'src/auth/guards/roles.guard';
+
+import { SubscribersService } from './subscribers.service';
+import { BulkSubscribeDto } from './dto/bulk-subscribe.dto';
+import { UpdateSubscriberDto } from './dto/update-subscriber.dto';
 import { UpdateSubscriberProfileDto } from './dto/update-subscriber-profile.dto';
 import { CreateSubscriberNoteDto } from './dto/create-subscriber-note.dto';
 import { SubscriberHistoryQueryDto } from './dto/subscriber-history-query.dto';
@@ -27,7 +28,7 @@ import { ListSubscribersAdvancedQueryDto } from './dto/list-subscribers-advanced
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles('admin')
 export class SubscribersController {
-  constructor(private readonly subscribersService: SubscribersService) {}
+  constructor(private readonly subscribersService: SubscribersService) { }
 
   @Get('metrics')
   getMetrics(): Promise<Record<string, unknown>> {
@@ -39,6 +40,14 @@ export class SubscribersController {
     @Query() query: ListSubscribersAdvancedQueryDto,
   ): Promise<Record<string, unknown>> {
     return this.subscribersService.list(query);
+  }
+
+  @Post('bulk-subscribe')
+  bulkSubscribe(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: BulkSubscribeDto,
+  ): Promise<Record<string, unknown>> {
+    return this.subscribersService.bulkSubscribe(req.user.id, dto);
   }
 
   @Patch(':id')

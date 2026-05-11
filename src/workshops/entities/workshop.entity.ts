@@ -60,7 +60,7 @@ export class Workshop {
 
   // location - array for multiple facilities or ["online"] for online workshops
   @Index()
-  @Column({ type: 'simple-array' })
+  @Column({ type: 'simple-array', default: '' })
   facilityIds: string[];
 
   // Online workshop specific fields
