@@ -35,6 +35,7 @@ import {
   PaymentTransactionStatus,
 } from 'src/payments/entities/payment-transaction.entity';
 import { PaymentStatus } from 'src/common/enums/order.enums';
+import { BulkSubscribeDto } from './dto/bulk-subscribe.dto';
 
 @Injectable()
 export class SubscribersService {
@@ -56,7 +57,7 @@ export class SubscribersService {
     @InjectRepository(PaymentTransaction)
     private readonly paymentsRepo: Repository<PaymentTransaction>,
     private readonly auditService: NewsletterAuditService,
-  ) {}
+  ) { }
 
   async publicSubscribe(
     dto: PublicSubscribeDto,
@@ -340,20 +341,20 @@ export class SubscribersService {
     // Engagement Rollup
     const metricsRows = subIds.length
       ? await this.deliveryRecipientRepo
-          .createQueryBuilder('dr')
-          .select('dr.subscriberId', 'subscriberId')
-          .addSelect('COUNT(dr.id)', 'received')
-          .addSelect(
-            'SUM(CASE WHEN dr.firstOpenedAt IS NOT NULL THEN 1 ELSE 0 END)',
-            'opened',
-          )
-          .where('dr.subscriberId IN (:...subIds)', { subIds })
-          .groupBy('dr.subscriberId')
-          .getRawMany<{
-            subscriberId: string;
-            received: string;
-            opened: string;
-          }>()
+        .createQueryBuilder('dr')
+        .select('dr.subscriberId', 'subscriberId')
+        .addSelect('COUNT(dr.id)', 'received')
+        .addSelect(
+          'SUM(CASE WHEN dr.firstOpenedAt IS NOT NULL THEN 1 ELSE 0 END)',
+          'opened',
+        )
+        .where('dr.subscriberId IN (:...subIds)', { subIds })
+        .groupBy('dr.subscriberId')
+        .getRawMany<{
+          subscriberId: string;
+          received: string;
+          opened: string;
+        }>()
       : [];
 
     const metricMap = new Map(
@@ -775,13 +776,13 @@ export class SubscribersService {
     // Use PAID payments as source of truth first
     const workshopPaidPayments = user
       ? await this.paymentsRepo.find({
-          where: {
-            userId: user.id,
-            domainType: PaymentDomainType.WORKSHOP,
-            status: PaymentTransactionStatus.PAID,
-          } as any,
-          order: { paidAt: 'DESC', createdAt: 'DESC' } as any,
-        })
+        where: {
+          userId: user.id,
+          domainType: PaymentDomainType.WORKSHOP,
+          status: PaymentTransactionStatus.PAID,
+        } as any,
+        order: { paidAt: 'DESC', createdAt: 'DESC' } as any,
+      })
       : [];
 
     const workshopSummaryIds = [
@@ -798,12 +799,12 @@ export class SubscribersService {
     const workshopSummaries =
       user && workshopSummaryIds.length > 0
         ? await this.workshopOrderSummariesRepo.find({
-            where: workshopSummaryIds.map((id) => ({
-              id,
-              userId: user.id,
-            })) as any,
-            relations: ['workshop', 'attendees'],
-          })
+          where: workshopSummaryIds.map((id) => ({
+            id,
+            userId: user.id,
+          })) as any,
+          relations: ['workshop', 'attendees'],
+        })
         : [];
 
     const workshopSummaryMap = new Map(
@@ -826,9 +827,9 @@ export class SubscribersService {
 
       const numericTotal = Number(
         summary?.totalPrice ??
-          payment.amount ??
-          payment.metadata?.totalPrice ??
-          0,
+        payment.amount ??
+        payment.metadata?.totalPrice ??
+        0,
       );
 
       return {
@@ -1038,6 +1039,50 @@ export class SubscribersService {
         subscriberStatus: subscriber?.status ?? null,
         shouldShowPopup: !isSubscribed,
         suggestedSource: !isSubscribed ? 'POPUP' : null,
+      },
+    };
+  }
+
+  async bulkSubscribe(
+    adminUserId: string,
+    dto: BulkSubscribeDto,
+  ): Promise<Record<string, unknown>> {
+    const uniqueEmails = [
+      ...new Set(dto.emails.map((email) => email.trim().toLowerCase())),
+    ];
+
+    const existingSubscribers = await this.subscriberRepo.find({
+      where: { email: In(uniqueEmails) },
+    });
+
+    const existingEmailSet = new Set(
+      existingSubscribers.map((subscriber) => subscriber.email),
+    );
+
+    const newEmails = uniqueEmails.filter((email) => !existingEmailSet.has(email));
+
+    const subscribers = newEmails.map((email) =>
+      this.subscriberRepo.create({
+        email,
+        fullName: null,
+        status: NewsletterSubscriberStatus.ACTIVE,
+        source: 'EXCEL_UPLOAD',
+        createdByAdminId: adminUserId,
+      }),
+    );
+
+    if (subscribers.length) {
+      await this.subscriberRepo.save(subscribers);
+    }
+
+    return {
+      message: 'Bulk subscribers processed successfully',
+      data: {
+        totalReceived: dto.emails.length,
+        uniqueEmails: uniqueEmails.length,
+        createdCount: subscribers.length,
+        skippedExistingCount: existingEmailSet.size,
+        createdEmails: newEmails,
       },
     };
   }
