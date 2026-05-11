@@ -47,6 +47,7 @@ export class SubscribersController {
     @Req() req: AuthenticatedRequest,
     @Body() dto: BulkSubscribeDto,
   ): Promise<Record<string, unknown>> {
+    console.log('Bulk subscribe API called');
     return this.subscribersService.bulkSubscribe(req.user.id, dto);
   }
 
