@@ -77,6 +77,13 @@ export class BlogController {
     return this.blogService.update(id, dto);
   }
 
+  @Delete(':id/force')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  forceRemove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.blogService.forceRemove(id);
+  }
+
   // ── Delete Post ──
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)

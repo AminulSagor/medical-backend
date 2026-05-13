@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, DeepPartial } from 'typeorm';
+import { Repository, In, DeepPartial, DataSource } from 'typeorm';
 import { BlogPost, PublishingStatus } from './entities/blog-post.entity';
 import { BlogPostSeo } from './entities/blog-post-seo.entity';
 import { User } from '../users/entities/user.entity';
@@ -33,6 +33,7 @@ export class BlogService {
     private readonly tagRepo: Repository<Tag>,
     @InjectRepository(NewsletterBroadcastArticleLink)
     private readonly articleLinkRepo: Repository<NewsletterBroadcastArticleLink>,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ────────────────── ANALYTICS ──────────────────
@@ -138,7 +139,7 @@ export class BlogService {
       title: post.title,
       description: post.excerpt || post.content?.substring(0, 200),
       coverImageUrl: post.coverImages ?? [],
-      authorName: post.authorName ?? (post.authors?.[0]?.fullLegalName ?? null),
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName ?? null,
       categories:
         post.categories?.map((cat) => ({
           id: cat.id,
@@ -235,7 +236,8 @@ export class BlogService {
     if (dto.title !== undefined) post.title = dto.title;
     if (dto.content !== undefined) post.content = dto.content;
     if (dto.coverImageUrl !== undefined) post.coverImages = dto.coverImageUrl;
-    if (dto.authorName !== undefined) post.authorName = dto.authorName?.trim() || undefined;
+    if (dto.authorName !== undefined)
+      post.authorName = dto.authorName?.trim() || undefined;
     if (dto.publishingStatus !== undefined)
       post.publishingStatus = dto.publishingStatus;
     if (dto.scheduledPublishDate !== undefined)
@@ -352,6 +354,176 @@ export class BlogService {
 
   // ────────────────── DELETE ──────────────────
 
+  private async deleteNewsletterBroadcastGraph(
+    manager: DataSource['manager'],
+    broadcastIds: string[],
+  ): Promise<void> {
+    if (!broadcastIds.length) {
+      return;
+    }
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_transmission_events
+      WHERE "broadcastId" = ANY($1::uuid[])
+         OR "deliveryJobId" IN (
+           SELECT id
+           FROM newsletter_delivery_jobs
+           WHERE "broadcastId" = ANY($1::uuid[])
+         )
+         OR "deliveryRecipientId" IN (
+           SELECT id
+           FROM newsletter_delivery_recipients
+           WHERE "broadcastId" = ANY($1::uuid[])
+         )
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_delivery_recipients
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_delivery_jobs
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_queue_orders
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_attachments
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_content_tokens
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_editor_snapshots
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_contents
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_article_links
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcasts
+      WHERE id = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+  }
+
+  async forceRemove(id: string) {
+    const post = await this.postRepo.findOne({ where: { id } });
+
+    if (!post) {
+      throw new NotFoundException('Blog post not found');
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const broadcastRows = await manager.query(
+        `
+        SELECT "broadcastId" AS id
+        FROM newsletter_broadcast_article_links
+        WHERE "sourceType" = $1
+          AND "sourceRefId" = $2
+        `,
+        ['BLOG_POST', id],
+      );
+      const broadcastIds = broadcastRows.map((row: { id: string }) => row.id);
+
+      await this.deleteNewsletterBroadcastGraph(manager, broadcastIds);
+
+      await manager.query(
+        `
+        DELETE FROM blog_post_authors
+        WHERE "postId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM blog_post_categories
+        WHERE "postId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM blog_post_tags
+        WHERE "postId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM blog_post_seo
+        WHERE "postId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM blog_posts
+        WHERE id = $1
+        `,
+        [id],
+      );
+    });
+
+    return {
+      message: 'Blog post force deleted successfully',
+      data: {
+        blogPostId: id,
+        title: post.title,
+      },
+    };
+  }
+
   async remove(id: string) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) throw new NotFoundException('Blog post not found');
@@ -430,7 +602,7 @@ export class BlogService {
       content: post.content,
       description: post.excerpt,
       coverImageUrl: post.coverImages ?? [],
-      authorName: post.authorName ?? (post.authors?.[0]?.fullLegalName ?? null),
+      authorName: post.authorName ?? post.authors?.[0]?.fullLegalName ?? null,
       categories:
         post.categories?.map((cat) => ({ id: cat.id, name: cat.name })) ?? [],
       tags: post.tags?.map((tag) => ({ id: tag.id, name: tag.name })) ?? [],

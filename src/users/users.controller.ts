@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
   Param,
+  Delete,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -108,5 +109,12 @@ export class UsersController {
     @Body() dto: UpdateUserRoleDto,
   ) {
     return this.usersService.updateUserRole(userId, dto.role);
+  }
+
+  @Delete(':userId/force')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  forceDeleteUser(@Param('userId') userId: string) {
+    return this.usersService.forceDeleteUser(userId);
   }
 }

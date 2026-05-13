@@ -59,6 +59,13 @@ export class ProductsController {
     return this.productsService.update(id, dto);
   }
 
+  @Delete(':id/force')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  forceRemove(@Param('id') id: string) {
+    return this.productsService.forceRemove(id);
+  }
+
   // ✅ Delete a product
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)

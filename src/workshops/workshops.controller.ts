@@ -85,6 +85,13 @@ export class WorkshopsController {
     return this.service.getRefundPreview(workshopId, reservationId);
   }
 
+  @Delete(':id/force')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('admin')
+  forceRemove(@Param('id') id: string) {
+    return this.service.forceRemove(id);
+  }
+
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('admin')
