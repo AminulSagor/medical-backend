@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { User, UserRole, UserStatus } from './entities/user.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import * as bcrypt from 'bcrypt';
@@ -25,6 +25,7 @@ import {
   WorkshopReservation,
 } from 'src/workshops/entities/workshop-reservation.entity';
 import { CourseProgressStatus } from 'src/workshops/entities/course-progress-status.enum';
+import { PaymentDomainType } from 'src/payments/entities/payment-transaction.entity';
 
 function toInt(v: any, fallback: number) {
   const n = parseInt(String(v ?? ''), 10);
@@ -79,6 +80,7 @@ export class UsersService {
     @InjectRepository(Workshop) private workshopsRepo: Repository<Workshop>,
     @InjectRepository(WorkshopReservation)
     private reservationsRepo: Repository<WorkshopReservation>,
+    private readonly dataSource: DataSource,
   ) {}
 
   private buildSelfProfilePayload(user: User) {
@@ -1000,6 +1002,333 @@ export class UsersService {
       instructorEngagementRate: toPercent(instructorEngagementRateValue),
 
       roleDistribution,
+    };
+  }
+
+  async forceDeleteUser(userId: string) {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    const normalizedEmail = user.medicalEmail.trim().toLowerCase();
+
+    await this.dataSource.transaction(async (manager) => {
+      const cartRows = await manager.query(
+        `
+        SELECT id
+        FROM carts
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+      const cartIds = cartRows.map((row: { id: string }) => row.id);
+
+      const reservationRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_reservations
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+      const reservationIds = reservationRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      const attendeeRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_attendees
+        WHERE "reservationId" = ANY($1::uuid[])
+        `,
+        [reservationIds],
+      );
+      const attendeeIds = attendeeRows.map((row: { id: string }) => row.id);
+
+      const workshopOrderSummaryRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_order_summaries
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+      const workshopOrderSummaryIds = workshopOrderSummaryRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      const productOrderSummaryRows = await manager.query(
+        `
+        SELECT id
+        FROM product_order_summaries
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+      const productOrderSummaryIds = productOrderSummaryRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      const orderRows = await manager.query(
+        `
+        SELECT DISTINCT "finalizedRefId" AS id
+        FROM payment_transactions
+        WHERE "userId" = $1
+          AND "domainType" = $2
+          AND "finalizedRefId" IS NOT NULL
+        `,
+        [userId, PaymentDomainType.PRODUCT],
+      );
+      const orderIds = orderRows.map((row: { id: string }) => row.id);
+
+      const subscriberRows = await manager.query(
+        `
+        SELECT id
+        FROM newsletter_subscribers
+        WHERE LOWER(email) = $1
+        `,
+        [normalizedEmail],
+      );
+      const subscriberIds = subscriberRows.map((row: { id: string }) => row.id);
+
+      await manager.query(
+        `
+        DELETE FROM newsletter_course_announcement_recipients
+        WHERE "userId" = $1
+           OR "attendeeId" = ANY($2::uuid[])
+        `,
+        [userId, attendeeIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_refund_items
+        WHERE "attendeeId" = ANY($1::uuid[])
+           OR "refundId" IN (
+             SELECT id
+             FROM workshop_refunds
+             WHERE "userId" = $2
+                OR "reservationId" = ANY($3::uuid[])
+           )
+        `,
+        [attendeeIds, userId, reservationIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_refunds
+        WHERE "userId" = $1
+           OR "reservationId" = ANY($2::uuid[])
+        `,
+        [userId, reservationIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_attendees
+        WHERE "reservationId" = ANY($1::uuid[])
+        `,
+        [reservationIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_enrollments
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_order_attendees
+        WHERE "orderSummaryId" = ANY($1::uuid[])
+        `,
+        [workshopOrderSummaryIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_order_summaries
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_reservations
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM cart_items
+        WHERE "cartId" = ANY($1::uuid[])
+        `,
+        [cartIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM carts
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM wishlist_items
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM product_reviews
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM order_timeline
+        WHERE "orderId" = ANY($1::uuid[])
+        `,
+        [orderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM order_items
+        WHERE "orderId" = ANY($1::uuid[])
+        `,
+        [orderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM orders
+        WHERE id = ANY($1::uuid[])
+        `,
+        [orderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM payment_transactions
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM product_order_summaries
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM blog_post_authors
+        WHERE "authorId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM user_admin_notes
+        WHERE "userId" = $1
+           OR "authorId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM notifications
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM notification_preferences
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM newsletter_delivery_recipients
+        WHERE "subscriberId" = ANY($1::uuid[])
+        `,
+        [subscriberIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM newsletter_subscriber_notes
+        WHERE "subscriberId" = ANY($1::uuid[])
+        `,
+        [subscriberIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM newsletter_unsubscribe_requests
+        WHERE "subscriberId" = ANY($1::uuid[])
+           OR LOWER(email) = $2
+        `,
+        [subscriberIds, normalizedEmail],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM newsletter_subscribers
+        WHERE id = ANY($1::uuid[])
+        `,
+        [subscriberIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM user_auth_identities
+        WHERE "userId" = $1
+        `,
+        [userId],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM users
+        WHERE id = $1
+        `,
+        [userId],
+      );
+    });
+
+    return {
+      message: 'User force deleted successfully',
+      data: {
+        userId,
+        medicalEmail: normalizedEmail,
+        fullLegalName: user.fullLegalName,
+      },
     };
   }
 }

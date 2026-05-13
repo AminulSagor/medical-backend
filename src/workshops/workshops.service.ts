@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DeepPartial, In, Repository } from 'typeorm';
+import { DataSource, DeepPartial, In, Repository } from 'typeorm';
 import { Workshop } from './entities/workshop.entity';
 import { WorkshopDay } from './entities/workshop-day.entity';
 import { WorkshopSegment } from './entities/workshop-segment.entity';
@@ -20,12 +20,7 @@ import { CheckoutOrderSummaryDto } from './dto/checkout-order-summary.dto';
 import { CreateWorkshopPaymentSessionDto } from './dto/create-workshop-payment-session.dto';
 import { VerifyWorkshopPaymentDto } from './dto/verify-workshop-payment.dto';
 import { PublicListWorkshopsQueryDto } from './dto/public-list-workshops.query.dto';
-import {
-  CourseTab,
-  CourseTypeFilter,
-  ListMyCoursesLoggedQueryDto,
-  ListMyCoursesQueryDto,
-} from './dto/list-my-courses.query.dto';
+import { ListMyCoursesQueryDto } from './dto/list-my-courses.query.dto';
 import { Facility } from '../facilities/entities/facility.entity';
 import { Faculty } from '../faculty/entities/faculty.entity';
 import { ListWorkshopsQueryDto } from './dto/list-workshops.query.dto';
@@ -44,7 +39,6 @@ import {
 } from './entities/workshop-refund-item.entity';
 import { ConfirmWorkshopRefundDto } from './dto/confirm-workshop-refund.dto';
 import { ListWorkshopEnrolleesQueryDto } from './dto/list-workshop-enrollees.query.dto';
-import { WorkshopStatsQueryDto } from './dto/workshop-stats-query.dto';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { Response } from 'express';
@@ -130,6 +124,7 @@ export class WorkshopsService {
     private readonly mailService: MailService,
     private readonly invoiceService: InvoiceService,
     private readonly subscribersService: SubscribersService,
+    private readonly dataSource: DataSource,
   ) {
     // Initialize SES Client
     const region =
@@ -1138,6 +1133,332 @@ export class WorkshopsService {
         days: { dayNumber: 'ASC', segments: { segmentNumber: 'ASC' } },
       },
     });
+  }
+
+  private async deleteNewsletterBroadcastGraph(
+    manager: DataSource['manager'],
+    broadcastIds: string[],
+  ): Promise<void> {
+    if (!broadcastIds.length) {
+      return;
+    }
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_transmission_events
+      WHERE "broadcastId" = ANY($1::uuid[])
+         OR "deliveryJobId" IN (
+           SELECT id
+           FROM newsletter_delivery_jobs
+           WHERE "broadcastId" = ANY($1::uuid[])
+         )
+         OR "deliveryRecipientId" IN (
+           SELECT id
+           FROM newsletter_delivery_recipients
+           WHERE "broadcastId" = ANY($1::uuid[])
+         )
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_delivery_recipients
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_delivery_jobs
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_queue_orders
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_attachments
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_content_tokens
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_editor_snapshots
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_custom_contents
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcast_article_links
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_course_announcement_recipients
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_course_announcements
+      WHERE "broadcastId" = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+
+    await manager.query(
+      `
+      DELETE FROM newsletter_broadcasts
+      WHERE id = ANY($1::uuid[])
+      `,
+      [broadcastIds],
+    );
+  }
+
+  async forceRemove(id: string) {
+    const workshop = await this.workshopsRepo.findOne({
+      where: { id },
+    });
+
+    if (!workshop) {
+      throw new NotFoundException('Workshop not found');
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const summaryRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_order_summaries
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+      const orderSummaryIds = summaryRows.map((row: { id: string }) => row.id);
+
+      const reservationRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_reservations
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+      const reservationIds = reservationRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      const attendeeRows = await manager.query(
+        `
+        SELECT id
+        FROM workshop_attendees
+        WHERE "reservationId" IN (
+          SELECT id
+          FROM workshop_reservations
+          WHERE "workshopId" = $1
+        )
+        `,
+        [id],
+      );
+      const attendeeIds = attendeeRows.map((row: { id: string }) => row.id);
+
+      const broadcastRows = await manager.query(
+        `
+        SELECT "broadcastId" AS id
+        FROM newsletter_course_announcements
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+      const broadcastIds = broadcastRows.map((row: { id: string }) => row.id);
+
+      await this.deleteNewsletterBroadcastGraph(manager, broadcastIds);
+
+      await manager.query(
+        `
+        DELETE FROM payment_transactions
+        WHERE "domainType" = $1
+          AND (
+            "domainRefId" = $2
+            OR "finalizedRefId" = $2
+            OR "metadata"->>'workshopId' = $2
+            OR "domainRefId" = ANY($3::text[])
+            OR "finalizedRefId" = ANY($3::text[])
+            OR "metadata"->>'orderSummaryId' = ANY($3::text[])
+          )
+        `,
+        [PaymentDomainType.WORKSHOP, id, orderSummaryIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_refund_items
+        WHERE "attendeeId" = ANY($1::uuid[])
+           OR "refundId" IN (
+             SELECT id
+             FROM workshop_refunds
+             WHERE "workshopId" = $2
+           )
+        `,
+        [attendeeIds, id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_refunds
+        WHERE "workshopId" = $1
+           OR "reservationId" IN (
+             SELECT id
+             FROM workshop_reservations
+             WHERE "workshopId" = $1
+           )
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_attendees
+        WHERE "reservationId" IN (
+          SELECT id
+          FROM workshop_reservations
+          WHERE "workshopId" = $1
+        )
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_enrollments
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_order_attendees
+        WHERE "orderSummaryId" IN (
+          SELECT id
+          FROM workshop_order_summaries
+          WHERE "workshopId" = $1
+        )
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_order_summaries
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_reservations
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_faculty
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_segments
+        WHERE "dayId" IN (
+          SELECT id
+          FROM workshop_days
+          WHERE "workshopId" = $1
+        )
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_days
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshop_group_discounts
+        WHERE "workshopId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM notifications
+        WHERE "resourceType" = 'Workshop'
+          AND "resourceId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM workshops
+        WHERE id = $1
+        `,
+        [id],
+      );
+    });
+
+    return {
+      message: 'Workshop force deleted successfully',
+      data: {
+        workshopId: id,
+        title: workshop.title,
+      },
+    };
   }
 
   async remove(id: string) {

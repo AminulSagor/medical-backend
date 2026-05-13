@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DeepPartial, In } from 'typeorm';
+import { Repository, DeepPartial, In, DataSource } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { QueryFailedError } from 'typeorm';
@@ -13,6 +13,7 @@ import { Review, ReviewStatus } from '../reviews/entities/review.entity';
 import { AdminProductViewResponse } from 'src/common/interfaces/response.interface';
 import { OrderItem } from 'src/orders/entities/order-item.entity';
 import { Category } from 'src/categories/entities/category.entity';
+import { PaymentDomainType } from 'src/payments/entities/payment-transaction.entity';
 
 @Injectable()
 export class ProductsService {
@@ -22,6 +23,7 @@ export class ProductsService {
     private readonly categoriesRepo: Repository<Category>,
     @InjectRepository(Review) private reviewsRepo: Repository<Review>,
     @InjectRepository(OrderItem) private orderItemRepo: Repository<OrderItem>,
+    private readonly dataSource: DataSource,
   ) {}
 
   private async validateProductCategoryIds(categoryIds: string[] = []) {
@@ -350,6 +352,155 @@ export class ProductsService {
             )
             .map(mapMini),
         },
+      },
+    };
+  }
+
+  async forceRemove(id: string) {
+    const product = await this.productsRepo.findOne({
+      where: { id },
+      relations: ['details'],
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const summaryRows = await manager.query(
+        `
+        SELECT id
+        FROM product_order_summaries pos
+        WHERE EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(pos.items) AS item
+          WHERE item->>'productId' = $1
+        )
+        `,
+        [id],
+      );
+      const productOrderSummaryIds = summaryRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      await manager.query(
+        `
+        DELETE FROM cart_items
+        WHERE "productId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM wishlist_items
+        WHERE "productId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM product_reviews
+        WHERE "productId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM order_items
+        WHERE "productId" = $1
+        `,
+        [id],
+      );
+
+      const orphanOrderRows = await manager.query(
+        `
+        SELECT o.id
+        FROM orders o
+        LEFT JOIN order_items oi ON oi."orderId" = o.id
+        GROUP BY o.id
+        HAVING COUNT(oi.id) = 0
+        `,
+      );
+      const orphanOrderIds = orphanOrderRows.map(
+        (row: { id: string }) => row.id,
+      );
+
+      await manager.query(
+        `
+        DELETE FROM payment_transactions
+        WHERE (
+          "domainType" = $1
+          AND (
+            "metadata"->>'productId' = $2
+            OR "domainRefId" = ANY($3::text[])
+            OR "finalizedRefId" = ANY($3::text[])
+            OR "metadata"->>'orderSummaryId' = ANY($3::text[])
+            OR "domainRefId" = ANY($4::text[])
+            OR "finalizedRefId" = ANY($4::text[])
+          )
+        )
+        `,
+        [PaymentDomainType.PRODUCT, id, productOrderSummaryIds, orphanOrderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM order_timeline
+        WHERE "orderId" = ANY($1::uuid[])
+        `,
+        [orphanOrderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM orders
+        WHERE id = ANY($1::uuid[])
+        `,
+        [orphanOrderIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM product_order_summaries
+        WHERE id = ANY($1::uuid[])
+        `,
+        [productOrderSummaryIds],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM notifications
+        WHERE "resourceType" = 'Product'
+          AND "resourceId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM product_details
+        WHERE "productId" = $1
+        `,
+        [id],
+      );
+
+      await manager.query(
+        `
+        DELETE FROM products
+        WHERE id = $1
+        `,
+        [id],
+      );
+    });
+
+    return {
+      message: 'Product force deleted successfully',
+      data: {
+        productId: id,
+        name: product.name,
       },
     };
   }
